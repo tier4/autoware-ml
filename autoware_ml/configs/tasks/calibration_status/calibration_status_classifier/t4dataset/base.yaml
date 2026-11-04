@@ -2,7 +2,6 @@
 defaults:
   - ../base
   - /datamodule@datamodule: t4dataset/default_calibration_status_datamodule
-  # The experiment selects the ego of the platform it evaluates on
   - /ego@ego: ???
   - _self_
 

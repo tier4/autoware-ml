@@ -6,7 +6,6 @@ defaults:
   - class_catalog: default
   - _self_
 
-# Tables of the trained detection classes, read from the class catalog
 class_groups:
   _target_: autoware_ml.metrics.class_catalog.detection3d_class_groups
   _convert_: all

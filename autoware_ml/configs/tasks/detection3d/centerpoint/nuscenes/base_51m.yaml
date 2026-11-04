@@ -7,7 +7,6 @@ defaults:
   - /metrics/nuscenes/detection3d@metrics: default_detection3d_metric_suites
   - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
   - /datamodule@datamodule: nuscenes/default_detection3d_datamodule
-  # The taxonomy folds the nuScenes labels onto the classes
   - /database/nuscenes/taxonomy/detection3d@taxonomy.detection3d: default_coarse
   - _self_
 

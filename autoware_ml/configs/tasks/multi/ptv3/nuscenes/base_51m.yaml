@@ -8,12 +8,10 @@ defaults:
   - /metrics/nuscenes/segmentation3d@segmentation3d_metrics: default_segmentation3d_metric_suites
   - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
   - /datamodule@datamodule: nuscenes/default_det3d_seg3d_datamodule
-  # The taxonomy folds the nuScenes labels onto the classes
   - /database/nuscenes/taxonomy@taxonomy: default_coarse
   - _self_
 
-# The detection classes come first, in the same order, so a detection class and its
-# segmentation class share one index
+# Detection classes first and in the same order, so both tasks share their indices
 taxonomy:
   detection3d:
     class_names: [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier]

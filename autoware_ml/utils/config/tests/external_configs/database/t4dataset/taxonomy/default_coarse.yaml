@@ -1,5 +1,3 @@
-# Taxonomy of the test corpus that trains every fine name
-
 defaults:
   - /database/t4dataset/taxonomy/detection3d@detection3d: default_coarse
   - /database/t4dataset/taxonomy/segmentation3d@segmentation3d: default_coarse

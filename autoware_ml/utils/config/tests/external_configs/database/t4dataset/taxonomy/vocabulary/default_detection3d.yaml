@@ -1,4 +1,4 @@
-# Detection vocabulary of the test corpus, every raw name is its own fine name
+# Every raw name is its own fine name
 _target_: autoware_ml.databases.taxonomy.LabelVocabulary
 _convert_: all
 

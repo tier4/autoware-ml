@@ -6,7 +6,6 @@ defaults:
   - class_catalog: default
   - _self_
 
-# Behaviour groups of the trained segmentation classes, read from the class catalog
 class_groups:
   _target_: autoware_ml.metrics.class_catalog.segmentation3d_class_groups
   _convert_: all

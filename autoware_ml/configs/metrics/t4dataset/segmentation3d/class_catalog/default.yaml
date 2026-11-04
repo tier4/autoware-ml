@@ -1,5 +1,3 @@
-# Metric settings of the T4Dataset segmentation classes. A model reads the rows of the classes it
-# trains.
 car: { group: grouped_vehicle }
 truck: { group: grouped_vehicle }
 bus: { group: grouped_vehicle }

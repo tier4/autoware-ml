@@ -6,7 +6,6 @@ defaults:
   - _self_
 
 ignore_index: -1
-# The model declares the classes it trains
 class_names: ???
 class_mapping:
   car: car

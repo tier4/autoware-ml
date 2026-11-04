@@ -7,9 +7,7 @@ defaults:
   - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
   - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
-  # The experiment selects the taxonomy that folds the labels of its database onto the classes
   - /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: ???
-  # The experiment selects the ego of the platform it evaluates on
   - /ego@ego: ???
   - _self_
 

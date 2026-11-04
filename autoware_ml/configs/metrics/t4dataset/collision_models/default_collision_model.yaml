@@ -1,6 +1,5 @@
 # Collision model and map regions shared by the evaluation filters of every task on a T4
-# database, so their consumers cannot drift apart. Ego is a platform property, it has no
-# detection box to take its body from, so the ego of the database gives its body.
+# database, so their consumers cannot drift apart.
 vehicle: ${ego.vehicle}
 # Off-map speed fallback for ego and wheeled agents in m/s.
 max_speed_mps: 16.7

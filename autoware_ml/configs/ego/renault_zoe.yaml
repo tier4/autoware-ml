@@ -1,7 +1,2 @@
-# Renault Zoe of the nuScenes recordings: 4.084 m long with a 2.588 m wheelbase, 0.839 m front and
-# 0.657 m rear overhang, 1.730 m wide and 1.562 m high, measured from the rear axle centre on the
-# ground. The lidar frame is the LIDAR_TOP sensor, mounted 0.89 to 0.99 m ahead of the rear axle
-# and 1.84 m above the ground, with x to the right and y forward.
-# Body cut out of the point cloud, [x_min, y_min, z_min, x_max, y_max, z_max] in the lidar frame,
-# covering every mounting and rounded out to centimetres.
+# Renault Zoe body in the LIDAR_TOP frame, [x_min, y_min, z_min, x_max, y_max, z_max]
 box: [-0.87, -1.65, -1.95, 0.87, 2.54, -0.27]

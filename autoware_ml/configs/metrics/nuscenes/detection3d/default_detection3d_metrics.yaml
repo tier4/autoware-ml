@@ -4,7 +4,6 @@ defaults:
   - class_catalog: default
   - _self_
 
-# Evaluation distance of every trained detection class, read from the class catalog
 max_distances:
   _target_: autoware_ml.metrics.class_catalog.max_distances
   _convert_: all

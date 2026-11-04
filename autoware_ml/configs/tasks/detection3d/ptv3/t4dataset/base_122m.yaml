@@ -8,9 +8,7 @@ defaults:
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
   - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
-  # The experiment selects the taxonomy that folds the labels of its database onto the classes
   - /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: ???
-  # The experiment selects the ego of the platform it evaluates on
   - /ego@ego: ???
   - _self_
 

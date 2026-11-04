@@ -13,14 +13,11 @@ defaults:
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_det3d_seg3d_datamodule
   - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
-  # The experiment selects the taxonomy that folds the labels of its database onto the classes
   - /database/t4dataset/taxonomy@taxonomy: ???
-  # The experiment selects the ego of the platform it evaluates on
   - /ego@ego: ???
   - _self_
 
-# The detection classes come first, in the same order, so a detection class and its
-# segmentation class share one index
+# Detection classes first and in the same order, so both tasks share their indices
 taxonomy:
   detection3d:
     class_names:
