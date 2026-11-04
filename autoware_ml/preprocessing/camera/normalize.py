@@ -57,19 +57,6 @@ class BatchNormalizeImages(DataPreprocessorModule):
             )
         self.mean = torch.tensor(mean, dtype=torch.float32).view(1, 1, -1, 1, 1)
         self.std = torch.tensor(std, dtype=torch.float32).view(1, 1, -1, 1, 1)
-        self._statistics: dict[
-            tuple[torch.device, torch.dtype], tuple[torch.Tensor, torch.Tensor]
-        ] = {}
-
-    def _statistics_like(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return the statistics on the device and in the dtype of the images, copied once."""
-        key = (images.device, images.dtype)
-        if key not in self._statistics:
-            self._statistics[key] = (
-                self.mean.to(device=images.device, dtype=images.dtype),
-                self.std.to(device=images.device, dtype=images.dtype),
-            )
-        return self._statistics[key]
 
     def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:
         """Normalize the images of the batch.
@@ -95,5 +82,9 @@ class BatchNormalizeImages(DataPreprocessorModule):
                 f"The statistics describe {self.mean.numel()} channels, the images have "
                 f"{images.shape[2]}."
             )
-        mean, std = self._statistics_like(images)
-        return batch_inputs.replace(image_data=image_data._replace(images=(images - mean) / std))
+        if self.mean.device != images.device or self.mean.dtype != images.dtype:
+            self.mean = self.mean.to(device=images.device, dtype=images.dtype)
+            self.std = self.std.to(device=images.device, dtype=images.dtype)
+        return batch_inputs.replace(
+            image_data=image_data._replace(images=(images - self.mean) / self.std)
+        )
