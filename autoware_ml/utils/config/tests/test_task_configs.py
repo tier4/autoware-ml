@@ -52,8 +52,8 @@ def test_every_experiment_instantiates_its_model_and_pipelines(config_name: str)
 @pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
 def test_every_warmup_decay_schedule_spans_the_training_epochs(config_name: str) -> None:
     # The scheduler is a partial, so a `???` epoch count only surfaces when training starts, and
-    # a schedule shorter than the run keeps evaluating the cosine past its end and climbs back
-    # towards the peak learning rate. Every leaf therefore sets both counts to add up to
+    # a schedule shorter than the run holds the minimum learning rate past its end, so the extra
+    # epochs would train at it. Every leaf therefore sets both counts to add up to
     # trainer.max_epochs. A top-level `scheduler` key is read by nothing and is a misplaced one.
     cfg = compose_task(config_name)
     scheduler = cfg.model.get("scheduler")

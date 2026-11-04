@@ -22,7 +22,10 @@ import torch
 
 from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
-from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
+from autoware_ml.utils.schedulers.cyclic_cosine_annealing import (
+    CyclicCosineAnnealingLR,
+    StepCyclicCosineAnnealingLR,
+)
 from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
 from autoware_ml.utils.schedulers.iter_warmup_epoch_cosine import IterWarmupEpochCosineLR
 from autoware_ml.utils.schedulers.linear_warmup_cosine_annealing import (
@@ -158,6 +161,88 @@ class TestCyclicCosineAnnealingLR:
         assert abs(final_lr - expected_min) < expected_min * 0.1, (
             f"Final LR {final_lr} should be close to {expected_min}"
         )
+
+    def test_the_lr_stays_at_its_minimum_past_the_decay(
+        self, optimizer: torch.optim.Optimizer, base_lr: float
+    ) -> None:
+        """Test that a run longer than the warmup and the decay keeps the minimum LR."""
+        scheduler = CyclicCosineAnnealingLR(
+            optimizer,
+            warmup_epochs=8,
+            decay_epochs=12,
+            max_lr_factor=10.0,
+            min_lr_factor=1e-4,
+        )
+
+        lrs = []
+        for _ in range(25):
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+
+        assert lrs[19:] == pytest.approx([base_lr * 1e-4] * 6)
+
+
+class TestStepCyclicCosineAnnealingLR:
+    """Tests for StepCyclicCosineAnnealingLR scheduler."""
+
+    def test_epoch_phases_spread_over_the_steps(self, optimizer: torch.optim.Optimizer) -> None:
+        scheduler = StepCyclicCosineAnnealingLR(
+            optimizer, total_steps=48096, max_epochs=24, warmup_epochs=2, max_lr_factor=5.0
+        )
+        assert scheduler.warmup_epochs == 4008
+        assert scheduler.decay_epochs == 44088
+
+    def test_the_decay_follows_the_epochs_of_the_run(
+        self, optimizer: torch.optim.Optimizer
+    ) -> None:
+        # A leaf that lengthens the run keeps a warmup of two epochs, the decay takes the rest
+        scheduler = StepCyclicCosineAnnealingLR(
+            optimizer, total_steps=36000, max_epochs=36, warmup_epochs=2
+        )
+        assert scheduler.warmup_epochs == 2000
+        assert scheduler.decay_epochs == 34000
+
+    def test_peak_lands_at_the_end_of_warmup(
+        self, optimizer: torch.optim.Optimizer, base_lr: float
+    ) -> None:
+        scheduler = StepCyclicCosineAnnealingLR(
+            optimizer, total_steps=40, max_epochs=10, warmup_epochs=0.5, max_lr_factor=5.0
+        )
+        for _ in range(2):
+            scheduler.step()
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(base_lr * 5.0)
+
+    def test_the_lr_stays_annealed_past_the_run(
+        self, optimizer: torch.optim.Optimizer, base_lr: float
+    ) -> None:
+        # A resumed run with more epochs keeps the restored step counts
+        scheduler = StepCyclicCosineAnnealingLR(
+            optimizer, total_steps=40, max_epochs=10, warmup_epochs=1, min_lr_factor=1e-4
+        )
+        lrs = []
+        for _ in range(60):
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+        assert lrs[39:] == pytest.approx([base_lr * 1e-4] * 21)
+
+    @pytest.mark.parametrize("warmup_epochs", [-1, 24, 30])
+    def test_rejects_a_warmup_outside_the_run(
+        self, optimizer: torch.optim.Optimizer, warmup_epochs: float
+    ) -> None:
+        with pytest.raises(ValueError, match="warmup_epochs"):
+            StepCyclicCosineAnnealingLR(
+                optimizer, total_steps=2400, max_epochs=24, warmup_epochs=warmup_epochs
+            )
+
+    def test_rejects_a_run_shorter_than_its_epochs(self, optimizer: torch.optim.Optimizer) -> None:
+        with pytest.raises(ValueError, match="total_steps"):
+            StepCyclicCosineAnnealingLR(optimizer, total_steps=3, max_epochs=24, warmup_epochs=2)
+
+    def test_rejects_a_warmup_that_leaves_no_decay_step(
+        self, optimizer: torch.optim.Optimizer
+    ) -> None:
+        with pytest.raises(ValueError, match="no decay step"):
+            StepCyclicCosineAnnealingLR(optimizer, total_steps=3, max_epochs=3, warmup_epochs=2.9)
 
 
 class TestCyclicMomentumScheduler:
