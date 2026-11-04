@@ -3,7 +3,6 @@ defaults:
   - t4dataset/t4dataset_common@_here_
   - t4dataset/scenarios@scenarios.db_default: detection3d_segmentation3d/db_default
   - override t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d
-  - override /ego@_global_.ego: default_t4dataset
   - _self_
 
 version: T4Dataset-base-v1.0.0

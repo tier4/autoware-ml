@@ -74,6 +74,7 @@ defaults:
   - /tasks/segmentation3d/litept/seg3d_head
   - /database@database: t4dataset/my_database
   - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: my_taxonomy
+  - override /ego@ego: my_ego
   - _self_
 ```
 

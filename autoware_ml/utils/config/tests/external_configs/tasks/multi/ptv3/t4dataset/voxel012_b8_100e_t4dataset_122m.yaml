@@ -3,6 +3,7 @@ defaults:
   - base_voxel012_122m
   - /database@database: t4dataset/t4dataset_base
   - override /database/t4dataset/taxonomy@taxonomy: default_coarse
+  - override /ego@ego: default_t4dataset
   - _self_
 
 batch_size: 8

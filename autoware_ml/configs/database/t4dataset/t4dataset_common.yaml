@@ -4,8 +4,6 @@ _convert_: all
 defaults:
   # The vocabulary of the raw box labels of the database
   - taxonomy/vocabulary@vocabulary: ???
-  # The recording platform of the database
-  - /ego@_global_.ego: ???
   - box3d_pipelines@box3d_pipelines: default_box3d_pipelines
 
 root_path: ${data_root_path}/t4dataset/

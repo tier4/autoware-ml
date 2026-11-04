@@ -2,6 +2,7 @@
 defaults:
   - base
   - /database@database: t4dataset/t4dataset_base
+  - override /ego@ego: default_t4dataset
   - _self_
 
 batch_size: 8

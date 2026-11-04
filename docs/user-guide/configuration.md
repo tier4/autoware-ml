@@ -380,15 +380,14 @@ error.
 The bundled configs ship the T4Dataset model bases and the generic database config
 `t4dataset/t4dataset_common`. A T4Dataset experiment lives in the external configs together with
 its database, scenario config, vocabulary, taxonomy and ego. The database extends
-`t4dataset/t4dataset_common`, which requires the vocabulary of the raw box labels and the ego, and
-adds its scenarios:
+`t4dataset/t4dataset_common`, which requires the vocabulary of the raw box labels, and adds its
+scenarios:
 
 ```yaml title="/path/to/configs/database/t4dataset/my_database.yaml"
 defaults:
   - t4dataset/t4dataset_common@_here_
   - t4dataset/scenarios@scenarios.my_scenarios: detection3d_segmentation3d/my_scenarios
   - override t4dataset/taxonomy/vocabulary@vocabulary: my_vocabulary
-  - override /ego@_global_.ego: my_ego
   - _self_
 
 version: T4Dataset-my-database-v1.0.0
@@ -399,7 +398,9 @@ The scenario config `database/t4dataset/scenarios/detection3d_segmentation3d/my_
 reads its scenario list below `AUTOWARE_ML_SCENARIOS_PATH` and the scenes under
 `t4dataset/<dataset_name>/` of the data directory. Every T4Dataset base declares the classes the
 model trains under `taxonomy` and requires the taxonomy that folds the labels of the database onto
-those classes. The experiment binds a base, selects its database and overrides the taxonomy:
+those classes, and a base that evaluates collisions or crops the ego body requires the ego of
+the platform. The experiment binds a base, selects its database and overrides the taxonomy and the
+ego:
 
 ```yaml title="/path/to/configs/tasks/segmentation3d/ptv3/t4dataset/my_experiment.yaml"
 # @package _global_
@@ -407,6 +408,7 @@ defaults:
   - base_voxel012_122m
   - /database@database: t4dataset/my_database
   - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: my_taxonomy
+  - override /ego@ego: my_ego
   - _self_
 
 batch_size: 16

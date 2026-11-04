@@ -2,6 +2,8 @@
 defaults:
   - ../base
   - /datamodule@datamodule: nuscenes/default_calibration_status_datamodule
+  # The recording platform of nuScenes
+  - /ego@ego: renault_zoe
   - _self_
 
 # The six nuScenes cameras, one sample each.

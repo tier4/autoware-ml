@@ -15,6 +15,8 @@ defaults:
   - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
   # The experiment selects the taxonomy that folds the labels of its database onto the classes
   - /database/t4dataset/taxonomy@taxonomy: ???
+  # The experiment selects the ego of the platform it evaluates on
+  - /ego@ego: ???
   - _self_
 
 # The detection classes come first, in the same order, so a detection class and its

@@ -269,6 +269,8 @@ defaults:
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
   # The experiment selects the taxonomy that folds the labels of its database onto the classes
   - /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: ???
+  # The experiment selects the ego of the platform it evaluates on
+  - /ego@ego: ???
   - _self_
 
 taxonomy:
@@ -324,6 +326,7 @@ defaults:
   - base_122m
   - /database@database: t4dataset/my_database
   - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: my_taxonomy
+  - override /ego@ego: my_ego
   - _self_
 
 batch_size: 8

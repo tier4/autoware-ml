@@ -3,6 +3,7 @@ defaults:
   - base_ot128
   - /database@database: t4dataset/t4dataset_base
   - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: default_coarse
+  - override /ego@ego: default_t4dataset
   - _self_
 
 batch_size: 4
