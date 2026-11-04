@@ -235,9 +235,9 @@ def test_module_entries_of_modules_the_model_does_not_export_are_refused() -> No
     validate_onnx_modules_exported(
         OmegaConf.create({"modules": {"head": {"precision": "fp16"}}}), ["encoder", "head"]
     )
-    with pytest.raises(ValueError, match=r"\['haed'\].*\['encoder', 'head'\]"):
+    with pytest.raises(ValueError, match=r"\['heads'\].*\['encoder', 'head'\]"):
         validate_onnx_modules_exported(
-            OmegaConf.create({"modules": {"haed": {"precision": "fp16"}}}), ["encoder", "head"]
+            OmegaConf.create({"modules": {"heads": {"precision": "fp16"}}}), ["encoder", "head"]
         )
 
 
