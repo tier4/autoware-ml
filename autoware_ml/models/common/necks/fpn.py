@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The feature pyramid network of Lin et al., with the semantics of mmdetection's ``FPN``.
+"""The feature pyramid necks: the FPN of Lin et al. and the CPFPN of StreamPETR.
 
-:class:`BaseFPN` holds the lateral projection and top-down fusion that the other pyramid
-necks share with it.
+:class:`BaseFPN` holds the lateral projection and top-down fusion that both share. :class:`FPN`
+follows mmdetection's ``FPN``; :class:`CPFPN` is a native port of the StreamPETR reference neck.
 """
 
 from __future__ import annotations
@@ -217,3 +217,40 @@ class FPN(BaseFPN):
                 source = F.relu(outputs[-1]) if self.relu_before_extra_convs else outputs[-1]
                 outputs.append(self.fpn_convs[len(laterals) + extra](source))
         return tuple(outputs)
+
+
+class CPFPN(BaseFPN):
+    """StreamPETR feature pyramid with per-level laterals and top-down adds.
+
+    Outputs one feature map per input level; only the first (highest resolution) level passes
+    through a 3x3 refinement convolution, matching the reference implementation. The
+    convolutions carry no normalization and no activation.
+    """
+
+    def __init__(self, in_channels: Sequence[int], out_channels: int) -> None:
+        """Initialize the neck.
+
+        Args:
+            in_channels: Channels of every input level, from the finest.
+            out_channels: Channels of every output level.
+        """
+        super().__init__(in_channels, out_channels)
+        self.fpn_conv = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
+        self.init_weights()
+
+    def forward(
+        self, inputs: Sequence[Float[torch.Tensor, "batch_size channels height width"]]
+    ) -> tuple[Float[torch.Tensor, "batch_size out_channels height width"], ...]:
+        """Fuse the pyramid top-down and refine the finest level.
+
+        Args:
+            inputs: One feature map per input level, from the finest.
+
+        Returns:
+            One fused feature map per input level, from the finest.
+
+        Raises:
+            ValueError: If the number of inputs differs from ``in_channels``.
+        """
+        laterals = self.fuse_levels(inputs)
+        return (self.fpn_conv(laterals[0]), *laterals[1:])

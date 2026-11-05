@@ -20,7 +20,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from autoware_ml.models.common.necks.cp_fpn import CPFPN
+from autoware_ml.models.common.necks.fpn import CPFPN
 
 
 def test_cpfpn_outputs_match_input_levels_and_channels() -> None:
