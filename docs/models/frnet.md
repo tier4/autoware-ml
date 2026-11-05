@@ -22,15 +22,15 @@ FRNet is a LiDAR-based 3D semantic segmentation model built on frustum and range
 | Config Name                                              | Dataset   | Purpose                         |
 | -------------------------------------------------------- | --------- | ------------------------------- |
 | `segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes` | NuScenes  | Standard NuScenes configuration |
-| `segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset` | T4Dataset | T4Dataset OT128 configuration   |
-| `segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset` | T4Dataset | T4Dataset QT128 configuration   |
+| `segmentation3d/frnet/t4dataset/base_ot128`              | T4Dataset | T4Dataset OT128 configuration   |
+| `segmentation3d/frnet/t4dataset/base_qt128`              | T4Dataset | T4Dataset QT128 configuration   |
+
+The T4Dataset rows are bases. They declare the classes the model trains and require the taxonomy that folds the labels of the database onto them, so a T4Dataset experiment that binds one lives in an external config root, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
 
 ## Training
 
 ```bash
 autoware-ml train --config-name segmentation3d/frnet/nuscenes/hdl32e_b16_150k_nuscenes
-autoware-ml train --config-name segmentation3d/frnet/t4dataset/ot128_b4_150k_t4dataset
-autoware-ml train --config-name segmentation3d/frnet/t4dataset/qt128_b8_150k_t4dataset
 ```
 
 For a pipeline validation run:

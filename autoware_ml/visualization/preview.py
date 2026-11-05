@@ -27,7 +27,7 @@ from jaxtyping import Float32
 import numpy as np
 import torch
 
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
+from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.dataclasses.geometry.images import ImageSample
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
@@ -36,6 +36,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.types.dataset import SplitType
+from autoware_ml.types.tasks import TaskType
 from autoware_ml.visualization.entity_paths import (
     CALIBRATION_STATUS_PATH,
     DATA_CALIBRATION_STATUS_PATH,
@@ -113,11 +114,14 @@ class VisualizationPreviewConfig:
 
 @dataclass(frozen=True)
 class _PreviewLabels:
-    """Class names and ignore index the adapters label a split with."""
+    """
+    Class names and ignore index the adapters label a split with. A task the run does not have
+    names no class and has no ignore index, its adapter never runs.
+    """
 
     segmentation_class_names: Sequence[str]
     detection_class_names: Sequence[str]
-    segmentation_ignore_index: int
+    segmentation_ignore_index: int | None
 
 
 @dataclass(frozen=True)
@@ -183,7 +187,7 @@ def run_visualization_preview(
             f"sample_index {config.sample_index} is out of range for split '{split.value}' "
             f"with {len(dataset)} samples."
         )
-    labels = _resolve_labels(config, _split_taxonomy(datamodule, split))
+    labels = _resolve_labels(config, _split_taxonomies(dataset))
 
     device = resolve_preview_device(config.device)
     if mode == "predictions" and model is not None:
@@ -252,24 +256,30 @@ def _setup_split(datamodule: DataModule, split: SplitType) -> ConcatDataset:
     return dataset
 
 
-def _split_taxonomy(datamodule: DataModule, split: SplitType) -> DatabaseTaxonomy:
-    """Return the taxonomy every source of the split shares."""
-    sources = datamodule.split_sources(split)
-    return next(iter(sources.values())).database.taxonomy
+def _split_taxonomies(dataset: ConcatDataset) -> dict[TaskType, LabelTaxonomy]:
+    """Return the taxonomy of every 3D task of the split, the sources of a run share them."""
+    tasks = dataset.datasets[0].dataset_tasks
+    return {
+        task_type: tasks[task_type].taxonomy
+        for task_type in (TaskType.DETECTION3D, TaskType.SEGMENTATION3D)
+        if task_type in tasks
+    }
 
 
 def _resolve_labels(
-    config: VisualizationPreviewConfig, taxonomy: DatabaseTaxonomy
+    config: VisualizationPreviewConfig, taxonomies: dict[TaskType, LabelTaxonomy]
 ) -> _PreviewLabels:
     """Resolve the class names of both 3D tasks, explicit overrides first."""
+    segmentation = taxonomies.get(TaskType.SEGMENTATION3D)
+    detection = taxonomies.get(TaskType.DETECTION3D)
     return _PreviewLabels(
         segmentation_class_names=config.segmentation_class_names
         or config.class_names
-        or taxonomy.segmentation3d.class_names,
+        or (segmentation.class_names if segmentation is not None else ()),
         detection_class_names=config.detection_class_names
         or config.class_names
-        or taxonomy.detection3d.class_names,
-        segmentation_ignore_index=taxonomy.segmentation3d.ignore_index,
+        or (detection.class_names if detection is not None else ()),
+        segmentation_ignore_index=segmentation.ignore_index if segmentation is not None else None,
     )
 
 

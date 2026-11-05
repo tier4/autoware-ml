@@ -120,8 +120,8 @@ dataset for it, concatenated in declaration order, so several sources mix their 
 dataset reads the database of its source and declares whether the boxes (`det3d_supervised`) and
 semantic masks (`seg3d_supervised`) of that corpus supervise the run. A dataset with a task
 turned off still serves that task, with an empty box set or ignored point labels, so every
-sample of the split collates with the others. All sources of a datamodule must share one
-taxonomy.
+sample of the split collates with the others. Every source reads its labels through the
+taxonomies of the run.
 
 The datasets are instantiated by Hydra without records. In `setup()` the datamodule calls
 `bind(records)` on the dataset of every source, which returns a copy serving the records of that

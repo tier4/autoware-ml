@@ -29,11 +29,9 @@ from autoware_ml.utils.mlflow_store import (
     prepare_export_output_dir,
 )
 
-SAMPLE_CONFIG_NAME = (
-    "detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m"
-)
+SAMPLE_CONFIG_NAME = "detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m"
 SAMPLE_EXPERIMENT_NAME = (
-    "centerpoint/T4Dataset-base-v1.0.0/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m"
+    "centerpoint/NuScenesDataset-base-v1.0.0/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m"
 )
 
 
@@ -50,8 +48,8 @@ class TestNormalizeExperimentName:
         """
         cfg = OmegaConf.create(
             {
-                "experiment_group_name": "centerpoint/T4Dataset-base-v1.0.0/t4dataset",
-                "experiment_name": "voxel024_second_secfpn_b16_30e_t4dataset_120m",
+                "experiment_group_name": "centerpoint/NuScenesDataset-base-v1.0.0/nuscenes",
+                "experiment_name": "voxel020_second_secfpn_b16_30e_nuscenes_51m",
             }
         )
         with patch(

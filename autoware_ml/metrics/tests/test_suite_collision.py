@@ -26,22 +26,22 @@ from autoware_ml.metrics.tests.conftest import (
     serve_fake_map,
 )
 
-KINDS = {
+MOTION_MODELS = {
     "car": "wheeled",
     "truck": "wheeled",
     "bus": "wheeled",
     "train": "wheeled",
     "motorcycle": "wheeled",
-    "bicycle": "living",
-    "pedestrian": "living",
-    "animal": "living",
+    "bicycle": "omnidirectional",
+    "pedestrian": "omnidirectional",
+    "animal": "omnidirectional",
     "barrier": "static",
     "traffic_cone": "static",
     "debris": "static",
     "bicycle_rack": "static",
     "vehicle_extension": "static",
 }
-LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
+MAX_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
 
 
 @pytest.fixture(autouse=True)
@@ -54,8 +54,8 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
         vehicle=EGO,
-        kinds=KINDS,
-        living_speeds=LIVING_SPEEDS,
+        motion_models=MOTION_MODELS,
+        max_speeds=MAX_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -120,8 +120,8 @@ def test_a_padding_frame_takes_no_part_in_the_metrics() -> None:
         collision=CollisionTTC(
             CLASS_NAMES,
             vehicle=EGO,
-            kinds=KINDS,
-            living_speeds=LIVING_SPEEDS,
+            motion_models=MOTION_MODELS,
+            max_speeds=MAX_SPEEDS,
             params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         ),
     )
@@ -157,8 +157,8 @@ def test_collision_provider_declares_context_keys() -> None:
         collision=CollisionTTC(
             CLASS_NAMES,
             vehicle=EGO,
-            kinds=KINDS,
-            living_speeds=LIVING_SPEEDS,
+            motion_models=MOTION_MODELS,
+            max_speeds=MAX_SPEEDS,
             params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         ),
     )
@@ -173,8 +173,8 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
         vehicle=EGO,
-        kinds=KINDS,
-        living_speeds=LIVING_SPEEDS,
+        motion_models=MOTION_MODELS,
+        max_speeds=MAX_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )

@@ -41,7 +41,6 @@ class Box3DDatasetSchema(BaseFieldSchema):
     BOX3D_INSTANCE_ID = DatasetTableColumn("box3d_instance_id", pl.String)
     BOX3D_DATASET_LABEL_NAME = DatasetTableColumn("box3d_dataset_label_name", pl.String)
     BOX3D_LABEL_NAME = DatasetTableColumn("box3d_label_name", pl.String)
-    BOX3D_LABEL_INDEX = DatasetTableColumn("box3d_label_index", pl.Int32)
     BOX3D_NUM_LIDAR_POINTS = DatasetTableColumn("box3d_num_lidar_points", pl.Int32)
     BOX3D_NUM_RADAR_POINTS = DatasetTableColumn("box3d_num_radar_points", pl.Int32)
     BOX3D_VALID = DatasetTableColumn("box3d_valid", pl.Boolean)
@@ -58,8 +57,8 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         height, yaw, velocity_x, velocity_y, velocity_z) format, following the Box3DFieldIndex enumeration.
       box3d_instance_id: Instance ID for the 3D bounding box.
       box3d_dataset_label_name: Dataset label name for the 3D bounding box.
-      box3d_label_name: Label name for the 3D bounding box.
-      box3d_label_index: Label index for the 3D bounding box.
+      box3d_label_name: Fine label name of the 3D bounding box. The tasks resolve it to a class
+        index when a sample loads.
       box3d_num_lidar_points: Number of lidar points for the 3D bounding box.
       box3d_num_radar_points: Number of radar points for the 3D bounding box.
       box3d_valid: Valid flag for the 3D bounding box.
@@ -72,7 +71,6 @@ class Box3DDataModel(BaseModel, DataModelInterface):
     box3d_instance_id: str
     box3d_dataset_label_name: str
     box3d_label_name: str
-    box3d_label_index: int
     box3d_num_lidar_points: int
     box3d_num_radar_points: int
     box3d_valid: bool
@@ -91,7 +89,6 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             Box3DDatasetSchema.BOX3D_INSTANCE_ID.name: self.box3d_instance_id,
             Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name: self.box3d_dataset_label_name,
             Box3DDatasetSchema.BOX3D_LABEL_NAME.name: self.box3d_label_name,
-            Box3DDatasetSchema.BOX3D_LABEL_INDEX.name: self.box3d_label_index,
             Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name: self.box3d_num_lidar_points,
             Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTS.name: self.box3d_num_radar_points,
             Box3DDatasetSchema.BOX3D_VALID.name: self.box3d_valid,
@@ -125,7 +122,6 @@ class Box3DDataModel(BaseModel, DataModelInterface):
             box3d_instance_id=data_model[Box3DDatasetSchema.BOX3D_INSTANCE_ID.name],
             box3d_dataset_label_name=data_model[Box3DDatasetSchema.BOX3D_DATASET_LABEL_NAME.name],
             box3d_label_name=data_model[Box3DDatasetSchema.BOX3D_LABEL_NAME.name],
-            box3d_label_index=data_model[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name],
             box3d_num_lidar_points=data_model[Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name],
             box3d_num_radar_points=data_model[Box3DDatasetSchema.BOX3D_NUM_RADAR_POINTS.name],
             box3d_valid=data_model[Box3DDatasetSchema.BOX3D_VALID.name],
@@ -139,7 +135,6 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         box3d_instance_id: str | None = None,
         box3d_dataset_label_name: str | None = None,
         box3d_label_name: str | None = None,
-        box3d_label_index: int | None = None,
         box3d_num_lidar_points: int | None = None,
         box3d_num_radar_points: int | None = None,
         box3d_valid: bool | None = None,

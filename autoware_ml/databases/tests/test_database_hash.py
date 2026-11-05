@@ -29,13 +29,8 @@ from autoware_ml.databases.scenarios import DatasetParams, ScenarioData
 from autoware_ml.databases.t4dataset import t4dataset
 from autoware_ml.databases.t4dataset.t4dataset import T4Dataset
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
-from autoware_ml.databases.taxonomy import (
-    DatabaseTaxonomy,
-    Detection3DTaxonomy,
-    LabelVocabulary,
-    Segmentation3DTaxonomy,
-)
-from autoware_ml.types.metrics import AgentKind
+from autoware_ml.databases.box3d_pipelines.box3d_label_resolver import Box3DLabelResolver
+from autoware_ml.databases.taxonomy import LabelVocabulary
 
 _SCENARIOS = {
     "train": ["db_scenario_a/0/city_a/vehicle_a/true", "db_scenario_b/1/city_a/vehicle_a/true"],
@@ -43,30 +38,9 @@ _SCENARIOS = {
 }
 
 
-def _build_taxonomy(class_names: tuple[str, ...]) -> DatabaseTaxonomy:
-    """Build a taxonomy over the class names, with buses folded into cars."""
-    vocabulary = LabelVocabulary({name: name for name in class_names + ("bus",)})
-    class_mapping = {name: name for name in class_names} | {"bus": "car"}
-    class_groups = {"all": list(class_names)}
-    return DatabaseTaxonomy(
-        detection3d=Detection3DTaxonomy(
-            vocabulary=vocabulary,
-            class_names=class_names,
-            class_mapping=class_mapping,
-            ignore_index=-1,
-            class_groups=class_groups,
-            eval_range={name: 50.0 for name in class_names},
-            collision_kinds={name: AgentKind.WHEELED for name in class_names},
-            living_speeds={},
-        ),
-        segmentation3d=Segmentation3DTaxonomy(
-            vocabulary=vocabulary,
-            class_names=class_names,
-            class_mapping=class_mapping,
-            ignore_index=-1,
-            class_groups=class_groups,
-        ),
-    )
+def _build_vocabulary(raw_names: tuple[str, ...]) -> LabelVocabulary:
+    """Build the vocabulary of the raw names, with buses folded into cars."""
+    return LabelVocabulary({name: name for name in raw_names} | {"bus": "car"})
 
 
 class TestScenarioDataHashRepr(unittest.TestCase):
@@ -126,7 +100,7 @@ class TestT4DatabaseHash(unittest.TestCase):
         root_path: str = "/data/t4dataset",
         cache_path: str | None = None,
         version: str = "T4Dataset-test-v1.0.0",
-        class_names: tuple[str, ...] = ("car", "pedestrian"),
+        raw_names: tuple[str, ...] = ("car", "pedestrian"),
         lidar_channel: str = "LIDAR_CONCAT",
         lidar_pointcloud_num_features: int = 5,
         box_annotation_dir: str = "annotation",
@@ -145,10 +119,10 @@ class TestT4DatabaseHash(unittest.TestCase):
             cache_path=cache_path or str(Path(self._tmp_dir.name) / "cache"),
             cache_file_prefix_name="database",
             num_workers=1,
-            taxonomy=_build_taxonomy(class_names),
             lidar_channel=lidar_channel,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
-            box3d_pipelines=[],
+            vocabulary=_build_vocabulary(raw_names),
+            box3d_pipelines=[Box3DLabelResolver(_build_vocabulary(raw_names))],
             lidar_intensity_scale=255.0,
             box_annotation_dir=box_annotation_dir,
         )
@@ -186,7 +160,7 @@ class TestT4DatabaseHash(unittest.TestCase):
         self.assertNotEqual(
             reference, self._build_database(version="T4Dataset-test-v2.0.0").database_hash
         )
-        self.assertNotEqual(reference, self._build_database(class_names=("car",)).database_hash)
+        self.assertNotEqual(reference, self._build_database(raw_names=("car",)).database_hash)
         self.assertNotEqual(
             reference, self._build_database(lidar_channel="LIDAR_TOP").database_hash
         )
@@ -246,7 +220,6 @@ class TestT4DatabaseHash(unittest.TestCase):
             [
                 "database",
                 "version",
-                "taxonomy",
                 "box3d_pipelines",
                 "lidar_pointcloud_num_features",
                 "scenarios",
@@ -284,8 +257,8 @@ class TestNuScenesDatabaseHash(unittest.TestCase):
             cache_path=cache_path or str(Path(self._tmp_dir.name) / "cache"),
             cache_file_prefix_name="database",
             num_workers=1,
-            taxonomy=_build_taxonomy(("car", "pedestrian")),
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
+            vocabulary=_build_vocabulary(("car", "pedestrian")),
             box3d_pipelines=[],
             lidar_intensity_scale=255.0,
         )

@@ -2,6 +2,7 @@
 defaults:
   - ../base
   - /datamodule@datamodule: t4dataset/default_calibration_status_datamodule
+  - /ego@ego: ???
   - _self_
 
 # Cameras of the T4 recording platforms, one sample each.

@@ -49,20 +49,33 @@ operator calls `rope_freq`. This is a hyperparameter and needs tuning.
 
 ## Available Configurations
 
-| Config Name                                                       | Task                         | Dataset   | Head        | Range | Purpose                        |
-| ----------------------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m`          | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| PTv3 Base                                          | Task                         | Dataset   | Head        | Range | Purpose                        |
+| -------------------------------------------------- | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
+| `segmentation3d/ptv3/t4dataset/base_voxel012_122m` | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
+| `multi/ptv3/t4dataset/base_voxel012_122m`          | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
 
-Each inherits dataset, transforms, optimizer and deploy settings from the PTv3
-config of the same name and swaps only the encoder and the decoder head.
+A LitePT experiment binds one of these PTv3 bases and composes
+`/tasks/segmentation3d/litept/encoder` and `/tasks/segmentation3d/litept/seg3d_head` on top. It
+inherits the dataset, transforms, optimizer and deploy settings from the base and swaps only the
+encoder and the decoder head. The T4Dataset experiments of LitePT live in an external config
+root, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
 
-Both are the [PTv3](ptv3.md) model with the gating applied and nothing else changed, so
-the two stay directly comparable. The decoder keeps the PTv3 blocks and runs them under
+Both variants are the [PTv3](ptv3.md) model with the gating applied and nothing else changed,
+so the two stay directly comparable. The decoder keeps the PTv3 blocks and runs them under
 LitePT's rule.
 
-```bash
-autoware-ml train --config-name segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m
+The defaults of a LitePT segmentation experiment:
+
+```yaml title="/path/to/configs/tasks/segmentation3d/litept/t4dataset/my_experiment.yaml"
+# @package _global_
+defaults:
+  - /tasks/segmentation3d/ptv3/t4dataset/base_voxel012_122m
+  - /tasks/segmentation3d/litept/encoder
+  - /tasks/segmentation3d/litept/seg3d_head
+  - /database@database: t4dataset/my_database
+  - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: my_taxonomy
+  - override /ego@ego: my_ego
+  - _self_
 ```
 
 ## Export contract
@@ -84,7 +97,7 @@ is future work.
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`  | `LitePTEncoder`, `Point3DRoPE`, block gating  |
 | `autoware_ml/models/segmentation3d/ptv3_base.py`      | `PTv3EncoderExportBase`, shared export inputs |
 | `autoware_ml/models/segmentation3d/heads/ptv3.py`     | Decoder gating (`dec_conv`, `dec_attn`)       |
-| `autoware_ml/configs/tasks/*/litept/`                 | Experiment configurations                     |
+| `autoware_ml/configs/tasks/*/litept/`                 | LitePT bases, encoder and decoder head        |
 | `autoware_ml/models/detection3d/tests/test_litept.py` | Rotary, gating, and export tests              |
 
 ## Acknowledgment

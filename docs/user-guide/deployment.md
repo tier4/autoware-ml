@@ -77,9 +77,9 @@ trained parts of that model into a single export:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m \
-    --weights mlruns/ptv3_seg3d/T4Dataset-base-v1.0.0/t4dataset/voxel012_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/ptv3/T4Dataset-base-v1.0.0/t4dataset/voxel012_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_30e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Checkpoints are applied in the order they appear on the command line, and
@@ -112,7 +112,7 @@ deploy:
     modules:
       <module>:
         metainfo:
-          class_names: ${database.taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 ```
 
 Each `metainfo` value is stamped as one compact JSON document (scalars,

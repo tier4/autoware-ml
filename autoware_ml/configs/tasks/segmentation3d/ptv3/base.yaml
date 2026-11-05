@@ -60,7 +60,7 @@ deploy:
       ptv3_seg3d_head:
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
-          class_names: ${database.taxonomy.segmentation3d.class_names}
+          class_names: ${taxonomy.segmentation3d.class_names}
   tensorrt:
     enabled: false
 

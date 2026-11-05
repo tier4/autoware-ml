@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import polars as pl
 from t4_devkit.schema import SchemaName
@@ -33,7 +33,6 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.t4dataset import t4records_generator
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4sample_records import T4SampleRecord
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.types.sensor import LidarChannel
 
 _DATASET_NAME = "db_test_v1"
@@ -144,7 +143,6 @@ class TestRecordsGenerator(unittest.TestCase):
             lidar_channel=LidarChannel.LIDAR_TOP,
             lidar_pointcloud_num_features=5,
             box_annotation_dir="annotation",
-            taxonomy=MagicMock(spec=DatabaseTaxonomy),
             box3d_pipelines=[],
         )
 

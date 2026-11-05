@@ -4,5 +4,5 @@
 data_root_path: ${data_path:}
 # Root of the experiment outputs, AUTOWARE_ML_WORKING_DIR of .env or the repository checkout.
 working_dir: ${working_dir:}
-# Directory the record tables are written to, AUTOWARE_ML_CACHE_PATH of .env.
+# Root of the record tables, AUTOWARE_ML_CACHE_PATH of .env or .cache of the repository checkout.
 cache_root_path: ${cache_path:}

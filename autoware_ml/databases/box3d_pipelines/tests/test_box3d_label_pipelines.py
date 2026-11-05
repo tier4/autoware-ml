@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the box pipelines that resolve and fold the label names of the boxes."""
+"""Tests for the box pipeline that resolves the raw label names of the boxes."""
 
 from __future__ import annotations
 
-import numpy as np
-import pytest
+import unittest
 
-from autoware_ml.databases.box3d_pipelines.box3d_label_remapper import Box3DLabelRemapper
+import numpy as np
+
 from autoware_ml.databases.box3d_pipelines.box3d_label_resolver import Box3DLabelResolver
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
-from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
+from autoware_ml.databases.taxonomy import LabelVocabulary
 
 VOCABULARY = LabelVocabulary(
     {
@@ -32,13 +32,6 @@ VOCABULARY = LabelVocabulary(
         "unpainted": None,
     }
 )
-TAXONOMY = LabelTaxonomy(
-    VOCABULARY,
-    ["car", "truck"],
-    {"car": "car", "truck": "truck", "trailer": None},
-    -1,
-    {"grouped_vehicle": ["car", "truck"]},
-)
 
 
 def _box(label_name: str) -> Box3DDataModel:
@@ -47,7 +40,6 @@ def _box(label_name: str) -> Box3DDataModel:
         box3d_instance_id="instance",
         box3d_dataset_label_name=label_name,
         box3d_label_name=label_name,
-        box3d_label_index=-1,
         box3d_num_lidar_points=1,
         box3d_num_radar_points=0,
         box3d_valid=True,
@@ -56,46 +48,22 @@ def _box(label_name: str) -> Box3DDataModel:
     )
 
 
-def test_resolver_turns_raw_names_into_fine_names_and_indices() -> None:
-    boxes = Box3DLabelResolver(TAXONOMY)([_box("vehicle.car"), _box("vehicle.trailer")])
+class TestBox3DLabelResolver(unittest.TestCase):
+    def test_turns_raw_names_into_fine_names(self) -> None:
+        boxes = Box3DLabelResolver(VOCABULARY)([_box("vehicle.car"), _box("vehicle.trailer")])
 
-    assert [box.box3d_label_name for box in boxes] == ["car", "trailer"]
-    # The trailer is a fine name the level drops, so it takes the ignore index
-    assert [box.box3d_label_index for box in boxes] == [0, -1]
+        self.assertEqual([box.box3d_label_name for box in boxes], ["car", "trailer"])
+        self.assertEqual(
+            [box.box3d_dataset_label_name for box in boxes], ["vehicle.car", "vehicle.trailer"]
+        )
 
+    def test_drops_a_raw_name_outside_every_level(self) -> None:
+        self.assertEqual(Box3DLabelResolver(VOCABULARY)([_box("unpainted")]), [])
 
-def test_resolver_drops_a_raw_name_outside_every_level() -> None:
-    assert Box3DLabelResolver(TAXONOMY)([_box("unpainted")]) == []
-
-
-def test_resolver_rejects_a_raw_name_the_vocabulary_does_not_list() -> None:
-    with pytest.raises(KeyError):
-        Box3DLabelResolver(TAXONOMY)([_box("vehicle.bus")])
-
-
-FOLDING_TAXONOMY = LabelTaxonomy(
-    VOCABULARY,
-    ["car", "truck"],
-    {"car": "car", "truck": "truck", "trailer": "truck"},
-    -1,
-    {"grouped_vehicle": ["car", "truck"]},
-)
+    def test_rejects_a_raw_name_the_vocabulary_does_not_list(self) -> None:
+        with self.assertRaises(KeyError):
+            Box3DLabelResolver(VOCABULARY)([_box("vehicle.bus")])
 
 
-def test_remapper_sets_the_class_index_of_the_fine_names_and_keeps_the_names() -> None:
-    boxes = Box3DLabelRemapper(FOLDING_TAXONOMY)([_box("trailer"), _box("car")])
-
-    assert [box.box3d_label_name for box in boxes] == ["trailer", "car"]
-    assert [box.box3d_label_index for box in boxes] == [1, 0]
-
-
-def test_remapper_gives_a_fine_name_the_level_drops_the_ignore_index() -> None:
-    boxes = Box3DLabelRemapper(TAXONOMY)([_box("trailer")])
-
-    assert [box.box3d_label_name for box in boxes] == ["trailer"]
-    assert [box.box3d_label_index for box in boxes] == [-1]
-
-
-def test_remapper_rejects_a_name_that_is_not_a_fine_name() -> None:
-    with pytest.raises(KeyError):
-        Box3DLabelRemapper(TAXONOMY)([_box("vehicle.car")])
+if __name__ == "__main__":
+    unittest.main()

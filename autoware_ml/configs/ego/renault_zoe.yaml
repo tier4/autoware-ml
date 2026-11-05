@@ -1,0 +1,2 @@
+# Renault Zoe body in the LIDAR_TOP frame, [x_min, y_min, z_min, x_max, y_max, z_max]
+box: [-0.87, -1.65, -1.95, 0.87, 2.54, -0.27]

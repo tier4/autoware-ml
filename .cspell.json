@@ -254,6 +254,8 @@
     "randperm",
     "rankdata",
     "rbl",
+    "reanchor",
+    "reanchored",
     "removesuffix",
     "rshared",
     "REUSEADDR",

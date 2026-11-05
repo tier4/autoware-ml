@@ -21,6 +21,7 @@ from typing import Self
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CONFIGS_ROOT = PROJECT_ROOT / "autoware_ml" / "configs"
 SETTINGS_FILE = PROJECT_ROOT / ".env"
+DEFAULT_CACHE_PATH = PROJECT_ROOT / ".cache"
 SETTINGS_KEYS = frozenset(
     {
         "AUTOWARE_ML_DATA_PATH",
@@ -116,14 +117,10 @@ class Settings:
         """Return the root of the cached record tables.
 
         Returns:
-            Absolute root of the cached record tables.
-
-        Raises:
-            ValueError: If ``AUTOWARE_ML_CACHE_PATH`` is not set.
+            Absolute root of the cached record tables, ``.cache`` of the project root when the
+            setting is not set.
         """
-        if self.cache_path is None:
-            raise ValueError("AUTOWARE_ML_CACHE_PATH is not set in .env.")
-        return str(self.cache_path)
+        return str(self.cache_path or DEFAULT_CACHE_PATH)
 
     def resolve_scenarios_path(self, relative_path: str) -> str:
         """Return a directory of scenario lists below the root of the scenario lists.

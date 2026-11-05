@@ -1,4 +1,7 @@
 # @package metric_params.det3d_seg3d
-defaults:
-  - partial_detection3d_classes: default_coarse
-  - _self_
+
+partial_detection_classes:
+  _target_: autoware_ml.metrics.class_catalog.partial_detection_classes
+  _convert_: all
+  catalog: ${metric_params.detection3d.class_catalog}
+  class_names: ${taxonomy.detection3d.class_names}

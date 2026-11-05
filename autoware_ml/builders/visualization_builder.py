@@ -31,7 +31,7 @@ def build_preview_config(cfg: DictConfig) -> VisualizationPreviewConfig:
     Build the preview settings from the ``visualization`` group of the configuration.
 
     Every key is optional, the CLI fills the ones it exposes. An unset class name list keeps
-    the class names of the database taxonomy.
+    the class names of the taxonomies of the run.
 
     Args:
         cfg: Hydra configuration.
