@@ -12,7 +12,7 @@ from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.geometry.range_view import RangeViewData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.models.module_base_model import LogDictConfigs
-from autoware_ml.models.segmentation3d.frnet import FRNet
+from autoware_ml.models.segmentation3d.frnet import FRNet, _FRNetExportModule
 from autoware_ml.models.tests.batch_inputs_fixtures import (
     build_batch_inputs,
     build_point_cloud_batch,
@@ -220,3 +220,28 @@ def test_frnet_with_preprocessing_runs_shared_step_end_to_end() -> None:
     assert loss.requires_grad
     assert model.backbone.last_sample_count == 1
     assert "train/loss" in model.log_dict.call_args.args[0]
+
+
+def test_frnet_export_spec_declares_the_point_axes() -> None:
+    """
+    Input: a batch of five points over two range-view cells.
+    Expected: the spec names the four inputs and the probability output, and declares one row
+        per point on the point tensors and one per unique cell on ``voxel_coors``.
+    Check: the export spec of ``build_export_specs``.
+    """
+    model = _make_frnet()
+    batch = _make_batch(num_points=5)
+
+    spec = model.build_export_specs(batch)["end_to_end"]
+
+    assert isinstance(spec.module, _FRNetExportModule)
+    assert spec.input_names == ["points", "coors", "voxel_coors", "inverse_map"]
+    assert spec.output_names == ["pred_probs"]
+    assert spec.dynamic_axes == {
+        "points": {0: "num_points"},
+        "coors": {0: "num_points"},
+        "inverse_map": {0: "num_points"},
+        "voxel_coors": {0: "num_unique_coors"},
+        "pred_probs": {0: "num_points"},
+    }
+    assert [tuple(arg.shape) for arg in spec.args] == [(5, 4), (5, 3), (2, 3), (5,)]
