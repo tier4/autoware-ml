@@ -67,10 +67,13 @@ export split produce a single module named `end_to_end`.
 
 Artifact files are named after the module. Every exported module has an entry
 under `deploy.onnx.modules`: `{}` exports it with the shared `deploy.onnx`
-settings, and any key in the entry overrides them. A module without an entry,
-or an entry for a module the model does not export, fails the deploy before the
-deploy run is created, so a module added to a model cannot silently export
-without its `metainfo` or `modify_graph`.
+settings, and any key in the entry overrides them. A module without an entry
+fails the deploy before the deploy run is created, so a module added to a model
+cannot silently export without its `metainfo` or `modify_graph`, and a
+misspelled entry shows up as the missing one. Entries of modules the model does
+not export are left alone, so a model whose modules depend on its config, as
+BEVFusion's on `camera_network`, lists the entries of every variant in one base
+config.
 
 ## Multi-head exports
 

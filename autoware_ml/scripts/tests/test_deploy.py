@@ -223,25 +223,18 @@ def test_run_deploy_refuses_configured_tensor_names_before_the_run_exists(
     assert not (tmp_path / "mlruns" / "mlflow.db").exists()
 
 
-@pytest.mark.parametrize(
-    ("modules", "match"),
-    [
-        pytest.param({"head": {}, "haed": {}}, r"\['haed'\].*\['head'\]", id="unexported_entry"),
-        pytest.param({}, r"missing entries for \['head'\]", id="missing_entry"),
-    ],
-)
-def test_run_deploy_refuses_mismatched_module_entries_before_the_run_exists(
-    tmp_path: Path, hydra_runtime: HydraRuntime, modules: dict, match: str
+def test_run_deploy_refuses_a_module_without_an_entry_before_the_run_exists(
+    tmp_path: Path, hydra_runtime: HydraRuntime
 ) -> None:
     """
-    Input: MLflow enabled, a model exporting ``head`` and a config whose ``modules`` entries
-        either add ``haed`` or leave ``head`` out.
-    Expected: the deploy fails naming the mismatch after the model is built but before the
-        MLflow run is created, so no FAILED run is left behind.
+    Input: MLflow enabled, a model exporting ``head`` and a config whose ``modules`` has an
+        entry of ``haed`` only.
+    Expected: the deploy fails naming the missing entry after the model is built but before
+        the MLflow run is created, so no FAILED run is left behind.
     Check: the raised error, the export not running and the absence of the SQLite store.
     """
     cfg = _deploy_cfg(tmp_path)
-    cfg.deploy.onnx.modules = modules
+    cfg.deploy.onnx.modules = {"haed": {}}
     checkpoint_path = _checkpoint(tmp_path)
 
     with (
@@ -252,7 +245,7 @@ def test_run_deploy_refuses_mismatched_module_entries_before_the_run_exists(
         ),
         patch.object(deploy_script, "_build", return_value=_built(("head",))),
         patch.object(deploy_script, "_export") as export_mock,
-        pytest.raises(ValueError, match=match),
+        pytest.raises(ValueError, match=r"\['head'\].*entries are \['haed'\]"),
     ):
         deploy_script.run_deploy(cfg)
 

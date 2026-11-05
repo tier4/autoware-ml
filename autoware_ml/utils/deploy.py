@@ -163,29 +163,29 @@ def merge_module_onnx_cfg(onnx_cfg: DictConfig, module_name: str) -> DictConfig:
 
 
 def validate_onnx_modules_exported(onnx_cfg: DictConfig, module_names: Iterable[str]) -> None:
-    """Refuse ``deploy.onnx.modules`` that does not name exactly the modules the model exports.
+    """Refuse ``deploy.onnx.modules`` that lacks an entry of a module the model exports.
 
     Every exported module needs an entry, ``{}`` when it keeps the shared settings, so a module
-    added to the model cannot silently export without its ``metainfo`` or ``modify_graph``. An
-    entry of a module the model does not export would apply to nothing, so a misspelled module
-    name would silently keep the shared settings.
+    added to the model cannot silently export without its ``metainfo`` or ``modify_graph``, and a
+    misspelled entry shows up as the missing one. Entries of modules the model does not export
+    are left alone: a model whose exported modules depend on its config, as BEVFusion's on
+    ``camera_network``, lists the entries of every variant in one base config.
 
     Args:
         onnx_cfg: ``deploy.onnx``, with one ``modules`` entry per exported module.
         module_names: The modules the export specs name.
 
     Raises:
-        ValueError: Naming the modules without an entry and the entries without a module.
+        ValueError: Naming the modules without an entry and the entries there are.
     """
     module_names = list(module_names)
-    entries = set(onnx_cfg.get("modules") or {})
-    missing = sorted(set(module_names) - entries)
-    unknown = sorted(entries - set(module_names))
-    if missing or unknown:
+    entries = sorted(onnx_cfg.get("modules") or {})
+    missing = sorted(set(module_names) - set(entries))
+    if missing:
         raise ValueError(
-            f"deploy.onnx.modules needs one entry per exported module: missing entries for "
-            f"{missing}, entries for {unknown} of modules the model does not export; its modules "
-            f"are {module_names}. An empty entry ({{}}) keeps the shared deploy.onnx settings."
+            f"deploy.onnx.modules has no entry for the exported modules {missing}; its entries "
+            f"are {entries} and the model exports {module_names}. An empty entry ({{}}) keeps "
+            "the shared deploy.onnx settings."
         )
 
 

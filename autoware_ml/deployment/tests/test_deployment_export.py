@@ -512,18 +512,6 @@ class TestMetadataStamp:
 class TestErrorPaths:
     """Misconfigurations fail before any file is shipped."""
 
-    def test_module_entry_of_an_unexported_module_is_rejected(self, tmp_path: Path) -> None:
-        """
-        Input: a model exporting ``head`` while the deploy config has an entry for ``encoder``.
-        Expected: the entry would apply to nothing, so the export stops.
-        Check: a ValueError naming the entry and the exported modules, and no file written.
-        """
-        exporter = _exporter(tmp_path, _deploy_cfg({"encoder": {}}))
-
-        with pytest.raises(ValueError, match=r"\['encoder'\].*\['head'\]"):
-            exporter.export()
-        assert list((tmp_path / "exports").iterdir()) == []
-
     def test_module_without_an_entry_is_rejected(self, tmp_path: Path) -> None:
         """
         Input: the default deploy config without any ``modules`` block, a model exporting
@@ -535,7 +523,7 @@ class TestErrorPaths:
         deploy_cfg.tensorrt.enabled = False
         exporter = _exporter(tmp_path, deploy_cfg)
 
-        with pytest.raises(ValueError, match=r"missing entries for \['head'\]"):
+        with pytest.raises(ValueError, match=r"no entry for the exported modules \['head'\]"):
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
 

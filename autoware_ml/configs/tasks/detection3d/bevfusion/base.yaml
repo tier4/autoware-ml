@@ -46,10 +46,13 @@ deploy:
     opset_version: 17
     do_constant_folding: false
     # One entry per module the model exports; {} keeps the shared deploy.onnx settings.
-    # A config with camera_network exports bevfusion_image_backbone and bevfusion_camera_lidar
-    # instead, and lists those two.
+    # A lidar-only config (camera_network: null) exports bevfusion_lidar; a camera-lidar config
+    # exports bevfusion_image_backbone and bevfusion_camera_lidar. Entries of the other variant
+    # are left alone.
     modules:
       bevfusion_lidar: {}
+      bevfusion_image_backbone: {}
+      bevfusion_camera_lidar: {}
   tensorrt:
     enabled: false
 

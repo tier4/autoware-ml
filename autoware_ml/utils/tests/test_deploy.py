@@ -249,24 +249,26 @@ def test_merge_module_onnx_cfg_refuses_a_module_without_an_entry() -> None:
             merge_module_onnx_cfg(onnx_cfg, "head")
 
 
-def test_module_entries_must_match_the_exported_modules() -> None:
-    """A missing entry drops a module's overrides; a misspelled one applies to nothing."""
+def test_every_exported_module_needs_an_entry() -> None:
+    """A missing entry drops a module's overrides; a misspelled one shows up as the missing one.
+
+    Entries of modules the model does not export pass: BEVFusion lists the entries of both its
+    lidar-only and camera-lidar variants in one base config.
+    """
     validate_onnx_modules_exported(
         OmegaConf.create({"modules": {"encoder": {}, "head": {"precision": "fp16"}}}),
         ["encoder", "head"],
     )
-    with pytest.raises(ValueError, match=r"missing entries for \['head'\].*\['head'\]"):
+    validate_onnx_modules_exported(
+        OmegaConf.create({"modules": {"lidar": {}, "image_backbone": {}, "camera_lidar": {}}}),
+        ["lidar"],
+    )
+    with pytest.raises(ValueError, match=r"no entry for the exported modules \['head'\]"):
         validate_onnx_modules_exported(OmegaConf.create({"opset_version": 17}), ["head"])
-    with pytest.raises(ValueError, match=r"\['heads'\].*\['encoder', 'head'\]"):
+    with pytest.raises(ValueError, match=r"\['head'\].*entries are \['encoder', 'heads'\]"):
         validate_onnx_modules_exported(
             OmegaConf.create({"modules": {"encoder": {}, "heads": {"precision": "fp16"}}}),
             ["encoder", "head"],
-        )
-    with pytest.raises(
-        ValueError, match=r"missing entries for \['head'\], entries for \['heads'\]"
-    ):
-        validate_onnx_modules_exported(
-            OmegaConf.create({"modules": {"encoder": {}, "heads": {}}}), ["encoder", "head"]
         )
 
 
