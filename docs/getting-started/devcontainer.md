@@ -17,6 +17,10 @@ VS Code dev containers give you a fully configured development environment with 
 
 ## Opening the Dev Container
 
+The dev container mounts every path of `.env` at the same path, the dataset root read only. Set
+`AUTOWARE_ML_DATA_PATH` and `AUTOWARE_ML_CACHE_PATH` there first, see
+[Settings](installation.md#settings).
+
 1. Open VS Code
 2. `Ctrl+Shift+P` and select `Dev Containers: Open Folder in Container`
 3. Select the `autoware-ml` folder and click `Open`

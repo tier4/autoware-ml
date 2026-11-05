@@ -26,11 +26,11 @@ from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
 
-from autoware_ml.configs.paths import CONFIGS_ROOT
-from autoware_ml.configs.resolvers import register_config_resolvers
+from autoware_ml.utils.config.resolvers import register_config_resolvers
+from autoware_ml.utils.config.settings import CONFIGS_ROOT, SETTINGS_FILE, Settings
 from autoware_ml.utils.session import AUTOWARE_ML_SESSION_OPTION, TMUX_BASE_COMMAND
 
-register_config_resolvers()
+register_config_resolvers(Settings.read(SETTINGS_FILE))
 
 _NUMERIC_VALUE_PATTERN = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
@@ -137,7 +137,7 @@ def resolve_config_reference(config_value: str, prefix: str) -> tuple[str | None
     if relative_to_configs is not None:
         return None, relative_to_configs.with_suffix("").as_posix(), []
 
-    hydra_searchpath_override = "hydra.searchpath=[pkg://autoware_ml.configs]"
+    hydra_searchpath_override = f"hydra.searchpath=[file://{CONFIGS_ROOT}]"
     return str(resolved_path.parent), resolved_path.stem, [hydra_searchpath_override]
 
 
