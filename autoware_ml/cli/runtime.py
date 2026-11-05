@@ -33,7 +33,6 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 
 from autoware_ml.utils.cli.helpers import adjust_argv, resolve_config_reference, run_lazy_script
-from autoware_ml.utils.config.settings import CONFIGS_ROOT
 from autoware_ml.utils.mlflow_helpers import (
     AUTOWARE_ML_HYDRA_RUN_DIR_ENV,
     AUTOWARE_ML_RUN_ID_ENV,
@@ -75,12 +74,13 @@ def resolve_hydra_argv(
         config_value, config_prefix
     )
     adjusted_args = adjust_argv(extra_args)
-    hydra_argv = [HYDRA_CONFIG_NAME_OPTION, resolved_config_name]
-
-    if resolved_config_path is not None:
-        hydra_argv.extend([HYDRA_CONFIG_PATH_OPTION, resolved_config_path])
-
-    hydra_argv.extend(adjusted_args)
+    hydra_argv = [
+        HYDRA_CONFIG_NAME_OPTION,
+        resolved_config_name,
+        HYDRA_CONFIG_PATH_OPTION,
+        resolved_config_path,
+        *adjusted_args,
+    ]
     if not any(arg.startswith(HYDRA_SEARCHPATH_PREFIX) for arg in adjusted_args):
         hydra_argv.extend(extra_config_overrides)
 
@@ -218,12 +218,8 @@ def prepare_runtime_environment(
 
     started_at = datetime.now().astimezone()
     GlobalHydra.instance().clear()
-    if resolved_config_path is None:
-        with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
-            cfg = compose(config_name=resolved_config_name, overrides=compose_overrides)
-    else:
-        with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
-            cfg = compose(config_name=resolved_config_name, overrides=compose_overrides)
+    with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
+        cfg = compose(config_name=resolved_config_name, overrides=compose_overrides)
 
     experiment_name = resolve_experiment_name(cfg)
     if should_enable_logger(cfg):

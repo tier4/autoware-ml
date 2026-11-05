@@ -371,12 +371,13 @@ AUTOWARE_ML_DATA_PATH=/path/to/your/datasets
 AUTOWARE_ML_CACHE_PATH=/path/to/your/cache
 ```
 
-| Setting                      | Meaning                                                                      | When empty                                 |
-| ---------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------ |
-| `AUTOWARE_ML_DATA_PATH`      | Root of the datasets                                                         | Commands that read data stop with an error |
-| `AUTOWARE_ML_CACHE_PATH`     | Root of the cached record tables                                             | Commands that read data stop with an error |
-| `AUTOWARE_ML_SCENARIOS_PATH` | Root of the scenario lists, the T4Dataset configs read `t4dataset/` below it | T4Dataset configs stop with an error       |
-| `AUTOWARE_ML_WORKING_DIR`    | Root of the experiment outputs                                               | The repository root                        |
+| Setting                      | Meaning                                                                                                   | When empty                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `AUTOWARE_ML_DATA_PATH`      | Root of the datasets                                                                                      | Commands that read data stop with an error |
+| `AUTOWARE_ML_CACHE_PATH`     | Root of the cached record tables                                                                          | Commands that read data stop with an error |
+| `AUTOWARE_ML_CONFIGS_PATH`   | External configs, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists) | Only the bundled configs                   |
+| `AUTOWARE_ML_SCENARIOS_PATH` | Root of the scenario lists, the T4Dataset configs read `t4dataset/` below it                              | T4Dataset configs stop with an error       |
+| `AUTOWARE_ML_WORKING_DIR`    | Root of the experiment outputs                                                                            | The repository root                        |
 
 Every setting is an absolute host path. `./docker/container.sh --run` and the
 [dev container](devcontainer.md) mount each setting that is set at the same path inside the

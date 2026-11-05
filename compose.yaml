@@ -46,6 +46,9 @@ services:
         source: ${AUTOWARE_ML_CACHE_PATH:?set AUTOWARE_ML_CACHE_PATH in .env}
         target: ${AUTOWARE_ML_CACHE_PATH}
       - <<: *same-path-mount
+        source: ${AUTOWARE_ML_CONFIGS_PATH:-.}
+        target: ${AUTOWARE_ML_CONFIGS_PATH:-/workspace}
+      - <<: *same-path-mount
         source: ${AUTOWARE_ML_SCENARIOS_PATH:-.}
         target: ${AUTOWARE_ML_SCENARIOS_PATH:-/workspace}
       - <<: *same-path-mount

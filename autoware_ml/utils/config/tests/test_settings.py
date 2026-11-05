@@ -23,6 +23,7 @@ from autoware_ml.utils.config.settings import CONFIGS_ROOT, PROJECT_ROOT, SETTIN
 UNSET_SETTINGS = (
     "AUTOWARE_ML_DATA_PATH=\n"
     "AUTOWARE_ML_CACHE_PATH=\n"
+    "AUTOWARE_ML_CONFIGS_PATH=\n"
     "AUTOWARE_ML_SCENARIOS_PATH=\n"
     "AUTOWARE_ML_WORKING_DIR=\n"
 )
@@ -47,6 +48,7 @@ class TestSettingsRead(unittest.TestCase):
         settings = self.read(
             "AUTOWARE_ML_DATA_PATH=/data\n"
             "AUTOWARE_ML_CACHE_PATH=/cache\n"
+            "AUTOWARE_ML_CONFIGS_PATH=/configs\n"
             "AUTOWARE_ML_SCENARIOS_PATH=/scenarios\n"
             "AUTOWARE_ML_WORKING_DIR=/outputs\n"
         )
@@ -56,6 +58,7 @@ class TestSettingsRead(unittest.TestCase):
             Settings(
                 data_path=Path("/data"),
                 cache_path=Path("/cache"),
+                configs_path=Path("/configs"),
                 scenarios_path=Path("/scenarios"),
                 working_dir=Path("/outputs"),
             ),
@@ -70,6 +73,7 @@ class TestSettingsRead(unittest.TestCase):
             "AUTOWARE_ML_DATA_PATH=/data/a=b\n"
             "\n"
             "AUTOWARE_ML_CACHE_PATH=\n"
+            "AUTOWARE_ML_CONFIGS_PATH=\n"
             "AUTOWARE_ML_SCENARIOS_PATH=\n"
             "AUTOWARE_ML_WORKING_DIR=\n"
         )
