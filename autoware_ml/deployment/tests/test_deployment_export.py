@@ -291,6 +291,34 @@ class TestExportSpecs:
         assert specs["head"].input_names == ["points", "scale"]
         assert torch.equal(specs["head"].args[0], batch.point_cloud_gt_batch.points)
 
+    def test_given_export_specs_are_used_without_reading_the_datamodule(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Input: an exporter handed the resolved export specs, as the deploy script does after
+            checking them before the MLflow run exists.
+        Expected: the specs come back as given, read-only, and the datamodule is left alone.
+        Check: the datamodule state and the returned mapping.
+        """
+        datamodule = _PredictDatamodule([_point_batch()])
+        model = _ExportModel()
+        given = model.build_export_specs(ModelBatchInputs.from_gt_batch(_point_batch()))
+        exporter = DeploymentExport(
+            deploy_cfg=_deploy_cfg({"head": {}}),
+            output_dir=tmp_path / "exports",
+            datamodule=datamodule,
+            model=model,
+            config_name=CONFIG_NAME,
+            release=None,
+            export_specs=given,
+        )
+
+        specs = exporter.prepare_export_specs()
+
+        assert not datamodule.prepared
+        assert isinstance(specs, MappingProxyType)
+        assert dict(specs) == given
+
 
 class TestOnnxExport:
     """The ONNX files carry the configured names, axes, opset and metadata."""

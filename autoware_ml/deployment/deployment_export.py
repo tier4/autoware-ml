@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import logging
 from pathlib import Path
 from types import MappingProxyType
@@ -23,6 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
+    ExportSpec,
     resolve_export_specs,
     validate_onnx_modules_exported,
     merge_module_onnx_cfg,
@@ -67,6 +68,7 @@ class DeploymentExport:
         release: str | None,
         tracker: str | None = None,
         run_id: str | None = None,
+        export_specs: Mapping[str, ExportSpec] | None = None,
     ) -> None:
         """Initialize the exporter.
 
@@ -80,6 +82,8 @@ class DeploymentExport:
                 for an unversioned export.
             tracker: Active experiment tracker name recorded in the stamp, if any.
             run_id: Deploy run id recorded in the stamp, if any.
+            export_specs: The model's export specifications when the caller resolved them
+                already, else :meth:`prepare_export_specs` resolves them from the datamodule.
         """
         self.deploy_cfg = deploy_cfg
         self.output_dir = output_dir
@@ -89,11 +93,14 @@ class DeploymentExport:
         self.release = release
         self.tracker = tracker
         self.run_id = run_id
+        self.export_specs = export_specs
         self.device = self.model.device
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def prepare_export_specs(self) -> MappingProxyType[str, dict]:
-        """Prepare export specifications for the model."""
+    def prepare_export_specs(self) -> MappingProxyType[str, ExportSpec]:
+        """Return the export specifications, resolving them from the datamodule when not given."""
+        if self.export_specs is not None:
+            return MappingProxyType(dict(self.export_specs))
         export_specs = resolve_export_specs(
             datamodule=self.datamodule, model=self.model, device=self.device
         )

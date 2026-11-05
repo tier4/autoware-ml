@@ -68,7 +68,7 @@ export split produce a single module named `end_to_end`.
 Artifact files are named after the module. A module exports with the shared
 `deploy.onnx` settings unless it has an entry under `deploy.onnx.modules` that
 overrides them; an entry for a module the model does not export fails the
-deploy before any file is written.
+deploy before the deploy run is created.
 
 ## Multi-head exports
 
