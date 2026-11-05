@@ -18,20 +18,19 @@ They spawn gloo process groups on CPU so the collectives of ``reduce_mean_count`
 property under test: sharding a batch over the ranks gives the DDP-averaged loss and gradients
 of the whole batch on one process, and a rank without ground truth still joins the denoising
 collective.
+
+Scope: the head's loss. The gradient test wraps one linear layer in DDP and feeds the head's
+loss fixed features, so it checks the loss normalization, not distributed training of the
+model. ``reduce_mean_count`` itself is tested in ``task_modules/tests``.
 """
 
 from __future__ import annotations
 
 import copy
-import math
-import os
-import tempfile
-import time
 import unittest
 
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel
 
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
@@ -46,9 +45,12 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
-from autoware_ml.models.detection3d.task_modules.streaming import reduce_mean_count
+from autoware_ml.models.detection3d.tests.distributed_fixtures import (
+    GLOO_AVAILABLE,
+    gloo_process_group,
+    spawn_gloo_workers,
+)
 
-_WORLD_SIZE = 2
 _CLASS_NAMES = ["car", "truck", "bus"]
 _NUM_CLASSES = len(_CLASS_NAMES)
 _NUM_QUERIES = 32
@@ -112,46 +114,8 @@ def _sample(
     return cls_scores, bbox_preds, gt_boxes, gt_labels
 
 
-def _spawn(worker, *args, world_size: int = _WORLD_SIZE, timeout: float = 120.0) -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        context = mp.spawn(
-            worker,
-            args=(world_size, os.path.join(directory, "store"), *args),
-            nprocs=world_size,
-            join=False,
-        )
-        # join(timeout) returns after one wait pass; poll so a deadlocked collective fails the
-        # test instead of hanging the test runner.
-        deadline = time.monotonic() + timeout
-        while not context.join(timeout=5.0):
-            if time.monotonic() > deadline:
-                for process in context.processes:
-                    process.terminate()
-                raise AssertionError(f"distributed workers did not finish within {timeout}s")
-
-
-def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> None:
-    dist.init_process_group(
-        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
-    )
-    try:
-        local_count = torch.tensor(float(2 if rank == 0 else 8))
-        assert math.isclose(reduce_mean_count(local_count).item(), 5.0)
-        assert math.isclose(local_count.item(), 2.0 if rank == 0 else 8.0)
-        # The floor applies to the sum over the ranks, not to the mean.
-        assert math.isclose(reduce_mean_count(torch.tensor(float(1 - rank))).item(), 0.5)
-        assert math.isclose(reduce_mean_count(torch.tensor(0.0)).item(), 0.5)
-        pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
-        torch.testing.assert_close(pair, torch.tensor([0.5, 4.0]))
-    finally:
-        dist.destroy_process_group()
-
-
 def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> None:
-    dist.init_process_group(
-        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
-    )
-    try:
+    with gloo_process_group(rank, world_size, init_file):
         head = _build_head().train()
         frames = [_sample(2, seed=10), _sample(8, seed=20)]
 
@@ -179,15 +143,10 @@ def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> N
 
         torch.testing.assert_close(ddp_averaged[0], combined_cls.detach(), rtol=1e-5, atol=1e-6)
         torch.testing.assert_close(ddp_averaged[1], combined_bbox.detach(), rtol=1e-5, atol=1e-6)
-    finally:
-        dist.destroy_process_group()
 
 
 def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
-    dist.init_process_group(
-        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
-    )
-    try:
+    with gloo_process_group(rank, world_size, init_file):
         head = _build_head().train()
         if rank == 0:
             _, _, gt_boxes, gt_labels = _sample(4, seed=30)
@@ -229,8 +188,6 @@ def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
         else:
             assert losses["dn_loss_cls"].item() == 0.0
             assert losses["dn_loss_bbox"].item() == 0.0
-    finally:
-        dist.destroy_process_group()
 
 
 def _frame(
@@ -307,59 +264,44 @@ def _ddp_gradient_worker(
     # device.
     _layer_loss(head, whole_batch_layer, frames).backward()
 
-    dist.init_process_group(
-        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
-    )
-    try:
+    with gloo_process_group(rank, world_size, init_file):
         # The wrapper must outlive the backward pass, which its hooks average over the ranks.
         ddp_layer = DistributedDataParallel(layer)
         _layer_loss(head, ddp_layer, [frames[rank]]).backward()
 
         for sharded, whole in zip(layer.parameters(), whole_batch_layer.parameters()):
             torch.testing.assert_close(sharded.grad, whole.grad, rtol=1e-5, atol=1e-7)
-    finally:
-        dist.destroy_process_group()
 
 
-@unittest.skipUnless(dist.is_available() and dist.is_gloo_available(), "gloo backend unavailable")
+@unittest.skipUnless(GLOO_AVAILABLE, "gloo backend unavailable")
 class TestStreamPETRLossDistributed(unittest.TestCase):
-    def test_reduce_mean_count_is_identity_without_process_group(self) -> None:
-        """Test that without a process group the count comes back as float, floored at 1."""
-        self.assertAlmostEqual(reduce_mean_count(torch.tensor(3.0)).item(), 3.0)
-        self.assertEqual(reduce_mean_count(torch.tensor(3)).dtype, torch.float32)
-        self.assertAlmostEqual(reduce_mean_count(torch.tensor(0.0)).item(), 1.0)
-
-    def test_reduce_mean_count_averages_counts_across_ranks(self) -> None:
-        """Test that two ranks get the mean of their counts, floored over the sum, without
-        in-place changes."""
-        _spawn(_reduce_mean_count_worker)
-
     def test_sharded_loss_matches_single_batch_equivalent(self) -> None:
         """Test that the rank-averaged losses of frames with 2 and 8 boxes equal the losses of
         the whole batch.
 
         Rank-local counts would give every rank an equal vote whatever its object count.
         """
-        _spawn(_sharding_invariance_worker)
+        spawn_gloo_workers(_sharding_invariance_worker)
 
     def test_dn_collective_survives_rank_without_ground_truth(self) -> None:
         """Test that a rank without ground truth joins the denoising count collective and logs
         zero losses."""
-        _spawn(_dn_mixed_gt_worker)
+        spawn_gloo_workers(_dn_mixed_gt_worker)
 
-    def test_ddp_gradients_match_the_whole_batch_on_one_process(self) -> None:
-        """Test that the DDP-averaged gradients of one frame per rank equal those of the whole
-        batch.
+    def test_ddp_averaged_loss_gradients_match_the_whole_batch_on_one_process(self) -> None:
+        """Test that the DDP-averaged gradients of the loss of one frame per rank equal those
+        of the whole batch.
 
-        Every logit and box comes from one linear layer, so the matching and the denoising
-        losses are both covered. With one positive in the step, or none, flooring the mean
-        count instead of the sum would halve the gradient of the single positive, or of the
-        negatives. Four ranks check the division by the world size with a rank that has no
-        positive among ranks that have some.
+        One linear layer wrapped in DDP makes every logit and box from fixed features, so the
+        matching and the denoising losses are both covered while nothing but the loss
+        normalization is under test. With one positive in the step, or none, flooring the
+        mean count instead of the sum would halve the gradient of the single positive, or of
+        the negatives. Four ranks check the division by the world size with a rank that has
+        no positive among ranks that have some.
         """
         for box_counts in [(10, 30), (1, 0), (0, 0), (10, 30, 0, 1)]:
             with self.subTest(box_counts=box_counts):
-                _spawn(_ddp_gradient_worker, box_counts, world_size=len(box_counts))
+                spawn_gloo_workers(_ddp_gradient_worker, box_counts, world_size=len(box_counts))
 
 
 if __name__ == "__main__":
