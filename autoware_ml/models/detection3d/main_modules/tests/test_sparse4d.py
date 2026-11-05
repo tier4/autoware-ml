@@ -121,16 +121,6 @@ def test_optimizer_groups_cover_the_encoder_and_the_detection_branch(tmp_path: P
     assert len(groups["det3d_branch"]) == head_count + pyramid_count
 
 
-def test_state_dict_holds_the_head_once(tmp_path: Path) -> None:
-    # The task refers to the head of the model without registering it a second time
-    model = _build_model(tmp_path)
-
-    head_keys = [key for key in model.state_dict() if key.startswith("bbox_head.")]
-
-    assert len(head_keys) == len(model.bbox_head.state_dict())
-    assert not any(key.startswith("det3d_task") for key in model.state_dict())
-
-
 @requires_cuda_spconv
 def test_temporal_detector_trains_on_a_stream_and_reaches_every_parameter(
     tmp_path: Path,

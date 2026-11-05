@@ -311,7 +311,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                         |
 | `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
 | `autoware_ml/models/detection3d/main_modules/sparse4d.py`               | Sparse4D detector wrapper                          |
-| `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch, detection task and export   |
+| `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch and export wrappers          |
 | `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
 | `autoware_ml/scripts/generate_anchors.py`                               | Sparse4D anchors from the training boxes           |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |
