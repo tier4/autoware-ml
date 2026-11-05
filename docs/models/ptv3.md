@@ -13,12 +13,13 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
 - Detection: `PTv3Det3DBEVNeck` fuses the two coarsest encoder stages
   (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
-- Temporal detection (experimental): `PTv3Det3DSeg3DSparse4DModel` fuses the
+- Temporal detection (experimental): `PTv3Detection3DSparse4DModel` fuses the
   deepest encoder stage top-down into finer ones (`PTv3Det3DFeaturePyramid`) and
   feeds a `Sparse4DHead`, whose queries sample the sparse voxels at keypoints
   around their anchors with no BEV canvas, and carry the most confident
   instances from one frame of a scenario to the next. The keypoints sample the
-  sparse voxels, dense BEV maps, or both.
+  sparse voxels, dense BEV maps, or both. `PTv3Det3DSeg3DSparse4DModel` adds the
+  segmentation head on the shared encoder.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -58,6 +59,7 @@ implementation so ONNX export remains supported.
 | `detection3d/ptv3/t4dataset/base_voxel012_122m`              | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection                                      |
 | `multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m`         | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection                           |
 | `multi/ptv3/t4dataset/base_voxel012_122m`                    | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection                           |
+| `detection3d/sparse4d/t4dataset/base_voxel012_122m`          | detection3d                  | T4Dataset | Sparse4D    | 122 m | Temporal detection on 10 Hz streams                      |
 | `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`           | segmentation3d + detection3d | T4Dataset | Sparse4D    | 122 m | Joint segmentation + temporal detection on 10 Hz streams |
 
 The T4Dataset rows are bases. They declare the classes the model trains and require the taxonomy
@@ -67,8 +69,9 @@ an external config root, see
 
 ### Sparse4D configurations
 
-Every Sparse4D experiment binds the base `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`
-and adds features with these configs under `multi/ptv3_sparse4d/t4dataset/`:
+Every Sparse4D experiment binds the base `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`,
+or `detection3d/sparse4d/t4dataset/base_voxel012_122m` for detection alone on the dynamic
+classes of BEVFusion, and adds features with these configs under `multi/ptv3_sparse4d/t4dataset/`:
 
 | Add-on                       | Adds                                                              |
 | ---------------------------- | ----------------------------------------------------------------- |
@@ -78,7 +81,8 @@ and adds features with these configs under `multi/ptv3_sparse4d/t4dataset/`:
 
 Every lidar experiment comes in four samplings, named by the suffix of its config: none for
 the sparse voxels, `_sparse_bev`, `_sparse_bev_multiscale` and `_bev`. The experiment and its
-three variants live in the external config root, each variant binds the experiment and one add-on:
+three variants live in the external config root, each variant binds the experiment and one add-on,
+a detection experiment by the absolute path of the add-on:
 
 ```yaml title="/path/to/configs/tasks/multi/ptv3_sparse4d/t4dataset/my_experiment_bev.yaml"
 # @package _global_
@@ -304,6 +308,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/detection3d/ptv3.py`                                | PTv3 BEV neck and detection model wrapper          |
 | `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                         |
 | `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
+| `autoware_ml/models/detection3d/ptv3_sparse4d.py`                       | PTv3 Sparse4D detection model wrapper              |
 | `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
 | `autoware_ml/scripts/generate_anchors.py`                               | Sparse4D anchors from the training boxes           |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |
