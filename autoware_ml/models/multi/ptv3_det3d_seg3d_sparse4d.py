@@ -35,18 +35,14 @@ from autoware_ml.models.detection3d.heads.sparse4d import (
     Sparse4DTargets,
     SparseStage,
 )
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
-from autoware_ml.models.detection3d.ptv3_sparse4d import (
-    PTv3Sparse4DHeadExportModule,
-    build_sparse4d_head_export_spec,
-    log_sparse4d_step_metrics,
-    run_sparse4d_head,
-    sparse4d_detection_loss,
-    sparse4d_eval_output,
-    sparse4d_frame_meta,
-    sparse4d_head_outputs,
-    validate_sampled_levels,
+from autoware_ml.models.detection3d.main_modules.sparse4ds.detection_task import (
+    Sparse4DDetectionTask,
 )
+from autoware_ml.models.detection3d.main_modules.sparse4ds.export_wrappers import (
+    Sparse4DHeadExportWrapper,
+    build_sparse4d_head_export_spec,
+)
+from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
@@ -111,10 +107,11 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
             log_dict_configs=log_dict_configs,
             **kwargs,
         )
-        validate_sampled_levels(det_fusion, bbox_head)
         self.seg3d_head = seg3d_head
         self.det_fusion = det_fusion
         self.bbox_head = bbox_head
+        self.det3d_task = Sparse4DDetectionTask(bbox_head)
+        self.det3d_task.validate_levels(det_fusion)
         self.segmentation3d_loss_weight = float(segmentation3d_loss_weight)
         self.detection3d_loss_weight = float(detection3d_loss_weight)
 
@@ -145,7 +142,7 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
         """
         _, det3d_outputs, seg3d_logits = self.forward_branches(multi_task_batch_inputs)
         return ModelOutputs(
-            detection3d_head_outputs=sparse4d_head_outputs(det3d_outputs),
+            detection3d_head_outputs=self.det3d_task.head_outputs(det3d_outputs),
             segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=seg3d_logits),
         )
 
@@ -167,13 +164,12 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
         Raises:
             ValueError: If the batch carries no frame metadata.
         """
-        frame_meta = sparse4d_frame_meta(multi_task_batch_inputs)
+        frame_meta = self.det3d_task.frame_meta(multi_task_batch_inputs)
         point = self.encode_batch(multi_task_batch_inputs)
         # Fuse before the decoder, SerializedUnpooling pops the encoder chain
         det3d_stages = self.det_fusion(point)
         seg3d_logits = self.seg3d_head(point)
-        det3d_outputs = run_sparse4d_head(
-            self.bbox_head,
+        det3d_outputs = self.det3d_task.run(
             det3d_stages,
             multi_task_batch_inputs,
             frame_meta,
@@ -198,7 +194,7 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
         metrics, _, _ = self.detection_segmentation_metrics(
             multi_task_batch_inputs, multi_task_outputs
         )
-        log_sparse4d_step_metrics(self, metrics, multi_task_batch_inputs)
+        self.det3d_task.log_step_metrics(self, metrics, multi_task_batch_inputs)
         return metrics
 
     def detection_segmentation_metrics(
@@ -222,8 +218,8 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
             self.seg3d_head, seg3d_logits, multi_task_batch_inputs
         )
 
-        det3d_metrics, det3d_targets, det3d_mask = sparse4d_detection_loss(
-            self.bbox_head, det3d_outputs, multi_task_batch_inputs
+        det3d_metrics, det3d_targets, det3d_mask = self.det3d_task.loss(
+            det3d_outputs, multi_task_batch_inputs
         )
 
         seg3d_loss = seg3d_metrics["loss"]
@@ -246,7 +242,7 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
         Frames without detection supervision contribute empty predictions. A temporal head adds
         which boxes were observed in the stream so far and the stream of every frame.
         """
-        eval_out = sparse4d_eval_output(self.bbox_head, batch, outputs)
+        eval_out = self.det3d_task.eval_output(batch, outputs)
         eval_out.update(segmentation3d_eval_output(outputs.segmentation3d().logits, batch))
         return eval_out
 
@@ -264,9 +260,7 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
             The decoded boxes of every sample and the label of every original point.
         """
         return ModelPredictions(
-            detection3d_predictions=self.bbox_head.decode_outputs(
-                outputs.detection3d()
-            ).detection3d_predictions,
+            detection3d_predictions=self.det3d_task.decode(outputs).detection3d_predictions,
             segmentation3d_predictions=segmentation3d_predict_outputs(
                 outputs.segmentation3d().logits, multi_task_batch_inputs
             ),
@@ -316,5 +310,5 @@ class PTv3Det3DSeg3DSparse4DModel(PTv3BaseModel):
         """
         return build_sparse4d_head_export_spec(
             context,
-            PTv3Sparse4DHeadExportModule(self.det_fusion, self.bbox_head.prepare_for_export()),
+            Sparse4DHeadExportWrapper(self.det_fusion, self.bbox_head.prepare_for_export()),
         )

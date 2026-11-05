@@ -14,17 +14,18 @@ num_anchor: 1800
 det_feature_strides: [2, 4, 8]
 
 model:
-  # Single frame points, so the voxel is the mean of its x, y, z and intensity
-  voxel_encoder:
-    _target_: autoware_ml.models.segmentation3d.encoders.voxel.MeanVoxelFeatureEncoder
-  encoder:
-    in_channels: 4
-  # The sampled stages and the deepest one, which fuses top-down into them.
-  det_fusion:
-    stage_channels:
-      - ${model.encoder.enc_channels[1]}
-      - ${model.encoder.enc_channels[2]}
-      - ${model.encoder.enc_channels[3]}
-      - ${model.encoder.enc_channels[4]}
+  lidar_network:
+    # Single frame points, so the voxel is the mean of its x, y, z and intensity
+    voxel_encoder:
+      _target_: autoware_ml.models.segmentation3d.encoders.voxel.MeanVoxelFeatureEncoder
+    encoder:
+      in_channels: 4
+    # The sampled stages and the deepest one, which fuses top-down into them.
+    det_fusion:
+      stage_channels:
+        - ${model.lidar_network.encoder.enc_channels[1]}
+        - ${model.lidar_network.encoder.enc_channels[2]}
+        - ${model.lidar_network.encoder.enc_channels[3]}
+        - ${model.lidar_network.encoder.enc_channels[4]}
   bbox_head:
     num_output: 500

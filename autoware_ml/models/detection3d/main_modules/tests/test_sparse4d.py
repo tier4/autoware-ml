@@ -1,4 +1,18 @@
-"""Tests for the PTv3 Sparse4D detection model."""
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Tests for the Sparse4D detector."""
 
 from __future__ import annotations
 
@@ -6,10 +20,12 @@ from pathlib import Path
 
 import pytest
 import torch
+import torch.nn as nn
 
 from autoware_ml.models.detection3d.heads.sparse4d import TEMPORAL_STATE_INPUT_NAMES
+from autoware_ml.models.detection3d.main_modules.sparse4d import Sparse4DDetectionModel
+from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
 from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
-from autoware_ml.models.detection3d.ptv3_sparse4d import PTv3Detection3DSparse4DModel
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     POINT_CLOUD_RANGE,
     build_inputs,
@@ -31,37 +47,64 @@ requires_cuda_spconv = pytest.mark.skipif(
 )
 
 
-def _build_model(
-    tmp_path: Path, num_temp_instances: int = 0, dn_query_budget: int = 0
-) -> PTv3Detection3DSparse4DModel:
-    """Build a small detector whose head samples the stage the deepest test stage fuses into."""
-    return PTv3Detection3DSparse4DModel(
+def _build_lidar_network() -> Sparse4DLidar:
+    """Build a small lidar branch whose pyramid returns the stage the deepest one fuses into."""
+    return Sparse4DLidar(
         encoder=build_ptv3_encoder(),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         det_fusion=PTv3Det3DFeaturePyramid(stage_channels=(8, 16), out_channels=32),
+        grid_size=1.0,
+        point_cloud_range=POINT_CLOUD_RANGE,
+    )
+
+
+def _build_model(
+    tmp_path: Path, num_temp_instances: int = 0, dn_query_budget: int = 0
+) -> Sparse4DDetectionModel:
+    """Build a small detector over the test lidar branch."""
+    return Sparse4DDetectionModel(
+        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+        lidar_network=_build_lidar_network(),
+        camera_network=None,
         bbox_head=build_sparse4d_head(
             make_anchor_file(tmp_path),
             num_temp_instances=num_temp_instances,
             dn_query_budget=dn_query_budget,
         ),
         log_dict_configs=LogDictConfigs(prog_bar=False),
-        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-        grid_size=1.0,
-        point_cloud_range=POINT_CLOUD_RANGE,
     )
+
+
+def test_lidar_network_is_required(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="lidar_network"):
+        Sparse4DDetectionModel(
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+            lidar_network=None,
+            camera_network=None,
+            bbox_head=build_sparse4d_head(make_anchor_file(tmp_path)),
+            log_dict_configs=LogDictConfigs(prog_bar=False),
+        )
+
+
+def test_camera_network_is_not_supported_yet(tmp_path: Path) -> None:
+    with pytest.raises(NotImplementedError, match="camera_network"):
+        Sparse4DDetectionModel(
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+            lidar_network=_build_lidar_network(),
+            camera_network=nn.Identity(),
+            bbox_head=build_sparse4d_head(make_anchor_file(tmp_path)),
+            log_dict_configs=LogDictConfigs(prog_bar=False),
+        )
 
 
 def test_pyramid_and_head_must_agree_on_the_sampled_levels(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="levels"):
-        PTv3Detection3DSparse4DModel(
-            encoder=build_ptv3_encoder(),
-            voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-            det_fusion=PTv3Det3DFeaturePyramid(stage_channels=(8, 16), out_channels=32),
+        Sparse4DDetectionModel(
+            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
+            lidar_network=_build_lidar_network(),
+            camera_network=None,
             bbox_head=build_sparse4d_head(make_anchor_file(tmp_path), feature_strides=(1, 2)),
             log_dict_configs=LogDictConfigs(prog_bar=False),
-            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-            grid_size=1.0,
-            point_cloud_range=POINT_CLOUD_RANGE,
         )
 
 
@@ -73,6 +116,19 @@ def test_optimizer_groups_cover_the_encoder_and_the_detection_branch(tmp_path: P
     assert set(groups) == {"encoder_default", "encoder_block", "det3d_branch"}
     grouped = sum(len(parameters) for parameters in groups.values())
     assert grouped == sum(1 for parameter in model.parameters() if parameter.requires_grad)
+    head_count = sum(1 for p in model.bbox_head.parameters() if p.requires_grad)
+    pyramid_count = sum(1 for p in model.lidar_network.det_fusion.parameters() if p.requires_grad)
+    assert len(groups["det3d_branch"]) == head_count + pyramid_count
+
+
+def test_state_dict_holds_the_head_once(tmp_path: Path) -> None:
+    # The task refers to the head of the model without registering it a second time
+    model = _build_model(tmp_path)
+
+    head_keys = [key for key in model.state_dict() if key.startswith("bbox_head.")]
+
+    assert len(head_keys) == len(model.bbox_head.state_dict())
+    assert not any(key.startswith("det3d_task") for key in model.state_dict())
 
 
 @requires_cuda_spconv
@@ -145,16 +201,3 @@ def test_split_export_holds_the_encoder_and_the_det_head_only(tmp_path: Path) ->
     assert len(spec.args) == len(spec.input_names)
     assert spec.output_names[:3] == ["classification", "prediction", "quality"]
     assert spec.output_names[-1] == "temp_query_index_out"
-
-
-def test_export_needs_the_encoder_geometry(tmp_path: Path) -> None:
-    model = PTv3Detection3DSparse4DModel(
-        encoder=build_ptv3_encoder(),
-        voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        det_fusion=PTv3Det3DFeaturePyramid(stage_channels=(8, 16), out_channels=32),
-        bbox_head=build_sparse4d_head(make_anchor_file(tmp_path)),
-        log_dict_configs=LogDictConfigs(prog_bar=False),
-        data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-    )
-    with pytest.raises(ValueError, match="grid_size and point_cloud_range"):
-        model.build_export_specs(build_inputs(device=torch.device("cpu")))

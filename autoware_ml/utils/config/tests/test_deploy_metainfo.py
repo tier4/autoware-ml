@@ -77,6 +77,8 @@ def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None
     cfg = compose_task(config_name)
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_lidar_encoder")
     patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
-    assert patch_sizes == list(cfg.model.encoder.enc_patch_size)
-    assert len(patch_sizes) == len(cfg.model.encoder.stride) + 1
+    # The PTv3 models own their encoder, the Sparse4D detector reads it from its lidar branch
+    encoder = OmegaConf.select(cfg, "model.lidar_network.encoder") or cfg.model.encoder
+    assert patch_sizes == list(encoder.enc_patch_size)
+    assert len(patch_sizes) == len(encoder.stride) + 1
     assert all(isinstance(size, int) and size > 0 for size in patch_sizes)
