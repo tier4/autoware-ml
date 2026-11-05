@@ -147,7 +147,7 @@ def build_dataset(database_root_path: str) -> NuScenesDataset:
     )
 
 
-@pytest.mark.parametrize("root", ["/data/nuscenes", "/workspace/data/sets/nuscenes"])
+@pytest.mark.parametrize("root", ["/data/nuscenes", "/mnt/other_host/data/nuscenes"])
 def test_a_nuscenes_record_is_served_under_the_root_of_the_dataset(root: str) -> None:
     """
     Input: a nuScenes record as the generator stores it, with its frame paths relative to the

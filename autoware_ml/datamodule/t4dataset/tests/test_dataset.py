@@ -33,7 +33,7 @@ from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider, T4LaneletMapResolver
 
 _ROOT = "/data/t4dataset"
-_SCENE = "db_j6gen2_v1/0a1b2c3d-0000-4000-8000-000000000000/0"
+_SCENE = "db_test_v1/0a1b2c3d-0000-4000-8000-000000000000/0"
 
 
 def camera_frame(channel: str) -> dict:
@@ -315,9 +315,9 @@ def _dataset_over(root: Path, records: pl.DataFrame, map_provider: object | None
 
 def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_path: Path) -> None:
     """
-    Input: a source over the pseudo-labelled corpus under ``t4dataset/pseudo_large`` whose
-    record carries a map and a sample time, with its maps resolved against its own root, against
-    the main corpus root and without a map provider.
+    Input: a source over a corpus under the dataset root ``other_data/t4dataset`` whose record
+    carries a map and a sample time, with its maps resolved against its own root, against the main
+    corpus root ``data/t4dataset`` and without a map provider.
     Expected: a source over another corpus resolves the maps of its frames against its own root;
     looked up against the main corpus root, as the metrics used to do for every source, the same
     frames have no map and drop out of the map-backed slices silently. The frame meta also
@@ -325,10 +325,10 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
     Check: the frame meta of the own-root lookup holds the time, the scene token and the map
     path, and the other two lookups have no map.
     """
-    main_root = tmp_path / "t4dataset"
-    pseudo_root = main_root / "pseudo_large"
-    scene = "db_pseudo/0a1b2c3d-0000-4000-8000-000000000000/0"
-    map_path = pseudo_root / scene / "map" / "lanelet2_map.osm"
+    main_root = tmp_path / "data" / "t4dataset"
+    other_root = tmp_path / "other_data" / "t4dataset"
+    scene = "db_default/0a1b2c3d-0000-4000-8000-000000000000/0"
+    map_path = other_root / scene / "map" / "lanelet2_map.osm"
     map_path.parent.mkdir(parents=True)
     map_path.write_text("<osm></osm>")
     # The frame meta also reads the sample time of the record, so the table carries it.
@@ -344,7 +344,7 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
     )
 
     own_corpus = _dataset_over(
-        pseudo_root, records, LaneletMapProvider(T4LaneletMapResolver(str(pseudo_root)))
+        other_root, records, LaneletMapProvider(T4LaneletMapResolver(str(other_root)))
     )
     sample = own_corpus.get_frame_meta_sample(0, None)
     assert sample.timestamp == 12.5
@@ -353,11 +353,11 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
     assert sample.lanelet_map_path == str(map_path)
 
     main_corpus_lookup = _dataset_over(
-        pseudo_root, records, LaneletMapProvider(T4LaneletMapResolver(str(main_root)))
+        other_root, records, LaneletMapProvider(T4LaneletMapResolver(str(main_root)))
     )
     assert main_corpus_lookup.get_frame_meta_sample(0, None).lanelet_map_path is None
     assert (
-        _dataset_over(pseudo_root, records, None).get_frame_meta_sample(0, None).lanelet_map_path
+        _dataset_over(other_root, records, None).get_frame_meta_sample(0, None).lanelet_map_path
         is None
     )
 

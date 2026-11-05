@@ -529,7 +529,7 @@ class TestDataModuleSources(MultiSourceTestCase):
     def test_a_split_the_stage_needs_without_records_stops_the_run(self) -> None:
         """
         Input: a source declaring a validation dataset over a database whose scenarios put no
-            scene in the validation split, as the gen1 databases do.
+            scene in the validation split.
         Expected: Lightning would skip validation on the empty split, and the checkpoint
             callbacks save after validation only, so the run would train to the end without a
             checkpoint. Setup stops the run instead and names the source and its record count.

@@ -84,8 +84,8 @@ def _frame_metadata(status: bool | None) -> FrameBasicMetadata:
         sample_index=0,
         timestamp_seconds=2.0,
         scenario_name=_SCENE_NAME,
-        location="tokyo",
-        vehicle_type="j6gen2",
+        location="city_a",
+        vehicle_type="vehicle_a",
         traffic_cone_barrier_bbox_status=status,
     )
 
@@ -97,8 +97,8 @@ def _dataset_record(status: bool | None) -> DatasetRecord:
         sample_id=_SAMPLE_TOKEN,
         sample_index=0,
         timestamp_seconds=2.0,
-        location="tokyo",
-        vehicle_type="j6gen2",
+        location="city_a",
+        vehicle_type="vehicle_a",
         scenario_name=_SCENE_NAME,
         traffic_cone_barrier_bbox_status=status,
         lidar_frames=[],
@@ -137,8 +137,8 @@ class TestRecordsGenerator(unittest.TestCase):
                 dataset_params=DatasetParams(dataset_name=_DATASET_NAME, sample_steps=1),
                 scenario_id=_SCENARIO_ID,
                 scenario_version=_SCENARIO_VERSION,
-                vehicle_type="j6gen2",
-                location="tokyo",
+                vehicle_type="vehicle_a",
+                location="city_a",
                 traffic_cone_barrier_bbox_status=status,
             ),
             lidar_channel=LidarChannel.LIDAR_TOP,
@@ -159,8 +159,8 @@ class TestRecordsGenerator(unittest.TestCase):
                 self.assertIs(metadata.traffic_cone_barrier_bbox_status, status)
                 self.assertEqual(metadata.scenario_id, _SCENARIO_ID)
                 self.assertEqual(metadata.scenario_name, _SCENE_NAME)
-                self.assertEqual(metadata.location, "tokyo")
-                self.assertEqual(metadata.vehicle_type, "j6gen2")
+                self.assertEqual(metadata.location, "city_a")
+                self.assertEqual(metadata.vehicle_type, "vehicle_a")
                 self.assertAlmostEqual(metadata.timestamp_seconds, 2.0)
 
 

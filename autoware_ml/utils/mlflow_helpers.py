@@ -94,7 +94,7 @@ def generate_experiment_name(experiment_group_name: str, experiment_name: str) -
 
     Args:
         experiment_group_name: ``experiment_group_name`` of the config, such as
-            ``centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base``.
+            ``centerpoint/T4Dataset-base-v1.0.0/t4dataset``.
         experiment_name: ``experiment_name`` of the config, the leaf naming the variant.
 
     Returns:
