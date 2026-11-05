@@ -41,22 +41,31 @@ def test_cpfpn_has_one_lateral_per_level_and_one_output_convolution() -> None:
     assert [conv.kernel_size for conv in neck.lateral_convs] == [(1, 1), (1, 1)]
     assert neck.lateral_convs[1].weight.shape == (16, 40, 1, 1)
     assert neck.fpn_conv.weight.shape == (16, 16, 3, 3)
+    assert list(neck.state_dict()) == [
+        "lateral_convs.0.weight",
+        "lateral_convs.0.bias",
+        "lateral_convs.1.weight",
+        "lateral_convs.1.bias",
+        "fpn_conv.weight",
+        "fpn_conv.bias",
+    ]
 
 
 def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None:
-    """The finest output adds the nearest-upsampled coarse lateral; the coarse one is left as is.
+    """The finest output is the 3x3 convolution of the fused map; the coarse one is left as is.
 
-    Only the finest level passes the 3x3 convolution.
+    The fused map adds the nearest-upsampled coarse lateral to the fine one. The 3x3 kernel
+    is not an identity, so a bypassed or 1x1 output convolution fails the check.
     """
     neck = CPFPN(in_channels=[1, 1], out_channels=1)
-    # Unit laterals, the coarse one adding 0.5, and a 3x3 convolution passing its center tap.
+    # Unit laterals, the coarse one adding 0.5, and a 3x3 convolution of distinct taps.
+    kernel = torch.arange(1.0, 10.0).reshape(1, 1, 3, 3) / 10.0
     with torch.no_grad():
         for lateral in neck.lateral_convs:
             lateral.weight.fill_(1.0)
             lateral.bias.zero_()
-        neck.fpn_conv.weight.zero_()
-        neck.fpn_conv.weight[0, 0, 1, 1] = 1.0
-        neck.fpn_conv.bias.zero_()
+        neck.fpn_conv.weight.copy_(kernel)
+        neck.fpn_conv.bias.fill_(0.25)
         neck.lateral_convs[1].bias.fill_(0.5)
     high = torch.randn(1, 1, 4, 6)
     low = torch.randn(1, 1, 2, 3)
@@ -64,7 +73,9 @@ def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None
     fine, coarse = neck((high, low))
 
     torch.testing.assert_close(coarse, low + 0.5)
-    torch.testing.assert_close(fine, high + F.interpolate(low + 0.5, size=(4, 6), mode="nearest"))
+    fused = high + F.interpolate(low + 0.5, size=(4, 6), mode="nearest")
+    torch.testing.assert_close(fine, F.conv2d(fused, kernel, torch.tensor([0.25]), padding=1))
+    assert not torch.allclose(fine, fused)
 
 
 def test_cpfpn_rejects_another_number_of_levels() -> None:

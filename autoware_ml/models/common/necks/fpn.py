@@ -79,7 +79,8 @@ class BaseFPN(nn.Module):
         for module in self.modules():
             if isinstance(module, nn.Conv2d):
                 nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def fuse_levels(
         self, inputs: Sequence[Float[torch.Tensor, "batch_size channels height width"]]
