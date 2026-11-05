@@ -74,3 +74,20 @@ def test_every_database_config_names_only_arguments_of_its_database(config_name:
     parameters = inspect.signature(hydra.utils.get_class(database._target_)).parameters
 
     assert set(database) - {"_target_", "_convert_"} <= set(parameters)
+
+
+@pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
+def test_every_tracking_head_shares_its_track_birth_score(config_name: str) -> None:
+    # The head starts its tracks at the top level track_birth_score, so its export metadata and
+    # every suite that scores the tracks read the same value.
+    cfg = compose_task(config_name)
+    head = cfg.model.get("bbox_head")
+    if head is None or "track_birth_score" not in head:
+        return
+
+    metainfo = cfg.deploy.onnx.modules.ptv3_det3d_head.metainfo
+    thresholds = [suite.score_threshold for suite in cfg.metrics if "score_threshold" in suite]
+    assert thresholds, "no suite scores the tracks"
+    assert {head.track_birth_score, metainfo.track_birth_score, *thresholds} == {
+        cfg.track_birth_score
+    }

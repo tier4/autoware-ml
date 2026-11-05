@@ -13,7 +13,7 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
 - Detection: `PTv3Det3DBEVNeck` fuses the two coarsest encoder stages
   (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
-- Temporal detection (experimental): `PTv3Det3DSeg3DSparse4DModel` fuses the deepest encoder stage top-down into finer ones (`PTv3Det3DFeaturePyramid`) and feeds a `Sparse4DHead`. Its queries sample the sparse voxels at keypoints around their anchors, predict velocity, and carry the most confident instances from one frame of a scenario to the next.
+- Temporal detection (experimental): `PTv3Det3DSeg3DSparse4DModel` fuses the deepest encoder stage top-down into finer ones (`PTv3Det3DFeaturePyramid`) and feeds a `Sparse4DHead`. Its queries sample the sparse voxels and one dense BEV level at keypoints around their anchors, predict velocity, and carry the most confident instances from one frame of a scenario to the next.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -47,19 +47,22 @@ With `cosine_attention: true` the serialized attention is cosine attention: quer
 
 ## Available Configurations
 
-| Config Name                                                  | Task                         | Dataset   | Head        | Range | Purpose                        |
-| ------------------------------------------------------------ | ---------------------------- | --------- | ----------- | ----- | ------------------------------ |
-| `segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m` | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation          |
-| `segmentation3d/ptv3/t4dataset/base_voxel012_122m`           | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation         |
-| `detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m`    | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection             |
-| `detection3d/ptv3/t4dataset/base_voxel012_122m`              | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection            |
-| `multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m`         | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection |
-| `multi/ptv3/t4dataset/base_voxel012_122m`                    | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection |
+| Config Name                                                  | Task                         | Dataset   | Head        | Range | Purpose                                 |
+| ------------------------------------------------------------ | ---------------------------- | --------- | ----------- | ----- | --------------------------------------- |
+| `segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m` | segmentation3d               | nuScenes  | Seg decoder | 51 m  | nuScenes segmentation                   |
+| `segmentation3d/ptv3/t4dataset/base_voxel012_122m`           | segmentation3d               | T4Dataset | Seg decoder | 122 m | T4Dataset segmentation                  |
+| `detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m`    | detection3d                  | nuScenes  | TransFusion | 51 m  | nuScenes detection                      |
+| `detection3d/ptv3/t4dataset/base_voxel012_122m`              | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection                     |
+| `multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m`         | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection          |
+| `multi/ptv3/t4dataset/base_voxel012_122m`                    | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection          |
+| `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`           | segmentation3d + detection3d | T4Dataset | Sparse4D    | 122 m | Joint segmentation + temporal detection |
 
 The T4Dataset rows are bases. They declare the classes the model trains and require the taxonomy
 that folds the labels of the database onto them, so a T4Dataset experiment that binds one lives in
 an external config root, see
 [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
+
+The Sparse4D base samples the sparse voxels and one coarse encoder stage projected onto a BEV map. `model.bbox_head.lidar_sampling` selects `sparse`, `bev` or `sparse_bev`, and `model.bbox_head.bev` sets the projected stages. Its experiments stream scenes in order, so they need frames at a steady rate, such as 10 Hz scenes. The top level `track_birth_score` is the score from which a query starts a track. The head, its export metadata and every metric suite that scores the tracks read it, so an experiment changes it there. The model summary of these experiments lists the modules without FLOPs, since a summary forward pass would feed the instance bank one frame outside its stream.
 
 ## Training
 
@@ -268,6 +271,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/transforms/point_cloud/`                                   | Shared point-cloud transforms used by PTv3         |
 | `autoware_ml/configs/tasks/segmentation3d/ptv3/`                        | Segmentation experiment configurations             |
 | `autoware_ml/configs/tasks/detection3d/ptv3/`                           | Detection experiment configurations                |
+| `autoware_ml/configs/tasks/multi/ptv3_sparse4d/`                        | Sparse4D experiment configurations                 |
 
 ## Acknowledgment
 
