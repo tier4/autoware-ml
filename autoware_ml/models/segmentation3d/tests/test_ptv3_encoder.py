@@ -1107,6 +1107,10 @@ def test_serialized_pooling_rounds_the_sparse_shape_up() -> None:
     assert bool((pooled.grid_coord.max(dim=0).values + 1 <= pooled.sparse_shape).all())
 
 
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution tests require CUDA spconv",
+)
 def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
     """Stage-4 regression: a frozen (eval) encoder caches spconv indice pairs
     without backward metadata; decoder blocks must not reuse them by key or
