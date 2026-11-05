@@ -2,6 +2,6 @@
 # LitePT encoder and decoder on the PTv3 segmentation recipe.
 defaults:
   - /tasks/segmentation3d/ptv3/base
-  - /tasks/segmentation3d/litept/encoder_base
-  - /tasks/segmentation3d/litept/seg3d_head_base
+  - /tasks/segmentation3d/litept/encoder
+  - /tasks/segmentation3d/litept/seg3d_head
   - _self_

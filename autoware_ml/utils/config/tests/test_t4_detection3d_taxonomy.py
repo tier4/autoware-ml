@@ -13,7 +13,7 @@ from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
 from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 T4_DETECTION3D_CONFIG = (
-    "tasks/detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base"
+    "tasks/detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m_j6gen2_base"
 )
 
 
