@@ -30,7 +30,6 @@ from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig
 
 from autoware_ml.utils.cli.helpers import resolve_config_reference
-from autoware_ml.utils.config.settings import CONFIGS_ROOT
 from autoware_ml.utils.mlflow_helpers import (
     MLFLOW_PARENT_RUN_ID,
     artifact_uri_to_path,
@@ -46,8 +45,8 @@ def compose_config_reference(
     """Compose the config a CLI config reference points at.
 
     Args:
-        config_value: Config value from CLI, either a bundled config path or a filesystem path.
-        prefix: Bundled config namespace prefix such as ``tasks``.
+        config_value: Config value from CLI, either a config name or a config file path.
+        prefix: Config namespace prefix such as ``tasks``.
         overrides: Hydra overrides applied on top.
 
     Returns:
@@ -58,9 +57,6 @@ def compose_config_reference(
     )
     compose_overrides = [*overrides, *extra_config_overrides]
     GlobalHydra.instance().clear()
-    if resolved_config_path is None:
-        with initialize_config_dir(version_base=None, config_dir=str(CONFIGS_ROOT)):
-            return compose(config_name=resolved_config_name, overrides=compose_overrides)
     with initialize_config_dir(version_base=None, config_dir=resolved_config_path):
         return compose(config_name=resolved_config_name, overrides=compose_overrides)
 

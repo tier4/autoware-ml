@@ -25,6 +25,7 @@ SETTINGS_KEYS = frozenset(
     {
         "AUTOWARE_ML_DATA_PATH",
         "AUTOWARE_ML_CACHE_PATH",
+        "AUTOWARE_ML_CONFIGS_PATH",
         "AUTOWARE_ML_SCENARIOS_PATH",
         "AUTOWARE_ML_WORKING_DIR",
     }
@@ -41,12 +42,15 @@ class Settings:
     Attributes:
         data_path: Dataset root, ``AUTOWARE_ML_DATA_PATH``.
         cache_path: Root of the cached record tables, ``AUTOWARE_ML_CACHE_PATH``.
+        configs_path: External config root laid out like the bundled configs,
+            ``AUTOWARE_ML_CONFIGS_PATH``.
         scenarios_path: Root of the scenario lists, ``AUTOWARE_ML_SCENARIOS_PATH``.
         working_dir: Root of the experiment outputs, ``AUTOWARE_ML_WORKING_DIR``.
     """
 
     data_path: Path | None = None
     cache_path: Path | None = None
+    configs_path: Path | None = None
     scenarios_path: Path | None = None
     working_dir: Path | None = None
 
@@ -90,6 +94,7 @@ class Settings:
         return cls(
             data_path=paths["AUTOWARE_ML_DATA_PATH"],
             cache_path=paths["AUTOWARE_ML_CACHE_PATH"],
+            configs_path=paths["AUTOWARE_ML_CONFIGS_PATH"],
             scenarios_path=paths["AUTOWARE_ML_SCENARIOS_PATH"],
             working_dir=paths["AUTOWARE_ML_WORKING_DIR"],
         )
