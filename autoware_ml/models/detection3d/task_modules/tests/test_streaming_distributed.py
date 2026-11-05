@@ -19,7 +19,6 @@ The multi-rank case spawns a gloo process group on CPU so the ``all_reduce`` run
 
 from __future__ import annotations
 
-import math
 import unittest
 
 import torch
@@ -33,13 +32,15 @@ from autoware_ml.models.detection3d.tests.distributed_fixtures import (
 
 
 def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> None:
+    # The worker runs in its own process, so it checks with a case of its own.
+    case = unittest.TestCase()
     with gloo_process_group(rank, world_size, init_file):
         local_count = torch.tensor(float(2 if rank == 0 else 8))
-        assert math.isclose(reduce_mean_count(local_count).item(), 5.0)
-        assert math.isclose(local_count.item(), 2.0 if rank == 0 else 8.0)
+        case.assertAlmostEqual(reduce_mean_count(local_count).item(), 5.0)
+        case.assertAlmostEqual(local_count.item(), 2.0 if rank == 0 else 8.0)
         # The floor applies to the sum over the ranks, not to the mean.
-        assert math.isclose(reduce_mean_count(torch.tensor(float(1 - rank))).item(), 0.5)
-        assert math.isclose(reduce_mean_count(torch.tensor(0.0)).item(), 0.5)
+        case.assertAlmostEqual(reduce_mean_count(torch.tensor(float(1 - rank))).item(), 0.5)
+        case.assertAlmostEqual(reduce_mean_count(torch.tensor(0.0)).item(), 0.5)
         pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
         torch.testing.assert_close(pair, torch.tensor([0.5, 4.0]))
 

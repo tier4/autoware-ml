@@ -181,13 +181,16 @@ def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
             outputs, [gt_boxes], [gt_labels], padding_mask=torch.zeros(1, dtype=torch.bool)
         )
 
-        assert "dn_loss_cls" in losses and "dn_loss_bbox" in losses
+        # The worker runs in its own process, so it checks with a case of its own.
+        case = unittest.TestCase()
+        case.assertIn("dn_loss_cls", losses)
+        case.assertIn("dn_loss_bbox", losses)
         if rank == 0:
-            assert losses["dn_loss_cls"].item() > 0.0
-            assert losses["dn_loss_bbox"].item() > 0.0
+            case.assertGreater(losses["dn_loss_cls"].item(), 0.0)
+            case.assertGreater(losses["dn_loss_bbox"].item(), 0.0)
         else:
-            assert losses["dn_loss_cls"].item() == 0.0
-            assert losses["dn_loss_bbox"].item() == 0.0
+            case.assertEqual(losses["dn_loss_cls"].item(), 0.0)
+            case.assertEqual(losses["dn_loss_bbox"].item(), 0.0)
 
 
 def _frame(
