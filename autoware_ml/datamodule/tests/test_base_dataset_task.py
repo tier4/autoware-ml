@@ -28,6 +28,9 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 class _RecordCountTask(BaseDatasetTask):
     """A task reading nothing, to exercise the defaults of the base class."""
 
+    def hash_repr(self) -> str:
+        return "_RecordCountTask()"
+
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         return dataset_records_dataframe
 
@@ -44,10 +47,16 @@ def test_a_task_must_implement_select_columns_and_get_data_sample() -> None:
     """
 
     class _NoReader(BaseDatasetTask):
+        def hash_repr(self) -> str:
+            return "_NoReader()"
+
         def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
             return dataset_records_dataframe
 
     class _NoColumns(BaseDatasetTask):
+        def hash_repr(self) -> str:
+            return "_NoColumns()"
+
         def get_data_sample(self, idx: int) -> ModelGTSample:
             raise AssertionError
 

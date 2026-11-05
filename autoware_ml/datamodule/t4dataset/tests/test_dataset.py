@@ -397,6 +397,9 @@ class _LoggingTask(BaseDatasetTask):
 
     calls: list[int] = []
 
+    def hash_repr(self) -> str:
+        return "_LoggingTask()"
+
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         return dataset_records_dataframe
 

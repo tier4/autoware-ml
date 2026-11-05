@@ -56,6 +56,15 @@ class BaseDatasetTask(ABC):
         """
 
     @abstractmethod
+    def hash_repr(self) -> str:
+        """
+        Canonical text of the task settings, the same for equal settings in every process.
+
+        Returns:
+          str: The settings of the task, without its records.
+        """
+
+    @abstractmethod
     def get_data_sample(self, idx: int) -> ModelGTSample:
         """
         Read the annotations of one record.

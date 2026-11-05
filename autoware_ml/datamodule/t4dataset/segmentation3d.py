@@ -68,6 +68,15 @@ class T4Segmentation3DTask(BaseDatasetTask):
         """
         return self.__class__.__name__
 
+    def hash_repr(self) -> str:
+        """
+        Canonical text of the task settings.
+
+        Returns:
+          str: The taxonomy the task maps its labels with.
+        """
+        return f"{type(self).__name__}(taxonomy={self.taxonomy})"
+
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
         Keep the lidar frames and the category mapping of the records.

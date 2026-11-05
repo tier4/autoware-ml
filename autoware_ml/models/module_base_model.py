@@ -35,7 +35,9 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.datamodule.training_split import TrainingSplit
 from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
     DeploymentGraph,
@@ -43,6 +45,7 @@ from autoware_ml.deployment.graphs import (
     build_export_specs_from_deployment,
 )
 from autoware_ml.metrics.base import MetricSuite
+from autoware_ml.models.anchored import DataAnchored
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.types.dataset import SplitType
@@ -155,6 +158,54 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 "datamodule must stream scene-contiguous frames; use a StreamingDataModule, "
                 f"got {found}."
             )
+
+    def pending_anchored_modules(self) -> list[DataAnchored]:
+        """Modules whose anchors are not filled yet, neither from the cache nor from weights."""
+        return [
+            module
+            for module in self.modules()
+            if isinstance(module, DataAnchored) and not bool(module.anchors_ready)
+        ]
+
+    def training_split(self) -> TrainingSplit:
+        """Training sources of the datamodule the anchor recipes read.
+
+        Raises:
+            ValueError: If the trainer runs without a DataModule.
+        """
+        datamodule = self.trainer.datamodule
+        if not isinstance(datamodule, DataModule):
+            raise ValueError(
+                f"{type(self).__name__} derives anchors from the training split, so the trainer "
+                f"needs a DataModule, got {type(datamodule).__name__}."
+            )
+        return datamodule.training_split()
+
+    def prepare_data(self) -> None:
+        """Build the anchors the modules still lack into the anchor cache, once per node.
+
+        Lightning calls this after the datamodule built its record tables.
+        """
+        modules = self.pending_anchored_modules()
+        if not modules:
+            return
+        split = self.training_split()
+        for module in modules:
+            module.anchor_recipe.prepare(split)
+
+    def configure_model(self) -> None:
+        """Fill the modules that still lack anchors from the anchor cache, on every rank.
+
+        Lightning calls this before the strategy wraps the model and the weight averaging copies
+        it. Loaded weights carry their anchors, so their modules are skipped. A resumed run fills
+        them from the cache too, the checkpoint restore then overwrites them.
+        """
+        modules = self.pending_anchored_modules()
+        if not modules:
+            return
+        split = self.training_split()
+        for module in modules:
+            module.initialize_anchors(module.anchor_recipe.load(split))
 
     def transfer_batch_to_device(
         self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
