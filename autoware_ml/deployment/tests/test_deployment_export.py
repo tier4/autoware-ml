@@ -68,7 +68,6 @@ class _ExportModel(ModuleBaseModel):
         self,
         module_names: Sequence[str] = ("head",),
         supported_stages: frozenset[str] = ALL_STAGES,
-        dynamic_axes_declared: bool = False,
     ) -> None:
         super().__init__(
             log_dict_configs=LogDictConfigs(prog_bar=False),
@@ -77,8 +76,6 @@ class _ExportModel(ModuleBaseModel):
         self.head = _HeadModule()
         self.module_names = tuple(module_names)
         self.supported_stages = supported_stages
-        # Set by the tests that check the exported axes; the others export static graphs.
-        self.dynamic_axes_declared = dynamic_axes_declared
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:
         point_batch = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
@@ -107,11 +104,7 @@ class _ExportModel(ModuleBaseModel):
             args=(point_batch.points, torch.tensor(2.0)),
             input_names=["points", "scale"],
             output_names=["feat"],
-            dynamic_axes=(
-                {"points": {0: "num_points"}, "feat": {0: "num_points"}}
-                if self.dynamic_axes_declared
-                else None
-            ),
+            dynamic_axes={"points": {0: "num_points"}, "feat": {0: "num_points"}},
             supported_stages=self.supported_stages,
         )
         return {name: spec for name in self.module_names}
@@ -312,7 +305,7 @@ class TestOnnxExport:
         Check: the loaded ONNX graph, validated by the ONNX checker.
         """
         deploy_cfg = _deploy_cfg({"head": {"dynamo": False}})
-        exporter = _exporter(tmp_path, deploy_cfg, model=_ExportModel(dynamic_axes_declared=True))
+        exporter = _exporter(tmp_path, deploy_cfg, model=_ExportModel())
 
         outputs = exporter.export()
 
@@ -332,7 +325,7 @@ class TestOnnxExport:
         Check: the loaded ONNX graph.
         """
         deploy_cfg = _deploy_cfg({"head": {}})
-        exporter = _exporter(tmp_path, deploy_cfg, model=_ExportModel(dynamic_axes_declared=True))
+        exporter = _exporter(tmp_path, deploy_cfg, model=_ExportModel())
 
         outputs = exporter.export()
 
@@ -350,7 +343,7 @@ class TestOnnxExport:
         Expected: the graph honours the dynamic axis and matches the module's output.
         Check: ONNX Runtime output against the torch module.
         """
-        model = _ExportModel(dynamic_axes_declared=True)
+        model = _ExportModel()
         exporter = _exporter(tmp_path, _deploy_cfg({"head": {"dynamo": False}}), model=model)
         outputs = exporter.export()
         points = torch.rand(OTHER_NUM_POINTS, POINT_DIM, generator=torch.Generator().manual_seed(1))

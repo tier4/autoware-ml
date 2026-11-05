@@ -372,5 +372,9 @@ class TransFusionDetection3DModel(ModuleBaseModel):
             ),
             input_names=["voxels", "num_points", "coors"],
             output_names=["cls_score0", "bbox_pred0", "dir_cls_pred0"],
-            dynamic_axes={name: {0: "num_voxels"} for name in ("voxels", "num_points", "coors")},
+            dynamic_axes={
+                "voxels": {0: "num_voxels"},
+                "num_points": {0: "num_voxels"},
+                "coors": {0: "num_voxels"},
+            },
         )
