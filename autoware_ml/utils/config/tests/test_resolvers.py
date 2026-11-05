@@ -96,9 +96,10 @@ def test_data_root_path_requires_the_setting() -> None:
         _paths(Settings(cache_path=Path("/cache")))
 
 
-def test_cache_root_path_requires_the_setting() -> None:
-    with pytest.raises(InterpolationResolutionError, match="AUTOWARE_ML_CACHE_PATH is not set"):
-        _paths(Settings(data_path=Path("/data")))
+def test_cache_root_path_defaults_to_the_cache_of_the_project_root() -> None:
+    settings = Settings(data_path=Path("/data"))
+
+    assert _paths(settings)["cache_root_path"] == str(PROJECT_ROOT / ".cache")
 
 
 def test_scenarios_path_resolves_below_the_scenarios_root() -> None:

@@ -130,9 +130,8 @@ class TestSettingsResolve(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "AUTOWARE_ML_DATA_PATH is not set"):
             Settings().resolve_data_path()
 
-    def test_cache_path_requires_the_setting(self) -> None:
-        with self.assertRaisesRegex(ValueError, "AUTOWARE_ML_CACHE_PATH is not set"):
-            Settings().resolve_cache_path()
+    def test_cache_path_defaults_to_the_cache_of_the_project_root(self) -> None:
+        self.assertEqual(Settings().resolve_cache_path(), str(PROJECT_ROOT / ".cache"))
 
     def test_scenarios_path_requires_the_setting(self) -> None:
         with self.assertRaisesRegex(ValueError, "AUTOWARE_ML_SCENARIOS_PATH is not set"):
