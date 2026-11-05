@@ -21,7 +21,7 @@ mapping from module names to :class:`ExportSpec` objects.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from dataclasses import dataclass
 import inspect
@@ -54,6 +54,11 @@ class ExportSpec:
             the input and output names. The model declares them here, not in its config.
             The TorchScript exporter (``dynamo=False``) takes them as its ``dynamic_axes``;
             ``torch.export`` (``dynamo=True``) gets one ``Dim`` per name over the inputs.
+        onnx_modifiers: Graph patches the architecture needs before its ONNX builds as a
+            TensorRT engine, such as the TransHead TopK and attention rewrites. Each takes
+            the ONNX path and returns the path it wrote. They run right after the export, in
+            order, before the config's ``modify_graph`` fallback, the precision conversion
+            and the metadata stamp. The model declares them here, not in its config.
         supported_stages: Export stages supported by this specification.
     """
 
@@ -62,6 +67,7 @@ class ExportSpec:
     input_names: list[str]
     output_names: list[str]
     dynamic_axes: dict[str, dict[int, str]] | None = None
+    onnx_modifiers: tuple[Callable[[Path], Path | str], ...] = ()
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
     def __post_init__(self) -> None:
@@ -365,6 +371,14 @@ def modify_onnx_graph(onnx_path: Path, modify_graph_cfg: DictConfig) -> Path:
     modified_path = apply_modifier(modifier, onnx_path)
     logger.info("Successfully modified ONNX graph: %s", modified_path)
     return modified_path
+
+
+def apply_spec_modifiers(spec: ExportSpec, onnx_path: Path) -> Path:
+    """Apply the graph patches the spec declares, in order, and return the final path."""
+    for modifier in spec.onnx_modifiers:
+        logger.info("Applying %s declared by the export spec...", type(modifier).__name__)
+        onnx_path = apply_modifier(modifier, onnx_path)
+    return onnx_path
 
 
 def create_tensorrt_builder_config(tensorrt_cfg: DictConfig) -> tuple[Any, Any, Any, Any]:

@@ -203,10 +203,17 @@ return an explicit export module plus example tensor inputs.
 This keeps export-time behavior close to the model implementation and avoids
 ad hoc post-processing for most cases.
 
-## Optional Graph Modification
+## Graph Modification
 
-Post-export ONNX graph modification is still available as a fallback, shared
-across modules or per module:
+The patches an architecture needs before its ONNX builds as a TensorRT engine
+are declared by the model on its export spec (`ExportSpec.onnx_modifiers`),
+like the tensor names and the dynamic axes. The PTv3 detection head, for
+example, declares `TransHeadTensorRTModifier` with its own proposal count, so
+no deploy config has to repeat it. They run right after the export.
+
+Post-export ONNX graph modification from the config is still available as a
+fallback for a deployment experiment, shared across modules or per module, and
+runs after the spec's own patches:
 
 ```yaml
 deploy:

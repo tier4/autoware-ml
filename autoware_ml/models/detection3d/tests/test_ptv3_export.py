@@ -10,6 +10,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_trans_model,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.utils.onnx_modifiers import TransHeadTensorRTModifier
 
 EXPECTED_PTV3_INPUT_NAMES = [
     "voxels",
@@ -58,3 +59,25 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection3d_outputs() -> No
     assert len(outputs) == 9
     assert outputs[0].shape[:2] == (1, 2)
     assert outputs[2].dtype == torch.long
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_ptv3_split_export_declares_the_transhead_tensorrt_patches_on_the_head() -> None:
+    """
+    Input: the split export of a TransHead PTv3 detector.
+    Expected: the detection head spec declares the TransHead TensorRT patches with the head's
+        own proposal count; the encoder spec declares none.
+    Check: ``onnx_modifiers`` of both specs.
+    """
+    device = torch.device("cuda")
+    model = build_trans_model().to(device)
+
+    specs = model.build_export_specs(build_inputs(device=device))
+
+    assert specs["ptv3_det3d_head"].onnx_modifiers == (
+        TransHeadTensorRTModifier(k=model.bbox_head.num_proposals),
+    )
+    assert specs["ptv3_encoder"].onnx_modifiers == ()

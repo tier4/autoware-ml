@@ -19,6 +19,8 @@ and the error paths that fire before any TensorRT work."""
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+import shutil
 from pathlib import Path
 from types import MappingProxyType
 
@@ -108,6 +110,41 @@ class _ExportModel(ModuleBaseModel):
             supported_stages=self.supported_stages,
         )
         return {name: spec for name in self.module_names}
+
+
+MODIFIER_CALLS: list[str] = []
+
+
+@dataclass
+class _RecordingModifier:
+    """Copy the graph to ``<stem>.<tag>.onnx`` and record the tag; config- or spec-declared."""
+
+    tag: str
+
+    def modify(self, onnx_path: Path) -> Path:
+        MODIFIER_CALLS.append(self.tag)
+        patched_path = onnx_path.with_name(f"{onnx_path.stem}.{self.tag}.onnx")
+        shutil.copyfile(onnx_path, patched_path)
+        return patched_path
+
+
+class _PatchedExportModel(_ExportModel):
+    """A model whose spec declares a graph patch, as the PTv3 detection head does."""
+
+    def build_export_specs(
+        self, multi_task_batch_inputs: ModelBatchInputs
+    ) -> dict[str, ExportSpec]:
+        spec = super().build_export_specs(multi_task_batch_inputs)["head"]
+        return {
+            "head": ExportSpec(
+                module=spec.module,
+                args=spec.args,
+                input_names=spec.input_names,
+                output_names=spec.output_names,
+                dynamic_axes=spec.dynamic_axes,
+                onnx_modifiers=(_RecordingModifier("spec"),),
+            )
+        }
 
 
 class _NoInputsModel(_ExportModel):
@@ -473,6 +510,36 @@ class TestMetadataStamp:
         assert props["num_proposals"] == "500"
         assert "export_date" in props
         assert props["exported_with"].startswith("pytorch")
+
+    def test_spec_modifiers_run_before_the_config_fallback_and_the_stamp(
+        self, tmp_path: Path
+    ) -> None:
+        """
+        Input: a spec declaring one graph patch and a config ``modify_graph`` fallback.
+        Expected: the spec's patch runs first, the config's on its output, and the shipped
+            file is the last patched one, stamped.
+        Check: the recorded call order, the exported path and its metadata.
+        """
+        MODIFIER_CALLS.clear()
+        deploy_cfg = _deploy_cfg(
+            {
+                "head": {
+                    "dynamo": False,
+                    "modify_graph": {
+                        "_target_": f"{__name__}._RecordingModifier",
+                        "tag": "config",
+                    },
+                }
+            }
+        )
+        exporter = _exporter(tmp_path, deploy_cfg, model=_PatchedExportModel())
+
+        outputs = exporter.export()
+
+        assert MODIFIER_CALLS == ["spec", "config"]
+        assert [path.name for path in outputs.onnx_exported_paths] == ["head.spec.config.onnx"]
+        onnx_model = onnx.load(str(outputs.onnx_exported_paths[0]))
+        assert _metadata(onnx_model)["module"] == "head"
 
     def test_unversioned_export_without_tracker_stamps_only_the_identity(
         self, tmp_path: Path

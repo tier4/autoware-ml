@@ -39,6 +39,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     stage_voxel_axis_name,
 )
 from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.utils.onnx_modifiers import TransHeadTensorRTModifier
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.structures import Point
 
@@ -362,6 +363,9 @@ def build_det3d_head_export_spec(
         input_names=det3d_head_export_input_names(context.stage_count),
         output_names=list(output_names),
         dynamic_axes=det3d_head_export_dynamic_axes(context.stage_count),
+        # TensorRT needs the head's TopK with a constant k and its attention scale as a Div;
+        # the node name prefixes follow the wrapper's ``bbox_head`` attribute.
+        onnx_modifiers=(TransHeadTensorRTModifier(k=bbox_head.num_proposals),),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
     )
 
