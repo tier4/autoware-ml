@@ -21,8 +21,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+import polars as pl
+
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.datamodule.base_dataset import BaseDataset
+from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
 from autoware_ml.types.dataset import SplitType
 
 
@@ -98,3 +101,22 @@ class DatasetSource:
           BaseDataset | None: The declared dataset, None when the source stays out of the split.
         """
         return self.datasets.get(split)
+
+
+def split_database_records(
+    database: BaseDatabase, splitter: SplitterInterface
+) -> Mapping[SplitType, pl.DataFrame]:
+    """
+    Records of a database in every split its scenario lists define.
+
+    Args:
+      database: Database whose record table is read.
+      splitter: Splitter assigning the records to the splits.
+
+    Returns:
+      Mapping[SplitType, pl.DataFrame]: The records of every split.
+    """
+    return splitter.split_by_polars_dataframe(
+        dataset_records_dataframe=database.load_polars_scenario_dataframe(),
+        scenarios=database.scenarios,
+    )

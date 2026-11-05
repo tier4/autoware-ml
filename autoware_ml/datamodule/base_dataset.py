@@ -23,7 +23,8 @@ import time
 from abc import abstractmethod
 from pathlib import Path
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
+from types import MappingProxyType
 from typing import Self
 
 
@@ -32,8 +33,10 @@ from torch.utils.data import Dataset
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.types.tasks import TaskType
 
 
 class PaddingSlot(int):
@@ -104,6 +107,10 @@ class BaseDataset(Dataset):
     The evaluation filters and collision metrics read the map of a scene through it, so the
     provider follows the database the dataset reads instead of the task being evaluated.
     """
+
+    # Builder of every dataset task the dataset reads its records through, by task. A dataset
+    # that reads its records without dataset tasks builds none.
+    task_builders: Mapping[TaskType, Callable[..., BaseDatasetTask]] = MappingProxyType({})
 
     def __init__(
         self,
