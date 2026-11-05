@@ -17,12 +17,15 @@
 from __future__ import annotations
 
 import pytest
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 
 from autoware_ml.utils.config.tests.config_roots import compose_task
 from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.utils.deploy import merge_module_onnx_cfg
 
+TRANSFUSION_HEAD = (
+    "autoware_ml.models.detection3d.heads.transfusions.transfusion_head.TransFusionHead"
+)
 PTV3_CONFIGS = [
     "tasks/multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m",
     "tasks/multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m",
@@ -32,8 +35,17 @@ PTV3_CONFIGS = [
     "tasks/multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m",
     "tasks/segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m",
     "tasks/detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m",
+    "tasks/multi/sparsedrive/t4dataset/voxel012_b8_24e_t4dataset_122m",
 ]
 DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
+
+
+def _transfusion_head_config(config_name: str) -> DictConfig:
+    """Compose a config and skip a test of the TransFusion head for another head."""
+    cfg = compose_task(config_name)
+    if cfg.model.bbox_head._target_ != TRANSFUSION_HEAD:
+        pytest.skip(f"{config_name} trains {cfg.model.bbox_head._target_}.")
+    return cfg
 
 
 @pytest.mark.parametrize("config_name", PTV3_CONFIGS)
@@ -62,7 +74,7 @@ def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> N
 def test_det3d_head_has_twist_follows_use_velocity(config_name: str) -> None:
     # The runtime learns from has_twist whether a velocity output exists, so it
     # is derived from the head configuration instead of being declared twice.
-    cfg = compose_task(config_name)
+    cfg = _transfusion_head_config(config_name)
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "det3d_head")
     assert isinstance(module_cfg.metainfo.has_twist, bool)
     assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity
@@ -72,7 +84,7 @@ def test_det3d_head_has_twist_follows_use_velocity(config_name: str) -> None:
 def test_det3d_head_exports_fused_bf16_attention(config_name: str) -> None:
     # The fused TransHead path needs the head flag and the fp16 module precision
     # together; export refuses a mismatch, so every shipped config must pair them.
-    cfg = compose_task(config_name)
+    cfg = _transfusion_head_config(config_name)
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "det3d_head")
     assert cfg.model.bbox_head.use_bf16_cross_attention is True
     assert module_cfg.precision == "fp16"

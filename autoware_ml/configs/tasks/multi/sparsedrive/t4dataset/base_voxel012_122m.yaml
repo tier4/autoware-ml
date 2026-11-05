@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - base_122m
+  - _self_
+
+grid_size: 0.12
+max_voxels: 524288
+
+det_feature_strides: [2, 4, 8]
+
+model:
+  det_fusion:
+    stage_channels:
+      - ${model.encoder.enc_channels[1]}
+      - ${model.encoder.enc_channels[2]}
+      - ${model.encoder.enc_channels[3]}
+      - ${model.encoder.enc_channels[4]}

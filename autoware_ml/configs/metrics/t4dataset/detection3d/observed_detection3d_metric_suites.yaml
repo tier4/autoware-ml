@@ -1,0 +1,9 @@
+# Detection metric suite of a temporal model, counting the boxes its stream observed.
+- _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
+  prefix: det3d_observed
+  components: ${metric_params.detection3d.components.detection3d_components}
+  class_names: ${taxonomy.detection3d.class_names}
+  min_observed_points: ${min_observed_points}
+  max_distances: ${metric_params.detection3d.max_distances}
+  collision: ${metric_params.detection3d.collision}
+  ranges: ${metric_ranges}
