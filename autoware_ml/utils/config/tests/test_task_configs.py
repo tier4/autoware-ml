@@ -29,10 +29,10 @@ from autoware_ml.utils.config.settings import CONFIGS_ROOT, Settings
 # Building blocks and bases are not runnable on their own, only the leaves are.
 _BLOCKS = (
     "base",
-    "tiny",
+    "large",
     "bev_neck",
-    "encoder_",
-    "seg3d_head_",
+    "encoder",
+    "seg3d_head",
     "voxel_encoder",
     "default_task",
 )

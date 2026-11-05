@@ -9,7 +9,7 @@ defaults:
 batch_size: 1
 num_workers: 8
 experiment_group_name: ptv3_det3d_seg3d/${database.version}/j6gen2_det3d_seg3d
-experiment_name: voxel006_m3_b1_100e_t4dataset_122m_j6gen2_det3d_seg3d
+experiment_name: voxel006_large_b1_100e_t4dataset_122m_j6gen2_det3d_seg3d
 
 trainer:
   max_epochs: 100

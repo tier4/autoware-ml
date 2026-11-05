@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - ../tiny
+  - ../base
   # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
   # range base composes them. Loaded before _self_ so the overrides below win over the defaults.
   - /metrics/t4dataset/detection3d/default_detection3d_metrics
