@@ -1,0 +1,21 @@
+# Every raw name is its own fine name
+_target_: autoware_ml.databases.taxonomy.LabelVocabulary
+_convert_: all
+
+class_renaming:
+  car: car
+  truck: truck
+  bus: bus
+  motorcycle: motorcycle
+  bicycle: bicycle
+  pedestrian: pedestrian
+  animal: animal
+  barrier: barrier
+  traffic_cone: traffic_cone
+  debris: debris
+  driveable_flat: driveable_flat
+  non_driveable_flat: non_driveable_flat
+  vegetation: vegetation
+  manmade: manmade
+  vertical_thin: vertical_thin
+  noise: noise

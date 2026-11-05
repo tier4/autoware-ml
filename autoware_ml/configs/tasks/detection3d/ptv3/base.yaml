@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - /tasks/default_task
-  - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/segmentation3d/ptv3/encoder
   - /tasks/segmentation3d/ptv3/voxel_encoder
   - /tasks/detection3d/ptv3/bev_neck
   - _self_
@@ -12,7 +12,7 @@ point_cloud_range: ???
 grid_size: ???
 max_voxels: ???
 # BEV cell of the detection head, in meters.
-head_voxel_size: ???
+head_grid_size: ???
 num_proposals: ???
 
 optimizer:
@@ -55,7 +55,6 @@ deploy:
     do_constant_folding: false
     modules:
       ptv3_encoder:
-        output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
@@ -65,13 +64,12 @@ deploy:
           patch_sizes: ${model.encoder.enc_patch_size}
       ptv3_det3d_head:
         precision: fp16
-        output_names: ${model.export_output_names}
         metainfo:
-          bbox_voxel_size: ${model.bbox_head.bbox_coder.voxel_size}
+          head_grid_size: ${head_grid_size}
           has_twist: ${model.bbox_head.use_velocity}
           num_proposals: ${model.bbox_head.num_proposals}
           post_center_range: ${model.bbox_head.bbox_coder.post_center_range}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
         modify_graph:
           _target_: autoware_ml.utils.onnx_modifiers.TransHeadTensorRTModifier
           k: ${num_proposals}
@@ -94,7 +92,7 @@ model:
     prog_bar: true
     sync_dist: true
   export_output_names:
-    [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot, vel]
+    [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot]
   freeze_encoder: false
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
@@ -105,7 +103,7 @@ model:
     auxiliary: true
     in_channels: 128
     hidden_channel: 128
-    class_names: ${database.taxonomy.detection3d.class_names}
+    class_names: ${taxonomy.detection3d.class_names}
     dense_heatmap_pooling_class_names: [car, truck, bus]
     num_decoder_layers: 1
     num_heads: 8
@@ -117,18 +115,17 @@ model:
       heights: [1, 2]
       dims: [3, 2]
       rots: [2, 2]
-      vels: [2, 2]
     bbox_coder:
       _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.TransFusionBBoxCoder
       pc_range: ${point_cloud_range}
-      voxel_size: ${head_voxel_size}
+      voxel_size: ${head_grid_size}
       out_size_factor: 1
-      class_names: ${database.taxonomy.detection3d.class_names}
+      class_names: ${taxonomy.detection3d.class_names}
       # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
       # every proposal regardless of its score. The database bases set it.
       score_threshold_configs: ???
       post_center_range: ???
-      code_size: 10
+      code_size: 8
     assigner:
       _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
       cls_cost:
@@ -144,9 +141,9 @@ model:
         weight: 0.25
       point_cloud_range: ${point_cloud_range}
     point_cloud_range: ${point_cloud_range}
-    voxel_size: ${head_voxel_size}
+    voxel_size: ${head_grid_size}
     out_size_factor: 1
-    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2]
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     min_radius: 2
     gaussian_overlap: 0.1
     post_max_size: 100
@@ -160,7 +157,7 @@ model:
     heatmap_target: ???
     heatmap_init_bias: -2.19
     nms_kernel_size: 3
-    use_velocity: true
+    use_velocity: false
 
   optimizer: ${optimizer}
   scheduler:

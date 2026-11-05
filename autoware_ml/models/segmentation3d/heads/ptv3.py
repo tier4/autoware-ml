@@ -45,7 +45,6 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     prepare_point_module_for_export,
     set_block_serialization_order,
 )
-from autoware_ml.models.segmentation3d.encoders.voxel import TIME_LAG_COLUMN
 from autoware_ml.utils.point_cloud.structures import Point
 
 
@@ -254,19 +253,23 @@ class PTv3Seg3DDecoderHead(nn.Module):
         return export_head
 
 
-def current_frame_mask(points: torch.Tensor) -> torch.Tensor:
+def current_frame_mask(points: torch.Tensor, time_lag_column: int) -> torch.Tensor:
     """Return the mask of points captured in the current frame.
 
     Loaders give the current frame points a time lag of exactly ``0`` and every
-    sweep point a nonzero one.
+    sweep point a nonzero one. Points without a time lag column (``-1``) were loaded
+    from the current frame alone.
 
     Args:
         points: Point array of shape ``(num_points, num_features)``.
+        time_lag_column: Column holding the time lag, ``-1`` when the points have none.
 
     Returns:
         Boolean mask of shape ``(num_points,)``.
     """
-    return points[:, TIME_LAG_COLUMN] == 0
+    if time_lag_column < 0:
+        return torch.ones(points.shape[0], dtype=torch.bool, device=points.device)
+    return points[:, time_lag_column] == 0
 
 
 def assigned_point_mask(point_voxel_indices: torch.Tensor) -> torch.Tensor:
@@ -435,7 +438,8 @@ def segmentation3d_eval_output(
     point_batch, voxels_data, label_batch = voxelized_points(batch_inputs)
     points = point_batch.points
     point_voxel_indices = voxels_data.point_voxel_indices
-    scored = current_frame_mask(points) & assigned_point_mask(point_voxel_indices)
+    current = current_frame_mask(points, point_batch.timestamp_difference_dim)
+    scored = current & assigned_point_mask(point_voxel_indices)
     point_logits = gather_point_logits(seg3d_logits, point_voxel_indices, scored)
     return segmentation3d_frames_eval_output(
         coord=points[scored, :3],
@@ -463,7 +467,8 @@ def segmentation3d_predict_outputs(
     """
     point_batch, voxels_data, _ = voxelized_points(batch_inputs)
     point_voxel_indices = voxels_data.point_voxel_indices
-    scored = current_frame_mask(point_batch.points) & assigned_point_mask(point_voxel_indices)
+    current = current_frame_mask(point_batch.points, point_batch.timestamp_difference_dim)
+    scored = current & assigned_point_mask(point_voxel_indices)
     point_probs = torch.softmax(
         gather_point_logits(seg3d_logits, point_voxel_indices, scored), dim=1
     )

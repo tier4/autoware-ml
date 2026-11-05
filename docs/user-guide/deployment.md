@@ -77,9 +77,9 @@ trained parts of that model into a single export:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_30e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Checkpoints are applied in the order they appear on the command line, and
@@ -112,7 +112,7 @@ deploy:
     modules:
       <module>:
         metainfo:
-          class_names: ${database.taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 ```
 
 Each `metainfo` value is stamped as one compact JSON document (scalars,
@@ -139,11 +139,19 @@ deploy:
       input_tensor: { 2: height, 3: width }
     modules:
       end_to_end:
-        output_names: [output]
+        precision: fp16
 ```
 
-**input_names / output_names**: exported input names default to the export
-spec's forward parameter names. Output names are declared per module.
+**Tensor names**: the export spec names the graph inputs and outputs, either
+the names a stage graph declares (see
+[Model-Owned Export Wrappers](#model-owned-export-wrappers)) or the names a
+hand-written spec lists; the export log prints them. A spec names every one of
+its inputs and at least one output, or it is refused when built. `deploy.onnx`
+carries no `input_names` or `output_names`; an entry fails the deploy before its
+MLflow run is created or the model loads. The keys of `dynamic_shapes`,
+`dynamic_axes` and `deploy.tensorrt.input_shapes` are these names. A model that
+lets a config choose its names exposes them as a model parameter, as PTv3's
+`export_output_names`.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their

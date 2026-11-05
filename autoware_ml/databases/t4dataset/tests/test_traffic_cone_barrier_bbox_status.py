@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import polars as pl
 from t4_devkit.schema import SchemaName
@@ -33,7 +33,6 @@ from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadat
 from autoware_ml.databases.t4dataset import t4records_generator
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4sample_records import T4SampleRecord
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.types.sensor import LidarChannel
 
 _DATASET_NAME = "db_test_v1"
@@ -84,8 +83,8 @@ def _frame_metadata(status: bool | None) -> FrameBasicMetadata:
         sample_index=0,
         timestamp_seconds=2.0,
         scenario_name=_SCENE_NAME,
-        location="tokyo",
-        vehicle_type="j6gen2",
+        location="city_a",
+        vehicle_type="vehicle_a",
         traffic_cone_barrier_bbox_status=status,
     )
 
@@ -97,8 +96,8 @@ def _dataset_record(status: bool | None) -> DatasetRecord:
         sample_id=_SAMPLE_TOKEN,
         sample_index=0,
         timestamp_seconds=2.0,
-        location="tokyo",
-        vehicle_type="j6gen2",
+        location="city_a",
+        vehicle_type="vehicle_a",
         scenario_name=_SCENE_NAME,
         traffic_cone_barrier_bbox_status=status,
         lidar_frames=[],
@@ -137,14 +136,13 @@ class TestRecordsGenerator(unittest.TestCase):
                 dataset_params=DatasetParams(dataset_name=_DATASET_NAME, sample_steps=1),
                 scenario_id=_SCENARIO_ID,
                 scenario_version=_SCENARIO_VERSION,
-                vehicle_type="j6gen2",
-                location="tokyo",
+                vehicle_type="vehicle_a",
+                location="city_a",
                 traffic_cone_barrier_bbox_status=status,
             ),
             lidar_channel=LidarChannel.LIDAR_TOP,
             lidar_pointcloud_num_features=5,
             box_annotation_dir="annotation",
-            taxonomy=MagicMock(spec=DatabaseTaxonomy),
             box3d_pipelines=[],
         )
 
@@ -159,8 +157,8 @@ class TestRecordsGenerator(unittest.TestCase):
                 self.assertIs(metadata.traffic_cone_barrier_bbox_status, status)
                 self.assertEqual(metadata.scenario_id, _SCENARIO_ID)
                 self.assertEqual(metadata.scenario_name, _SCENE_NAME)
-                self.assertEqual(metadata.location, "tokyo")
-                self.assertEqual(metadata.vehicle_type, "j6gen2")
+                self.assertEqual(metadata.location, "city_a")
+                self.assertEqual(metadata.vehicle_type, "vehicle_a")
                 self.assertAlmostEqual(metadata.timestamp_seconds, 2.0)
 
 

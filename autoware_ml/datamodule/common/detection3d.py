@@ -19,6 +19,7 @@ import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
+from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
@@ -28,12 +29,63 @@ logger = logging.getLogger(__name__)
 
 
 class Detection3DTask(BaseDatasetTask):
-    """Read the 3D boxes of a record and its cone and barrier annotation flag."""
+    """
+    Read the 3D boxes of a record and its cone and barrier annotation flag.
+
+    The records store the fine label name of every box, the taxonomy resolves it to a class
+    index when a sample is loaded.
+    """
 
     COLUMNS = (
         DatasetTableSchema.BOXES_3D.name,
         DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name,
     )
+
+    def __init__(
+        self,
+        database_root_path: str,
+        dataset_records_dataframe: pl.DataFrame,
+        taxonomy: LabelTaxonomy,
+    ) -> None:
+        """
+        Initialize the detection task.
+
+        Args:
+          database_root_path: Root directory of the database.
+          dataset_records_dataframe: Records of the corpus.
+          taxonomy: Taxonomy that maps the fine label name of a box to its class index.
+
+        Raises:
+          KeyError: If a box of the records carries a fine name the taxonomy does not map.
+        """
+        super().__init__(
+            database_root_path=database_root_path,
+            dataset_records_dataframe=dataset_records_dataframe,
+        )
+        self.taxonomy = taxonomy
+        self.class_indices = {
+            fine_name: taxonomy.class_index(fine_name) for fine_name in self._record_label_names()
+        }
+
+    def _record_label_names(self) -> list[str]:
+        """
+        Fine label names of every box of the records.
+
+        Returns:
+          list[str]: Distinct fine label names of the boxes.
+        """
+        label = Box3DDatasetSchema.BOX3D_LABEL_NAME.name
+        return (
+            self.dataset_records_dataframe.select(
+                pl.col(DatasetTableSchema.BOXES_3D.name)
+                .list.eval(pl.element().struct.field(label))
+                .alias(label)
+            )
+            .explode(label)
+            .drop_nulls(label)
+            .unique()[label]
+            .to_list()
+        )
 
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
@@ -86,14 +138,12 @@ class Detection3DTask(BaseDatasetTask):
             .to_numpy()
             .astype(np.float32, copy=False)
         )
-        gt_bboxes_labels = (
-            selected_row.field(Box3DDatasetSchema.BOX3D_LABEL_INDEX.name)
-            .to_numpy()
-            .astype(np.int32, copy=False)
-        )
         gt_bboxes_label_names = selected_row.field(
             Box3DDatasetSchema.BOX3D_LABEL_NAME.name
         ).to_list()
+        gt_bboxes_labels = np.asarray(
+            [self.class_indices[name] for name in gt_bboxes_label_names], dtype=np.int32
+        )
         gt_bboxes_num_lidar_points = (
             selected_row.field(Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name)
             .to_numpy()

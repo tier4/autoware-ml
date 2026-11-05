@@ -12,7 +12,7 @@ This guide gets you from zero to a trained model. We'll train a PTv3 3D semantic
 ## 1. Setup Dataset
 
 Download the NuScenes full dataset (v1.0) from the [official website](https://www.nuscenes.org/nuscenes) after registration.
-After the download, confirm that the dataset is located at `$AUTOWARE_ML_DATA_PATH/nuscenes`.
+After the download, confirm that the dataset is located at `nuscenes/` of the dataset root, `AUTOWARE_ML_DATA_PATH` in `.env`.
 
 ## 2. Launch the Container
 
@@ -24,7 +24,7 @@ cd ~/autoware-ml
 ## 3. Train the Model
 
 ```bash
-autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m
+autoware-ml train --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
 ```
 
 Training progress appears in your terminal. Checkpoints are saved automatically.
@@ -41,8 +41,8 @@ Open [http://localhost:5000](http://localhost:5000) to view loss curves, metrics
 
 ```bash
 autoware-ml deploy \
-    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     deploy.tensorrt.enabled=false
 ```
 
@@ -52,6 +52,6 @@ To evaluate a trained checkpoint before deployment:
 
 ```bash
 autoware-ml test \
-    --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m \
-    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_base_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 ```

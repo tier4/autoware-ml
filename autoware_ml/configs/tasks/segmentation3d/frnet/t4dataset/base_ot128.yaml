@@ -1,5 +1,5 @@
 # @package _global_
-# The four Ouster OT128 lidars of the J6 gen2 platform.
+# Four Ouster OT128 lidars, one range image per lidar.
 defaults:
   - base
   - _self_

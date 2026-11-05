@@ -47,17 +47,14 @@ deploy:
     do_constant_folding: false
     modules:
       bevfusion_lidar:
-        output_names: [bbox_pred, score, label_pred]
         dynamic_axes:
           voxels: { 0: voxels_num }
           coors: { 0: voxels_num }
           num_points_per_voxel: { 0: voxels_num }
       bevfusion_image_backbone:
-        output_names: [image_feats]
         dynamic_axes:
           imgs: { 0: num_imgs }
       bevfusion_camera_lidar:
-        output_names: [bbox_pred, score, label_pred]
         dynamic_axes:
           voxels: { 0: voxels_num }
           coors: { 0: voxels_num }
@@ -139,7 +136,7 @@ model:
     auxiliary: true
     in_channels: 512
     hidden_channel: 128
-    class_names: ${database.taxonomy.detection3d.class_names}
+    class_names: ${taxonomy.detection3d.class_names}
     num_decoder_layers: 1
     num_heads: 8
     feedforward_channels: 256
@@ -154,7 +151,7 @@ model:
       pc_range: ${point_cloud_range}
       out_size_factor: ${out_size_factor}
       voxel_size: ${voxel_size}
-      class_names: ${database.taxonomy.detection3d.class_names}
+      class_names: ${taxonomy.detection3d.class_names}
       # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
       # every proposal regardless of its score. The database bases set it.
       score_threshold_configs: ???
@@ -189,8 +186,8 @@ model:
     # Optional rotated BEV IoU loss on the matched proposals of every decoder layer.
     iou_loss:
       _target_: autoware_ml.losses.detection3d.rotated_iou_loss.Rotated2DIouLoss
-      class_names: ${database.taxonomy.detection3d.class_names}
-      labels_to_ignore_rotation: [traffic_cone]
+      class_names: ${taxonomy.detection3d.class_names}
+      rotation_invariant_classes: [traffic_cone]
       loss_weight: 0.10
 
   optimizer: ${optimizer}

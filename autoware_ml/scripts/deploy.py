@@ -50,6 +50,7 @@ from autoware_ml.utils.mlflow_helpers import (
 from autoware_ml.utils.onnx_meta import release_to_model_version
 from autoware_ml.utils.deploy import (
     validate_cuda_available,
+    validate_onnx_names_not_configured,
 )
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
@@ -178,6 +179,7 @@ def run_deploy(cfg: DictConfig) -> None:
 
     release = cfg.get("release", None)
     release_to_model_version(release)  # a malformed release must fail before exporting
+    validate_onnx_names_not_configured(cfg.deploy.onnx)  # before the run and the model exist
     if release is None:
         logger.warning(
             "Deploying without --release — artifacts will be stamped 'unversioned' "

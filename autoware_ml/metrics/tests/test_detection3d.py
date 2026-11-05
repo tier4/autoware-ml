@@ -188,7 +188,7 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
         thresholds=(0.5,),
         class_names=("car",),
         ranges=(MetricRange("0-200m", 0.0, 200.0),),
-        eval_class_range={"car": 50.0},
+        max_distances={"car": 50.0},
     )
     _update(
         metric,
@@ -197,7 +197,7 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
         gt_labels=[torch.tensor([0], dtype=torch.long)],
     )
 
-    # The GT at 100 m is filtered by eval_class_range (car capped at 50 m), the
+    # The GT at 100 m is filtered by max_distances (car capped at 50 m), the
     # phantom prediction remains, so AP is 0, and the monitored key is always
     # present, never dropped.
     report = metric.result(EvalStage.VAL)
@@ -207,7 +207,7 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
 
 def test_eval_class_range_requires_class_names() -> None:
     with pytest.raises(ValueError, match="class_names"):
-        _suite(eval_class_range={"car": 50.0})
+        _suite(max_distances={"car": 50.0})
 
 
 def test_min_num_points_filters_gt_num_points() -> None:

@@ -70,7 +70,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             MetricRange("90-121m", 90.0, 121.0),
             MetricRange("0-121m", 0.0, 121.0),
         ),
-        eval_class_range: dict[str, float] | None = None,
+        max_distances: dict[str, float] | None = None,
         min_num_points: int = 0,
         match_cost: str = "center",
         class_groups: dict[str, list[str]] | None = None,
@@ -84,7 +84,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             class_names: Ordered class names for metric keys, or ``None`` to report only
                 classes present in the ground truth.
             ranges: Radial windows every key is also emitted for.
-            eval_class_range: Class name to maximum GT distance in meters, applied as a GT
+            max_distances: Class name to maximum GT distance in meters, applied as a GT
                 filter at accumulation.
             min_num_points: Minimum LiDAR points a GT box needs to count, 0 disables the
                 filter.
@@ -99,7 +99,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         super().__init__(components=components, ranges=ranges, **kwargs)
         self.class_names = tuple(class_names) if class_names is not None else None
         _validate_name_tokens(self.class_names)
-        self.eval_class_range = eval_class_range
+        self.max_distances = max_distances
         self.min_num_points = int(min_num_points)
         self.match_cost = str(match_cost)
         resolve_match_cost(self.match_cost)  # a config typo must fail at build, not after the epoch
@@ -115,8 +115,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         # suite, so they need the same duplicate-token guard.
         _validate_name_tokens(self._grouped_names)
 
-        if eval_class_range and not self.class_names:
-            raise ValueError("class_names must be provided when eval_class_range is configured.")
+        if max_distances and not self.class_names:
+            raise ValueError("class_names must be provided when max_distances is configured.")
         self._warn_on_range_class_caps()
 
         self.add_state("pred_boxes", default=[], dist_reduce_fx=None)
@@ -189,13 +189,13 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             logger.info("Collision TTC covered %d/%d frames (full map coverage).", covered, seen)
 
     def _warn_on_range_class_caps(self) -> None:
-        if self.eval_class_range is None:
+        if self.max_distances is None:
             return
-        for class_name, max_dist in self.eval_class_range.items():
+        for class_name, max_dist in self.max_distances.items():
             for metric_range in self.ranges:
                 if metric_range.max_distance is not None and max_dist < metric_range.max_distance:
                     logger.warning(
-                        "eval_class_range['%s'] = %.1fm is smaller than bucket '%s' upper "
+                        "max_distances['%s'] = %.1fm is smaller than bucket '%s' upper "
                         "bound %.1fm, so the '%s' bucket metrics are misleading for this class.",
                         class_name,
                         max_dist,
@@ -264,7 +264,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 frame_labels,
                 num_points,
                 self.class_names or (),
-                self.eval_class_range,
+                self.max_distances,
                 self.min_num_points,
             )
 

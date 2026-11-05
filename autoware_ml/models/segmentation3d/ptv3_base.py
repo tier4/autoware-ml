@@ -23,10 +23,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     build_serialized_pooling_meta,
     collect_encoder_stage_points,
 )
-from autoware_ml.models.segmentation3d.encoders.voxel import (
-    TIME_LAG_COLUMN,
-    VoxelFeatureEncoder,
-)
+from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import batch_to_offset
 from autoware_ml.utils.point_cloud.structures import (
@@ -263,21 +260,10 @@ class PTv3BaseModel(ModuleBaseModel):
             Deepest encoder point with the full pooling chain attached.
 
         Raises:
-            ValueError: If the points carry the time lag in another column than
-                the voxel encoder reads, or hold future points the voxel encoder does not read.
+            ValueError: If the points do not follow the layout the voxel encoder reads.
             RuntimeError: If the voxelizer dropped occupied voxels.
         """
-        if time_lag_column != TIME_LAG_COLUMN:
-            raise ValueError(
-                f"PTv3 needs the time lag of the points in column {TIME_LAG_COLUMN}, the batch "
-                f"has it in column {time_lag_column}. Enable use_timestamp_difference in the "
-                "sweep loader."
-            )
-        if not self.voxel_encoder.reads_future and bool((voxels[..., TIME_LAG_COLUMN] < 0).any()):
-            raise ValueError(
-                f"{type(self.voxel_encoder).__name__} reads no future points, but the batch has "
-                "some. Load no future sweeps or use PastFutureVoxelFeatureEncoder."
-            )
+        self.voxel_encoder.check_points(voxels, time_lag_column)
         if int(num_dropped_voxels) > 0:
             raise RuntimeError(
                 f"The voxelizer dropped {int(num_dropped_voxels)} occupied voxels. Increase "
@@ -754,7 +740,7 @@ def build_encoder_export_spec(context: PTv3ExportContext) -> "ExportSpec":
     return ExportSpec(
         module=context.encoder_module,
         args=context.encoder_input_args,
-        input_param_names=input_names,
+        input_names=input_names,
         output_names=stage_feature_names(context.stage_count),
         dynamic_axes=build_ptv3_encoder_dynamic_axes(input_names, context.stage_count),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
@@ -787,7 +773,7 @@ def build_seg3d_head_export_spec(
             context.inputs.grid_coord,
             seg3d_head.dec_depths,
         ),
-        input_param_names=input_names,
+        input_names=input_names,
         output_names=list(output_names),
         dynamic_axes=dynamic_axes,
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,

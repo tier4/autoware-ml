@@ -258,7 +258,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
         voxel_spec = specs["pts_voxel_encoder_centerpoint"]
         self.assertIsInstance(voxel_spec.module, _CenterPointVoxelEncoderExportWrapper)
-        self.assertEqual(voxel_spec.input_param_names, ["input_features"])
+        self.assertEqual(voxel_spec.input_names, ["input_features"])
         self.assertEqual(voxel_spec.output_names, ["pillar_features"])
         (input_features,) = voxel_spec.args
         self.assertEqual(
@@ -271,7 +271,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
         head_spec = specs["pts_backbone_neck_head_centerpoint"]
         self.assertIsInstance(head_spec.module, _CenterPointBackboneNeckHeadExportWrapper)
-        self.assertEqual(head_spec.input_param_names, ["spatial_features"])
+        self.assertEqual(head_spec.input_names, ["spatial_features"])
         self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot", "vel"])
         (spatial_features,) = head_spec.args
         self.assertEqual(spatial_features.shape, (self.batch_size, 32, 16, 16))

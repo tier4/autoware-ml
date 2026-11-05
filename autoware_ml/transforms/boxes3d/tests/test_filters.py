@@ -25,7 +25,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.transforms.boxes3d.filters import (
     BBoxesAttributeFilter,
-    BBoxesLabelNameFilter,
+    BBoxesIgnoreIndexFilter,
     BBoxesMinPointsFilter,
     BBoxesPhysicalFilter,
     BBoxesRangeFilter,
@@ -153,10 +153,10 @@ def test_min_points_filter_needs_the_point_cloud_unless_it_reads_the_recorded_co
         BBoxesMinPointsFilter(min_points=2, bev_range=BEV_RANGE)(sample(["box_0"]))
 
 
-def test_label_name_filter_keeps_fine_names_mapped_to_kept_classes() -> None:
-    # Boxes are kept by the class of their label index, not by the name they were annotated
-    # with. Only the ignored box is dropped.
-    result = BBoxesLabelNameFilter(label_names_to_keep=CLASS_NAMES, class_names=CLASS_NAMES)(
+def test_ignore_index_filter_drops_only_the_boxes_of_no_trained_class() -> None:
+    # A box keeps the fine name it was annotated with, only its label index tells whether a
+    # class trains it.
+    result = BBoxesIgnoreIndexFilter(ignore_index=-1)(
         sample(
             ["ambulance", "construction_vehicle", "stroller", "pushable_pullable", "bollard"],
             labels=[0, 1, 2, 3, -1],
@@ -169,21 +169,6 @@ def test_label_name_filter_keeps_fine_names_mapped_to_kept_classes() -> None:
         "stroller",
         "pushable_pullable",
     ]
-
-
-def test_label_name_filter_drops_classes_left_out_of_the_kept_names() -> None:
-    result = BBoxesLabelNameFilter(label_names_to_keep=["car"], class_names=CLASS_NAMES)(
-        sample(["police_car", "pedestrian"], labels=[0, 2])
-    )
-
-    assert result.detection3d_gt_bboxes_3d.bbox_labels.tolist() == [0]
-
-
-def test_label_name_filter_rejects_names_outside_the_classes() -> None:
-    # Input: a kept name that is not a class. Expected: construction fails, so a typo cannot
-    # drop every box.
-    with pytest.raises(ValueError, match="busses"):
-        BBoxesLabelNameFilter(label_names_to_keep=["busses"], class_names=CLASS_NAMES)
 
 
 def test_attribute_filter_drops_only_the_boxes_matching_a_rule() -> None:

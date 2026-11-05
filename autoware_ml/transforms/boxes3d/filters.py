@@ -141,34 +141,26 @@ class BBoxesRangeFilter(BaseTransform):
         return model_gt_sample
 
 
-class BBoxesLabelNameFilter(BaseTransform):
-    """Filter 3D bounding boxes by the name of the class they are mapped to.
+class BBoxesIgnoreIndexFilter(BaseTransform):
+    """Drop the 3D bounding boxes of no trained class.
 
-    A box keeps the label name it was annotated with, which can be finer than the class it
-    trains as (an ambulance trains as a car). The class is read from the label index of the
-    box, so a box is kept when its class is one of the kept names, whatever its own name.
+    A box whose label the taxonomy does not train carries the ignore index. It stays in the
+    sample until this filter, so the transforms before it still see every annotated object.
     """
 
     _required_keys = ["detection3d_gt_bboxes_3d"]
 
-    def __init__(self, label_names_to_keep: Sequence[str], class_names: Sequence[str]) -> None:
-        """Initialize the BBoxesLabelNameFilter transform.
+    def __init__(self, ignore_index: int) -> None:
+        """Initialize the BBoxesIgnoreIndexFilter transform.
 
         Args:
-            label_names_to_keep: Names of the classes whose boxes are kept.
-            class_names: Class names in label index order.
+            ignore_index: Label index of the boxes of no trained class.
         """
         super().__init__(probability=None)
-        unknown = sorted(set(label_names_to_keep) - set(class_names))
-        if unknown:
-            raise ValueError(f"label_names_to_keep names classes that do not exist: {unknown}.")
-        self.label_indices_to_keep = torch.tensor(
-            [index for index, name in enumerate(class_names) if name in label_names_to_keep],
-            dtype=torch.int64,
-        )
+        self.ignore_index = ignore_index
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Filter 3D bounding boxes by the class of their label index."""
+        """Drop the 3D bounding boxes labelled with the ignore index."""
         # This is checked in the _validate_required_keys()
         detection3d_gt_bboxes_3d: BaseBBoxes3D = (
             model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
@@ -177,7 +169,7 @@ class BBoxesLabelNameFilter(BaseTransform):
             return model_gt_sample
 
         labels = detection3d_gt_bboxes_3d.bbox_labels.to(torch.int64)
-        bboxes_to_keep_mask = torch.isin(labels, self.label_indices_to_keep.to(labels.device))
+        bboxes_to_keep_mask = labels != self.ignore_index
 
         # TODO(Kok Seang): Consider to make it immutable and return a new instance
         # instead of modifying in place.

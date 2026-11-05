@@ -2,4 +2,4 @@ _target_: autoware_ml.datamodule.t4dataset.segmentation3d.T4Segmentation3DTask
 _convert_: all
 _partial_: true
 
-taxonomy: ${database.taxonomy.segmentation3d}
+taxonomy: ${taxonomy.segmentation3d}

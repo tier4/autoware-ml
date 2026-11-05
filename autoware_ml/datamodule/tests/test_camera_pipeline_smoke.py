@@ -166,7 +166,7 @@ class TestCameraPipelineSmoke(unittest.TestCase):
 
         assert batch.image_gt_batch is not None
         self.assertEqual(batch.image_gt_batch.images.shape, (2, len(CAMERAS), 3, 24, 32))
-        self.assertEqual(int(batch.infer_batch_size()), 2)
+        self.assertEqual(batch.batch_size, 2)
 
         batch_inputs = DataPreprocessor(preprocessor_modules=[])(batch, is_training=True)
         assert batch_inputs.image_data is not None

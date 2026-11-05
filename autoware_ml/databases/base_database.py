@@ -23,9 +23,9 @@ from types import MappingProxyType
 import polars as pl
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
+from autoware_ml.databases.taxonomy import LabelVocabulary
 from autoware_ml.databases.scenarios import Scenarios, ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord, DatasetTableSchema
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
-        taxonomy: DatabaseTaxonomy,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         lidar_pointcloud_num_features: int,
@@ -54,7 +54,7 @@ class BaseDatabase:
           cache_path: Path to cache the database records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
           num_workers: Number of workers to use for processing the database.
-          taxonomy: Taxonomies the database labels are built with.
+          vocabulary: Vocabulary of the raw box labels of the recordings.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
             clouds. Loaded intensity is divided by it, so every model reads it in [0, 1].
@@ -76,7 +76,7 @@ class BaseDatabase:
         self._cache_path = Path(cache_path)
         self._cache_file_prefix_name = cache_file_prefix_name
         self._num_workers = num_workers
-        self._taxonomy = taxonomy
+        self._vocabulary = vocabulary
         self._box3d_pipelines = box3d_pipelines
         self._lidar_intensity_scale = lidar_intensity_scale
         self._lidar_pointcloud_num_features = lidar_pointcloud_num_features
@@ -88,7 +88,6 @@ class BaseDatabase:
             f"root path: {self._root_path}, "
             f"cache path: {self._cache_path}, "
             f"cache file prefix name: {self._cache_file_prefix_name}, "
-            f"taxonomy: {self._taxonomy}, "
             f"box3d pipelines: [{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}]"
         )
 
@@ -123,17 +122,6 @@ class BaseDatabase:
         """
 
         return hash(str(self))
-
-    @property
-    def taxonomy(self) -> DatabaseTaxonomy:
-        """
-        Get the taxonomies the database labels are built with.
-
-        Returns:
-          DatabaseTaxonomy: Taxonomies of the database.
-        """
-
-        return self._taxonomy
 
     @property
     def scenarios_string_repr(self) -> str:
@@ -207,7 +195,6 @@ class BaseDatabase:
         return {
             "database": type(self).__name__,
             "version": self._version,
-            "taxonomy": str(self._taxonomy),
             "box3d_pipelines": "[" + ", ".join(map(str, self._box3d_pipelines)) + "]",
             "lidar_pointcloud_num_features": str(self._lidar_pointcloud_num_features),
             "scenarios": "("
@@ -232,6 +219,17 @@ class BaseDatabase:
 
         fields = ", ".join(f"{name}={value}" for name, value in self.hash_fields.items())
         return f"{type(self).__name__}({fields})"
+
+    @property
+    def vocabulary(self) -> LabelVocabulary:
+        """
+        Get the vocabulary of the raw box labels of the recordings.
+
+        Returns:
+          LabelVocabulary: Vocabulary the box pipelines resolve the raw labels with.
+        """
+
+        return self._vocabulary
 
     @property
     def lidar_intensity_scale(self) -> float:

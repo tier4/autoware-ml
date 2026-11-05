@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -29,7 +28,6 @@ from autoware_ml.databases.scenarios import DatasetParams, ScenarioData
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.databases.t4dataset import t4records_generator
 from autoware_ml.databases.t4dataset.t4records_generator import T4RecordsGenerator
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.types.sensor import LidarChannel
 
 _DATASET_NAME = "db_test_v1"
@@ -106,7 +104,6 @@ def generator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> T4RecordsGener
         lidar_channel=LidarChannel.LIDAR_TOP,
         lidar_pointcloud_num_features=5,
         box_annotation_dir="annotation",
-        taxonomy=MagicMock(spec=DatabaseTaxonomy),
         box3d_pipelines=[],
     )
 

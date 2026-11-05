@@ -170,7 +170,7 @@ class _TransFusionDetection3DModelTestCase(unittest.TestCase):
                     ScoreThresholdConfig(class_names=self.class_names, score_threshold=0.0)
                 ],
                 post_center_range=[-10.0, -10.0, -10.0, 26.0, 26.0, 10.0],
-                code_size=self.num_box_channels,
+                code_size=10 if with_velocity else 8,
             ),
             assigner=HungarianAssigner3D(
                 cls_cost=ClassificationCost(weight=0.15),
@@ -181,7 +181,7 @@ class _TransFusionDetection3DModelTestCase(unittest.TestCase):
             point_cloud_range=self.point_cloud_range,
             voxel_size=self.voxel_size,
             out_size_factor=self.out_size_factor,
-            code_weights=[1.0] * 8 + [0.2, 0.2],
+            code_weights=[1.0] * 8 + ([0.2, 0.2] if with_velocity else []),
             min_radius=1,
             gaussian_overlap=0.1,
             post_max_size=8,
@@ -350,7 +350,7 @@ class _TransFusionDetection3DModelTestCase(unittest.TestCase):
 
         self.assertIsInstance(spec.module, _TransFusionExportWrapper)
         self.assertEqual(spec.module.batch_size, self.batch_size)
-        self.assertEqual(spec.input_param_names, ["voxels", "num_points", "coors"])
+        self.assertEqual(spec.input_names, ["voxels", "num_points", "coors"])
         self.assertEqual(spec.output_names, ["cls_score0", "bbox_pred0", "dir_cls_pred0"])
         voxels, num_points, coors = spec.args
         torch.testing.assert_close(voxels, voxels_data.voxels)

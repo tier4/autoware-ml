@@ -37,6 +37,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
+from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset, PaddingSlot
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
@@ -60,8 +61,8 @@ class FrameSamplingConfig:
       low_pedestrian_height_threshold: Height in meters below which a pedestrian counts as a
         low pedestrian, for example a child or a person bending down.
       low_pedestrian_bev_range: BEV range the center of a low pedestrian has to fall in.
-      class_names: Trained class names, the categories a box is counted into.
-      ignore_index: Label index of the boxes of no trained class.
+      taxonomy: Detection taxonomy of the run, its classes are the categories a box is counted
+        into.
       filter_attributes: Class and attribute pairs of boxes that are not detection targets,
         same as the attribute filter transform.
       seed: Seed of the draw, every epoch adds its number.
@@ -72,8 +73,7 @@ class FrameSamplingConfig:
     pedestrian_class_name: str
     low_pedestrian_height_threshold: float
     low_pedestrian_bev_range: Sequence[float]
-    class_names: Sequence[str]
-    ignore_index: int
+    taxonomy: LabelTaxonomy
     filter_attributes: Sequence[Sequence[str]]
     seed: int
 
@@ -90,11 +90,11 @@ class FrameSamplingConfig:
                     f"{name} must be [x_min, y_min, x_max, y_max] with min below max, got "
                     f"{bev_range}."
                 )
-        if self.pedestrian_class_name not in self.class_names:
+        if self.pedestrian_class_name not in self.taxonomy.class_names:
             raise ValueError(
                 f"The pedestrian class {self.pedestrian_class_name!r} is not a trained class."
             )
-        if LOW_PEDESTRIAN_CATEGORY in self.class_names:
+        if LOW_PEDESTRIAN_CATEGORY in self.taxonomy.class_names:
             raise ValueError(
                 f"The low pedestrian category {LOW_PEDESTRIAN_CATEGORY!r} clashes with a "
                 "trained class."
@@ -109,7 +109,7 @@ class FrameSamplingConfig:
     @property
     def categories(self) -> tuple[str, ...]:
         """Sampling categories, the trained classes and the low pedestrian bucket."""
-        return (*self.class_names, LOW_PEDESTRIAN_CATEGORY)
+        return (*self.taxonomy.class_names, LOW_PEDESTRIAN_CATEGORY)
 
 
 def compute_frame_sampling_weights(
@@ -212,19 +212,13 @@ def _record_category_counts(
     excluded = config.excluded
     counts: dict[str, int] = {}
     for box in boxes:
-        # A box keeps its annotated name, its class is read from its label index
-        label_index = box[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name]
-        if label_index == config.ignore_index:
+        # A box keeps its fine name, the taxonomy folds it onto its class
+        label_name = box[Box3DDatasetSchema.BOX3D_LABEL_NAME.name]
+        class_name = config.taxonomy.class_name(label_name)
+        if class_name is None:
             continue
-        if not 0 <= label_index < len(config.class_names):
-            raise ValueError(
-                f"Box label index {label_index} is outside the {len(config.class_names)} "
-                "trained classes."
-            )
         if not box[Box3DDatasetSchema.BOX3D_VALID.name]:
             continue
-        class_name = config.class_names[label_index]
-        label_name = box[Box3DDatasetSchema.BOX3D_LABEL_NAME.name]
         if box[Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name] <= 0:
             continue
         attributes = box[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name]

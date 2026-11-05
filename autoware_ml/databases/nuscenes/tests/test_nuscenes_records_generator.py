@@ -19,13 +19,12 @@ from __future__ import annotations
 import unittest
 from collections.abc import Mapping
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from autoware_ml.databases.nuscenes import nuscenes_records_generator
 from autoware_ml.databases.nuscenes.nuscenes_records_generator import NuScenesRecordsGenerator
 from autoware_ml.databases.scenarios import DatasetParams, ScenarioData
 from autoware_ml.databases.schemas.frame_basic_metadata import FrameBasicMetadata
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 
 _DATASET_NAME = "nuscenes"
 _VERSION = "v1.0-mini"
@@ -95,7 +94,6 @@ class TestNuScenesRecordsGenerator(unittest.TestCase):
                 scenario_version=_VERSION,
             ),
             lidar_pointcloud_num_features=5,
-            taxonomy=MagicMock(spec=DatabaseTaxonomy),
             box3d_pipelines=[],
         )
 
@@ -164,7 +162,6 @@ class TestNuScenesRecordsGenerator(unittest.TestCase):
                     scenario_version=_VERSION,
                 ),
                 lidar_pointcloud_num_features=5,
-                taxonomy=MagicMock(spec=DatabaseTaxonomy),
                 box3d_pipelines=[],
             )
 

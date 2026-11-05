@@ -219,13 +219,13 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     specs = model.build_export_specs(batch)
     encoder_spec = specs["ptv3_encoder"]
 
-    assert "serialized_inverse" in encoder_spec.input_param_names
-    assert "patch_order" in encoder_spec.input_param_names
-    assert "serialized_code" not in encoder_spec.input_param_names
-    assert not any("_cluster" in name for name in encoder_spec.input_param_names)
-    assert "serialized_pooling_0_serialized_inverse" in encoder_spec.input_param_names
-    assert "serialized_pooling_1_serialized_inverse" in encoder_spec.input_param_names
-    assert len(encoder_spec.args) == len(encoder_spec.input_param_names)
+    assert "serialized_inverse" in encoder_spec.input_names
+    assert "patch_order" in encoder_spec.input_names
+    assert "serialized_code" not in encoder_spec.input_names
+    assert not any("_cluster" in name for name in encoder_spec.input_names)
+    assert "serialized_pooling_0_serialized_inverse" in encoder_spec.input_names
+    assert "serialized_pooling_1_serialized_inverse" in encoder_spec.input_names
+    assert len(encoder_spec.args) == len(encoder_spec.input_names)
 
     with torch.no_grad():
         stage_feats = encoder_spec.module(*encoder_spec.args)
@@ -233,7 +233,7 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
 
     head_spec = specs["ptv3_seg3d_head"]
     # dec_depths is all zeros, so the head reduces to features plus clusters.
-    assert head_spec.input_param_names == [
+    assert head_spec.input_names == [
         "point_feat_0",
         "point_feat_1",
         "point_feat_2",
@@ -254,10 +254,10 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
 
     spec = model.build_export_spec(batch)
 
-    assert "patch_order" in spec.input_param_names
-    assert "serialized_pooling_0_cluster" in spec.input_param_names
-    assert "serialized_pooling_0_serialized_inverse" in spec.input_param_names
-    assert len(spec.args) == len(spec.input_param_names)
+    assert "patch_order" in spec.input_names
+    assert "serialized_pooling_0_cluster" in spec.input_names
+    assert "serialized_pooling_0_serialized_inverse" in spec.input_names
+    assert len(spec.args) == len(spec.input_names)
 
     with torch.no_grad():
         pred_labels, pred_probs = spec.module(*spec.args)
@@ -273,7 +273,7 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
 
     spec = model.build_export_spec(batch)
 
-    assert spec.input_param_names == [
+    assert spec.input_names == [
         "voxels",
         "num_points_per_voxel",
         "grid_coord",
@@ -293,7 +293,7 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
 def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> None:
     """The exported graph must not accept anything the export did not declare.
 
-    Asserting on ``input_param_names`` alone cannot catch this: that is what we
+    Asserting on ``input_names`` alone cannot catch this: that is what we
     declare, not what survives tracing. LitePT leaves part of PTv3's signature
     unread and the exporter prunes exactly that part, so a gated artifact declares
     a subset of the contract - which is what the deployed node accepts.
@@ -313,19 +313,11 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
         spec = model.build_export_specs(batch)["ptv3_encoder"]
         path = tmp_path / f"{tag}_encoder.onnx"
 
-        export_to_onnx(
-            model=spec.module,
-            input_sample=spec.args,
-            onnx_cfg=onnx_cfg,
-            input_param_names=list(spec.input_param_names),
-            output_names_override=list(spec.output_names),
-            dynamic_axes_override=spec.dynamic_axes,
-            output_path=path,
-        )
+        export_to_onnx(spec, onnx_cfg, path)
 
         graph = onnx.load(str(path)).graph
         declared = {value.name for value in graph.input}
-        assert declared <= set(spec.input_param_names), tag
+        assert declared <= set(spec.input_names), tag
         assert {"voxels", "num_points_per_voxel"} <= declared, tag
         onnx.checker.check_model(onnx.load(str(path)))
 
@@ -345,11 +337,11 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}
 
     # The fixtures differ in stage count, so compare the per-stage field structure.
-    assert litept.input_param_names[:5] == [
+    assert litept.input_names[:5] == [
         "voxels",
         "num_points_per_voxel",
         "grid_coord",
         "patch_order",
         "serialized_inverse",
     ]
-    assert stage_fields(litept.input_param_names) == stage_fields(ptv3.input_param_names)
+    assert stage_fields(litept.input_names) == stage_fields(ptv3.input_names)

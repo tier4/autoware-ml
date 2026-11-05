@@ -121,15 +121,7 @@ class DeploymentExport:
                     )
                 else:
                     validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
-                    export_to_onnx(
-                        export_spec.module,
-                        export_spec.args,
-                        module_onnx_cfg,
-                        export_spec.input_param_names,
-                        export_spec.output_names,
-                        export_spec.dynamic_axes,
-                        module_onnx_path,
-                    )
+                    export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)

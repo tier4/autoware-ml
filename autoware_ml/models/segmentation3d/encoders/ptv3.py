@@ -34,6 +34,7 @@ from torch.onnx.operators import shape_as_tensor
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
 from autoware_ml.ops.spconv.sparse_conv import ExportableSubMConv3d
+from autoware_ml.ops.submanifold_conv import SubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 
@@ -59,11 +60,17 @@ def is_sparse_conv_module(module: nn.Module) -> bool:
     Returns:
         ``True`` when the module expects sparse convolution tensors.
     """
-    return spconv.modules.is_spconv_module(module) or isinstance(module, ExportableSubMConv3d)
+    return spconv.modules.is_spconv_module(module) or isinstance(
+        module, (SubMConv3d, ExportableSubMConv3d)
+    )
 
 
 def replace_submconv3d_for_export(module: nn.Module) -> None:
-    """Replace native ``spconv.SubMConv3d`` layers with exportable wrappers.
+    """Replace native submanifold convolution layers with exportable spconv wrappers.
+
+    :class:`SubMConv3d` of either library is converted: both carry spconv's
+    constructor attributes and the KRSC weight layout, so the parameters move over
+    unchanged. Export runs on spconv even when training ran on t4sparse.
 
     Args:
         module: Module hierarchy traversed in-place.
@@ -71,7 +78,7 @@ def replace_submconv3d_for_export(module: nn.Module) -> None:
     for name, child in list(module.named_children()):
         if isinstance(child, ExportableSubMConv3d):
             continue
-        if isinstance(child, spconv.SubMConv3d):
+        if isinstance(child, (spconv.SubMConv3d, SubMConv3d)):
             exportable_child = ExportableSubMConv3d(
                 child.in_channels,
                 child.out_channels,
@@ -819,9 +826,7 @@ class Block(PointModule):
 
         if self.enable_conv:
             self.cpe = PointSequential(
-                spconv.SubMConv3d(
-                    channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key
-                ),
+                SubMConv3d(channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key),
                 nn.Linear(channels, channels),
                 nn.LayerNorm(channels),
             )
@@ -1096,7 +1101,7 @@ class Embedding(PointModule):
             # Utonia-style stem: drop the submanifold conv for a per-point Linear.
             stem = nn.Linear(in_channels, embed_channels)
         elif stem_type == "conv":
-            stem = spconv.SubMConv3d(
+            stem = SubMConv3d(
                 in_channels, embed_channels, kernel_size=kernel_size, bias=False, indice_key="stem"
             )
         else:

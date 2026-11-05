@@ -1,15 +1,13 @@
 # @package _global_
-# Tiny PTv3 on a 12 cm grid.
+# PTv3 on a 12 cm grid.
 defaults:
   - base_122m
-  - /tasks/segmentation3d/ptv3/encoder_tiny
-  - /tasks/segmentation3d/ptv3/seg3d_head_tiny
   - _self_
 
 grid_size: 0.12
 max_voxels: 524288
 # 245.76 m / 0.96 m = 256 BEV cells per axis.
-head_voxel_size: [0.96, 0.96, 8.0]
+head_grid_size: [0.96, 0.96]
 num_proposals: 500
 
 model:

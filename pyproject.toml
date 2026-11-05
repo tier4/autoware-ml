@@ -71,6 +71,9 @@ autoware-ml = "autoware_ml.cli.cli:main"
 where = ["."]
 include = ["autoware_ml*"]
 
+[tool.setuptools.package-data]
+"autoware_ml.visualization.viewers" = ["synced_viewer.html"]
+
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = [{ platform = "linux-64", cuda = "12.8", glibc = "2.31" }]
@@ -137,11 +140,17 @@ zensical = "*"
 [tool.pixi.feature.docs.tasks]
 docs = "zensical build --clean"
 
+# t4sparse adds support for mixed-precision convolutions. Currently available to TIER IV members only.
+[tool.pixi.feature.t4sparse.pypi-dependencies]
+t4sparse = { git = "ssh://git@github.com/tier4/t4sparse.git", tag = "v0.2.0", extras = ["torch"] }
+
 [tool.pixi.environments]
 # Default env is the non-dev "use" environment.
 default = { solve-group = "default" }
 # Dev env extends the default stack with contributor and docs tooling.
 dev = { features = ["dev"], solve-group = "default" }
+# Dev env plus the t4sparse sparse convolution library. Currently available to TIER IV members only.
+t4sparse = { features = ["dev", "t4sparse"], solve-group = "default" }
 # Docs env is intentionally isolated from the default CUDA/ML stack.
 docs = { features = ["docs"], solve-group = "docs", no-default-feature = true }
 

@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float32, Int
 
 TIME_LAG_COLUMN = 4
 POINT_CHANNELS = TIME_LAG_COLUMN + 1
+# Channels of a single frame point: x, y, z and intensity.
+FRAME_POINT_CHANNELS = TIME_LAG_COLUMN
 # Channels of one side: offset from the voxel position, intensity, share and mean time lag.
 SIDE_CHANNELS = 6
 
@@ -28,21 +31,74 @@ SIDE_CHANNELS = 6
 class VoxelFeatureEncoder(nn.Module):
     """Base of the parameter free encoders that reduce the points of a voxel to one vector.
 
-    Points are laid out as ``(x, y, z, intensity, time_lag)``. The time lag is the capture time
-    of the sample minus the one of the point, so it is zero for the current frame, positive for
-    a past sweep and negative for a future one. Training and export run the same math.
+    Each encoder reads its own point layout and checks a batch against it before the forward.
+    Sweep points carry a time lag, the capture time of the sample minus the one of the point, so
+    it is zero for the current frame, positive for a past sweep and negative for a future one.
+    Training and export run the same math.
 
     Attributes:
         out_channels: Width of the voxel feature vector.
-        reads_future: Whether the encoder describes future points.
     """
 
     out_channels: int
-    reads_future: bool
+
+    def check_points(
+        self, voxels: Float32[torch.Tensor, "num_voxels max_points channels"], time_lag_column: int
+    ) -> None:
+        """Check that the batch points follow the layout the encoder reads.
+
+        Args:
+            voxels: Padded voxel points of shape ``(num_voxels, max_points, channels)``.
+            time_lag_column: Point column holding the time lag, ``-1`` when the points have none.
+
+        Raises:
+            ValueError: If the points do not follow the layout of the encoder.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def _check_time_lag_column(time_lag_column: int) -> None:
+        """Check that the points carry their time lag in the column the sweep encoders read.
+
+        Args:
+            time_lag_column: Point column holding the time lag, ``-1`` when the points have none.
+
+        Raises:
+            ValueError: If the time lag is in another column or missing.
+        """
+        if time_lag_column != TIME_LAG_COLUMN:
+            raise ValueError(
+                f"PTv3 needs the time lag of the points in column {TIME_LAG_COLUMN}, the batch "
+                f"has it in column {time_lag_column}. Enable use_timestamp_difference in the "
+                "sweep loader."
+            )
+
+    def _check_channels(
+        self,
+        voxels: Float32[torch.Tensor, "num_voxels max_points channels"],
+        channels: int,
+        layout: str,
+    ) -> None:
+        """Check that the points carry the channels of the layout the encoder reads.
+
+        Args:
+            voxels: Padded voxel points of shape ``(num_voxels, max_points, channels)``.
+            channels: Number of channels of the layout.
+            layout: Names of the channels, for the error message.
+
+        Raises:
+            ValueError: If the points carry another number of channels.
+        """
+        if voxels.shape[2] != channels:
+            raise ValueError(
+                f"{type(self).__name__} needs points laid out as {layout}, got "
+                f"{voxels.shape[2]} channels."
+            )
 
     @staticmethod
     def _point_masks(
-        voxels: torch.Tensor, num_points: torch.Tensor
+        voxels: Float32[torch.Tensor, "num_voxels max_points channels"],
+        num_points: Int[torch.Tensor, " num_voxels"],
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Split the valid points of every voxel by capture time.
 
@@ -69,7 +125,7 @@ class VoxelFeatureEncoder(nn.Module):
 
     @staticmethod
     def _summarize(
-        voxels: torch.Tensor, selected: torch.Tensor
+        voxels: Float32[torch.Tensor, "num_voxels max_points channels"], selected: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Count the selected points of every voxel and average their features.
 
@@ -114,6 +170,55 @@ class VoxelFeatureEncoder(nn.Module):
         return torch.cat([offset, intensity, side_count / total_count, lag], dim=1)
 
 
+class MeanVoxelFeatureEncoder(VoxelFeatureEncoder):
+    """Encode a single frame voxel as the mean of its points.
+
+    Points are laid out as ``(x, y, z, intensity)`` with no time lag, so the voxel is placed at
+    the mean of its points and carries their mean intensity.
+    """
+
+    out_channels = FRAME_POINT_CHANNELS
+
+    def check_points(
+        self, voxels: Float32[torch.Tensor, "num_voxels max_points channels"], time_lag_column: int
+    ) -> None:
+        """Check that the batch points are single frame points without a time lag.
+
+        Args:
+            voxels: Padded voxel points of shape ``(num_voxels, max_points, channels)``.
+            time_lag_column: Point column holding the time lag, ``-1`` when the points have none.
+
+        Raises:
+            ValueError: If the points carry a time lag or are not laid out as
+                ``(x, y, z, intensity)``.
+        """
+        if time_lag_column != -1:
+            raise ValueError(
+                f"{type(self).__name__} reads single frames, the batch has a time lag in column "
+                f"{time_lag_column}. Load no sweeps."
+            )
+        self._check_channels(voxels, FRAME_POINT_CHANNELS, "(x, y, z, intensity)")
+
+    def forward(
+        self,
+        voxels: Float32[torch.Tensor, "num_voxels max_points 4"],
+        num_points: Int[torch.Tensor, " num_voxels"],
+    ) -> torch.Tensor:
+        """Reduce padded voxel points to one feature vector per voxel.
+
+        Args:
+            voxels: Padded voxel points of shape ``(num_voxels, max_points, 4)``.
+            num_points: Number of valid points per voxel of shape ``(num_voxels,)``.
+
+        Returns:
+            Voxel features of shape ``(num_voxels, 4)``, the mean position and intensity of the
+            points of the voxel.
+        """
+        slots = torch.arange(voxels.shape[1], device=voxels.device).unsqueeze(0)
+        _, mean = self._summarize(voxels, slots < num_points.long().unsqueeze(1))
+        return mean
+
+
 class SweepSplitVoxelFeatureEncoder(VoxelFeatureEncoder):
     """Encode the current frame and the past points of each voxel apart from each other.
 
@@ -124,9 +229,33 @@ class SweepSplitVoxelFeatureEncoder(VoxelFeatureEncoder):
     """
 
     out_channels = POINT_CHANNELS + SIDE_CHANNELS
-    reads_future = False
 
-    def forward(self, voxels: torch.Tensor, num_points: torch.Tensor) -> torch.Tensor:
+    def check_points(
+        self, voxels: Float32[torch.Tensor, "num_voxels max_points channels"], time_lag_column: int
+    ) -> None:
+        """Check that the batch points carry their time lag and no future points.
+
+        Args:
+            voxels: Padded voxel points of shape ``(num_voxels, max_points, 5)``.
+            time_lag_column: Point column holding the time lag, ``-1`` when the points have none.
+
+        Raises:
+            ValueError: If the time lag is in another column or missing, if the points are not
+                laid out as ``(x, y, z, intensity, time_lag)``, or if the batch has future points.
+        """
+        self._check_time_lag_column(time_lag_column)
+        self._check_channels(voxels, POINT_CHANNELS, "(x, y, z, intensity, time_lag)")
+        if bool((voxels[..., TIME_LAG_COLUMN] < 0).any()):
+            raise ValueError(
+                f"{type(self).__name__} reads no future points, but the batch has some. Load no "
+                "future sweeps or use PastFutureVoxelFeatureEncoder."
+            )
+
+    def forward(
+        self,
+        voxels: Float32[torch.Tensor, "num_voxels max_points 5"],
+        num_points: Int[torch.Tensor, " num_voxels"],
+    ) -> torch.Tensor:
         """Reduce padded voxel points to one feature vector per voxel.
 
         Args:
@@ -156,9 +285,28 @@ class PastFutureVoxelFeatureEncoder(VoxelFeatureEncoder):
     """
 
     out_channels = POINT_CHANNELS + 2 * SIDE_CHANNELS
-    reads_future = True
 
-    def forward(self, voxels: torch.Tensor, num_points: torch.Tensor) -> torch.Tensor:
+    def check_points(
+        self, voxels: Float32[torch.Tensor, "num_voxels max_points channels"], time_lag_column: int
+    ) -> None:
+        """Check that the batch points carry their time lag.
+
+        Args:
+            voxels: Padded voxel points of shape ``(num_voxels, max_points, 5)``.
+            time_lag_column: Point column holding the time lag, ``-1`` when the points have none.
+
+        Raises:
+            ValueError: If the time lag is in another column or missing, or if the points are
+                not laid out as ``(x, y, z, intensity, time_lag)``.
+        """
+        self._check_time_lag_column(time_lag_column)
+        self._check_channels(voxels, POINT_CHANNELS, "(x, y, z, intensity, time_lag)")
+
+    def forward(
+        self,
+        voxels: Float32[torch.Tensor, "num_voxels max_points 5"],
+        num_points: Int[torch.Tensor, " num_voxels"],
+    ) -> torch.Tensor:
         """Reduce padded voxel points to one feature vector per voxel.
 
         Args:
