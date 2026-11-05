@@ -16,7 +16,8 @@
 
 This script writes the export inputs of every module at set voxel counts per encoder stage, for
 latency benchmarks with trtexec. The voxels are as clustered as ``neighbors`` asks per stage, since
-the sparse convolutions cost more the more neighbors a voxel has.
+the sparse convolutions cost more the more neighbors a voxel has. Without ``neighbors``, the
+targets are measured on the train split of the config.
 """
 
 from __future__ import annotations
@@ -33,10 +34,13 @@ import hydra
 from jaxtyping import Float32, Int, Int64
 from omegaconf import DictConfig
 import torch
+from torch.utils.data import DataLoader
 
+from autoware_ml.builders.database_builder import build_datamodule
 from autoware_ml.builders.model_builder import build_data_preprocessor, build_model
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.models.segmentation3d.encoders.ptv3 import SerializedPoolingMeta
 from autoware_ml.models.segmentation3d.encoders.voxel import (
     TIME_LAG_COLUMN,
     MeanVoxelFeatureEncoder,
@@ -45,6 +49,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     prepare_ptv3_export_inputs,
 )
+from autoware_ml.types.dataset import SplitType
 from autoware_ml.utils.deploy import ExportSpec, validate_cuda_available
 from autoware_ml.utils.runtime import configure_torch_runtime, get_config_path, set_seed
 
@@ -64,6 +69,46 @@ def mean_neighbors(coords: Int[torch.Tensor, "num_voxels 3"]) -> float:
     around = (coords.long()[:, None] + 1 + _AROUND.to(coords.device)) @ weights
     found = keys[torch.searchsorted(keys, around).clamp(max=len(keys) - 1)] == around
     return float(found.sum()) / len(coords)
+
+
+def stage_neighbors(
+    grid_coord: Int[torch.Tensor, "num_voxels 3"],
+    pooling_metadata: Sequence[SerializedPoolingMeta],
+) -> list[float]:
+    """Return the mean neighbors of the input voxels and of every pooling stage, finest first."""
+    stages = [grid_coord, *(meta.grid_coord for meta in pooling_metadata)]
+    return [mean_neighbors(stage.cpu()) for stage in stages]
+
+
+def measure_neighbors(cfg: DictConfig, model: PTv3BaseModel) -> list[float]:
+    """Return the p99 over the train split of every stage's mean neighbors, finest first.
+
+    The frames go through the test transforms, without the training augmentations, as the
+    deployed model sees them.
+    """
+    cfg.datasets.train.transforms = cfg.datasets.test.transforms
+    datamodule = build_datamodule(cfg)
+    datamodule.prepare_data()
+    datamodule.setup("fit")
+    dataset = datamodule.datasets[SplitType.TRAIN]
+    loader = DataLoader(dataset, num_workers=cfg.num_workers, collate_fn=dataset.collate_fn)
+    neighbors = torch.empty(len(dataset), len(model.encoder.stride) + 1)
+    with torch.no_grad():
+        for frame, batch in enumerate(loader):
+            batch_inputs = model.on_after_batch_transfer(
+                batch.to_device(model.device), dataloader_idx=0
+            )
+            inputs = prepare_ptv3_export_inputs(model, batch_inputs)
+            neighbors[frame] = torch.tensor(
+                stage_neighbors(inputs.grid_coord, inputs.pooling_metadata)
+            )
+    targets = neighbors.quantile(0.99, dim=0).tolist()
+    logger.info(
+        "p99 over %d train frames: +neighbors=[%s]",
+        len(dataset),
+        ",".join(f"{value:.2f}" for value in targets),
+    )
+    return targets
 
 
 def _stage_shape(grid_shape: Int64[torch.Tensor, "3"], scale: int) -> Int64[torch.Tensor, "3"]:
@@ -199,7 +244,8 @@ def write_export_inputs(specs: Mapping[str, ExportSpec], out: Path) -> None:
 def main(cfg: DictConfig) -> None:
     """Write the export inputs at ``cfg.voxels`` voxels per stage to ``cfg.out``.
 
-    ``cfg.neighbors`` sets the mean occupied neighbors per stage, finest first.
+    ``cfg.neighbors`` sets the mean occupied neighbors per stage, finest first. Without it,
+    ``measure_neighbors`` measures them on the train split.
 
     Args:
         cfg: Hydra configuration.
@@ -222,7 +268,7 @@ def main(cfg: DictConfig) -> None:
         )
 
     voxels = list(cfg.voxels)
-    neighbors = list(cfg.neighbors)
+    neighbors = list(cfg.neighbors) if "neighbors" in cfg else measure_neighbors(cfg, model)
     grid_shape, _ = model.compute_export_geometry(torch.device("cpu"))
     generator = torch.Generator().manual_seed(cfg.seed)
     coords = voxel_layout(voxels, model.encoder.stride, grid_shape, neighbors, generator)
