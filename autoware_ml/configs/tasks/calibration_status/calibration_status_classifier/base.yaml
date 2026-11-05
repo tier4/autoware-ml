@@ -34,6 +34,10 @@ callbacks:
   dynamic_validation: null
 
 deploy:
+  onnx:
+    # One entry per module the model exports; {} keeps the shared deploy.onnx settings.
+    modules:
+      end_to_end: {}
   tensorrt:
     input_shapes:
       input:

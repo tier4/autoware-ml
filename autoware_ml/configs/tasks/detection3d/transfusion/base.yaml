@@ -39,6 +39,9 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
+    # One entry per module the model exports; {} keeps the shared deploy.onnx settings.
+    modules:
+      end_to_end: {}
   tensorrt:
     enabled: false
 

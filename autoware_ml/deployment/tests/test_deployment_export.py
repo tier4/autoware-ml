@@ -524,19 +524,20 @@ class TestErrorPaths:
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
 
-    def test_module_without_an_entry_exports_with_the_shared_settings(self, tmp_path: Path) -> None:
+    def test_module_without_an_entry_is_rejected(self, tmp_path: Path) -> None:
         """
-        Input: the default deploy config without any ``modules`` block.
-        Expected: the module exports with the shared settings.
-        Check: the ONNX file of the module exists.
+        Input: the default deploy config without any ``modules`` block, a model exporting
+            ``head``.
+        Expected: the module would silently export without its overrides, so the export stops.
+        Check: a ValueError naming the missing entry, and no file written.
         """
         deploy_cfg = OmegaConf.load(DEPLOY_YAML).deploy
         deploy_cfg.tensorrt.enabled = False
         exporter = _exporter(tmp_path, deploy_cfg)
 
-        outputs = exporter.export()
-
-        assert [path.name for path in outputs.onnx_exported_paths] == ["head.onnx"]
+        with pytest.raises(ValueError, match=r"missing entries for \['head'\]"):
+            exporter.export()
+        assert list((tmp_path / "exports").iterdir()) == []
 
     def test_spec_without_example_inputs_is_rejected(self, tmp_path: Path) -> None:
         """

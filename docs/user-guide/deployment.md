@@ -65,10 +65,12 @@ The output location is not configurable on its own.
 A model exports one or more deployable modules. Models without a dedicated
 export split produce a single module named `end_to_end`.
 
-Artifact files are named after the module. A module exports with the shared
-`deploy.onnx` settings unless it has an entry under `deploy.onnx.modules` that
-overrides them; an entry for a module the model does not export fails the
-deploy before the deploy run is created.
+Artifact files are named after the module. Every exported module has an entry
+under `deploy.onnx.modules`: `{}` exports it with the shared `deploy.onnx`
+settings, and any key in the entry overrides them. A module without an entry,
+or an entry for a module the model does not export, fails the deploy before the
+deploy run is created, so a module added to a model cannot silently export
+without its `metainfo` or `modify_graph`.
 
 ## Multi-head exports
 
@@ -126,8 +128,9 @@ collide with the automatically stamped properties fail at export time.
 
 ### ONNX Settings
 
-Shared settings live at `deploy.onnx`. A module that needs other settings
-gets an entry under `deploy.onnx.modules.<module>`, which overrides them:
+Shared settings live at `deploy.onnx`. Each exported module lists an entry
+under `deploy.onnx.modules.<module>`, `{}` to keep the shared settings or the
+keys that override them:
 
 ```yaml
 deploy:

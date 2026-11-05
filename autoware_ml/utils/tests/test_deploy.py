@@ -229,27 +229,44 @@ def test_merge_module_onnx_cfg_overlays_shared_and_module_settings() -> None:
     assert "modules" not in head
 
 
-def test_merge_module_onnx_cfg_gives_the_shared_settings_to_a_module_without_an_entry() -> None:
-    """A module only needs an entry when it overrides something."""
-    for onnx_cfg in (
-        OmegaConf.create({"opset_version": 17, "dynamo": False}),
-        OmegaConf.create({"opset_version": 17, "dynamo": False, "modules": {"other": {}}}),
-    ):
+def test_merge_module_onnx_cfg_gives_the_shared_settings_to_an_empty_entry() -> None:
+    """``{}`` and a bare key both mean "no overrides"."""
+    for modules in ({"head": {}}, {"head": None}):
+        onnx_cfg = OmegaConf.create({"opset_version": 17, "dynamo": False, "modules": modules})
         head = merge_module_onnx_cfg(onnx_cfg, "head")
         assert head.opset_version == 17
         assert head.dynamo is False
         assert "modules" not in head
 
 
-def test_module_entries_of_modules_the_model_does_not_export_are_refused() -> None:
-    """A misspelled entry would silently keep the shared settings."""
-    validate_onnx_modules_exported(OmegaConf.create({"opset_version": 17}), ["head"])
+def test_merge_module_onnx_cfg_refuses_a_module_without_an_entry() -> None:
+    """A module added to the model must be listed, or it would silently lose its overrides."""
+    for onnx_cfg in (
+        OmegaConf.create({"opset_version": 17, "dynamo": False}),
+        OmegaConf.create({"opset_version": 17, "dynamo": False, "modules": {"other": {}}}),
+    ):
+        with pytest.raises(KeyError, match="no entry for exported module 'head'"):
+            merge_module_onnx_cfg(onnx_cfg, "head")
+
+
+def test_module_entries_must_match_the_exported_modules() -> None:
+    """A missing entry drops a module's overrides; a misspelled one applies to nothing."""
     validate_onnx_modules_exported(
-        OmegaConf.create({"modules": {"head": {"precision": "fp16"}}}), ["encoder", "head"]
+        OmegaConf.create({"modules": {"encoder": {}, "head": {"precision": "fp16"}}}),
+        ["encoder", "head"],
     )
+    with pytest.raises(ValueError, match=r"missing entries for \['head'\].*\['head'\]"):
+        validate_onnx_modules_exported(OmegaConf.create({"opset_version": 17}), ["head"])
     with pytest.raises(ValueError, match=r"\['heads'\].*\['encoder', 'head'\]"):
         validate_onnx_modules_exported(
-            OmegaConf.create({"modules": {"heads": {"precision": "fp16"}}}), ["encoder", "head"]
+            OmegaConf.create({"modules": {"encoder": {}, "heads": {"precision": "fp16"}}}),
+            ["encoder", "head"],
+        )
+    with pytest.raises(
+        ValueError, match=r"missing entries for \['head'\], entries for \['heads'\]"
+    ):
+        validate_onnx_modules_exported(
+            OmegaConf.create({"modules": {"encoder": {}, "heads": {}}}), ["encoder", "head"]
         )
 
 

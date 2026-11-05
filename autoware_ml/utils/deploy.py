@@ -138,39 +138,54 @@ def merge_module_onnx_cfg(onnx_cfg: DictConfig, module_name: str) -> DictConfig:
     """Return the ONNX settings of one exported module.
 
     The shared ``deploy.onnx`` settings, overridden by the module's entry under
-    ``deploy.onnx.modules`` when it has one. The ``modules`` key itself is left out.
+    ``deploy.onnx.modules``. The ``modules`` key itself is left out.
 
     Args:
-        onnx_cfg: ``deploy.onnx``, with its optional ``modules`` overrides.
+        onnx_cfg: ``deploy.onnx``, with one ``modules`` entry per exported module.
         module_name: The exported module, as the export specs name it.
+
+    Raises:
+        KeyError: When the module has no entry; an empty entry keeps the shared settings.
     """
+    modules_cfg = onnx_cfg.get("modules") or {}
+    if module_name not in modules_cfg:
+        raise KeyError(
+            f"deploy.onnx.modules has no entry for exported module '{module_name}'; "
+            f"its entries are {sorted(modules_cfg)}. Add '{module_name}: {{}}' to export it "
+            "with the shared deploy.onnx settings."
+        )
     shared = {
         k: v for k, v in OmegaConf.to_container(onnx_cfg, resolve=True).items() if k != "modules"
     }
-    module_cfg = (onnx_cfg.get("modules") or {}).get(module_name)
+    module_cfg = modules_cfg[module_name]
     module_overrides = OmegaConf.to_container(module_cfg, resolve=True) if module_cfg else {}
     return OmegaConf.create({**shared, **module_overrides})
 
 
 def validate_onnx_modules_exported(onnx_cfg: DictConfig, module_names: Iterable[str]) -> None:
-    """Refuse a ``deploy.onnx.modules`` entry of a module the model does not export.
+    """Refuse ``deploy.onnx.modules`` that does not name exactly the modules the model exports.
 
-    Its settings would apply to nothing, so a misspelled module name would silently keep the
-    shared settings.
+    Every exported module needs an entry, ``{}`` when it keeps the shared settings, so a module
+    added to the model cannot silently export without its ``metainfo`` or ``modify_graph``. An
+    entry of a module the model does not export would apply to nothing, so a misspelled module
+    name would silently keep the shared settings.
 
     Args:
-        onnx_cfg: ``deploy.onnx``, with its optional ``modules`` overrides.
+        onnx_cfg: ``deploy.onnx``, with one ``modules`` entry per exported module.
         module_names: The modules the export specs name.
 
     Raises:
-        ValueError: Naming the entries and the exported modules.
+        ValueError: Naming the modules without an entry and the entries without a module.
     """
     module_names = list(module_names)
-    unknown = sorted(set(onnx_cfg.get("modules") or {}) - set(module_names))
-    if unknown:
+    entries = set(onnx_cfg.get("modules") or {})
+    missing = sorted(set(module_names) - entries)
+    unknown = sorted(entries - set(module_names))
+    if missing or unknown:
         raise ValueError(
-            f"deploy.onnx.modules has entries for {unknown}, which the model does not export; "
-            f"its modules are {module_names}."
+            f"deploy.onnx.modules needs one entry per exported module: missing entries for "
+            f"{missing}, entries for {unknown} of modules the model does not export; its modules "
+            f"are {module_names}. An empty entry ({{}}) keeps the shared deploy.onnx settings."
         )
 
 

@@ -45,6 +45,11 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
+    # One entry per module the model exports; {} keeps the shared deploy.onnx settings.
+    # A config with camera_network exports bevfusion_image_backbone and bevfusion_camera_lidar
+    # instead, and lists those two.
+    modules:
+      bevfusion_lidar: {}
   tensorrt:
     enabled: false
 

@@ -109,7 +109,7 @@ def _deploy_cfg(tmp_path: Path, logger_enabled: bool = True) -> DictConfig:
             "experiment_uid": "2026.10.15.12.00.00",
             "experiment_run_dir": str(tmp_path / "work" / "gen1_base"),
             "seed": 0,
-            "deploy": {"onnx": {"modules": {}}},
+            "deploy": {"onnx": {"modules": {"head": {}}}},
             "logger": (
                 {
                     "_target_": "lightning.pytorch.loggers.MLFlowLogger",
@@ -223,18 +223,25 @@ def test_run_deploy_refuses_configured_tensor_names_before_the_run_exists(
     assert not (tmp_path / "mlruns" / "mlflow.db").exists()
 
 
-def test_run_deploy_refuses_a_module_entry_the_model_does_not_export_before_the_run_exists(
-    tmp_path: Path, hydra_runtime: HydraRuntime
+@pytest.mark.parametrize(
+    ("modules", "match"),
+    [
+        pytest.param({"head": {}, "haed": {}}, r"\['haed'\].*\['head'\]", id="unexported_entry"),
+        pytest.param({}, r"missing entries for \['head'\]", id="missing_entry"),
+    ],
+)
+def test_run_deploy_refuses_mismatched_module_entries_before_the_run_exists(
+    tmp_path: Path, hydra_runtime: HydraRuntime, modules: dict, match: str
 ) -> None:
     """
-    Input: MLflow enabled, a model exporting ``head`` and a config with a ``modules`` entry
-        of ``haed``.
-    Expected: the deploy fails naming the entry after the model is built but before the
+    Input: MLflow enabled, a model exporting ``head`` and a config whose ``modules`` entries
+        either add ``haed`` or leave ``head`` out.
+    Expected: the deploy fails naming the mismatch after the model is built but before the
         MLflow run is created, so no FAILED run is left behind.
     Check: the raised error, the export not running and the absence of the SQLite store.
     """
     cfg = _deploy_cfg(tmp_path)
-    cfg.deploy.onnx.modules.haed = {}
+    cfg.deploy.onnx.modules = modules
     checkpoint_path = _checkpoint(tmp_path)
 
     with (
@@ -245,7 +252,7 @@ def test_run_deploy_refuses_a_module_entry_the_model_does_not_export_before_the_
         ),
         patch.object(deploy_script, "_build", return_value=_built(("head",))),
         patch.object(deploy_script, "_export") as export_mock,
-        pytest.raises(ValueError, match=r"\['haed'\].*\['head'\]"),
+        pytest.raises(ValueError, match=match),
     ):
         deploy_script.run_deploy(cfg)
 
