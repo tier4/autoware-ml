@@ -27,6 +27,7 @@ import torch
 
 from autoware_ml.scripts.make_ptv3_synthetic_inputs import (
     mean_neighbors,
+    stage_neighbors,
     voxel_layout,
     write_export_inputs,
 )
@@ -104,6 +105,41 @@ class TestVoxelLayout(unittest.TestCase):
 
         self.assertEqual(len(torch.unique(grid, dim=0)), 320)
         self.assertEqual(grid.max(dim=0).values.tolist(), [7, 7, 4])
+
+
+class TestStageNeighbors(unittest.TestCase):
+    """Unit tests for stage_neighbors."""
+
+    def test_counts_neighbors_on_every_pooled_stage(self) -> None:
+        """
+        Input: every cell of a 16^3 cube, pooled by 2 four times with the model's serialized
+        pooling.
+        Expected: cubes of side 16, 8, 4, 2 and 1, whose voxels have ((3n - 2) / n)^3 - 1
+        neighbors on average.
+        Check: the mean neighbors of every stage, finest first.
+        """
+        grid = torch.cartesian_prod(*[torch.arange(16)] * 3)
+        point, _ = serialize_point_cloud_batch(
+            {
+                "coord": grid.float(),
+                "feat": grid.float(),
+                "grid_coord": grid,
+                "offset": torch.tensor([len(grid)]),
+            },
+            PTv3BaseModel.EXPORT_ORDER,
+            torch.tensor(5),
+        )
+        metadata = build_serialized_pooling_metadata(
+            point["grid_coord"],
+            point["serialized_code"],
+            point["serialized_order"],
+            [2, 2, 2, 2],
+            [64] * 5,
+        )
+
+        expected = [((3 * side - 2) / side) ** 3 - 1 for side in (16, 8, 4, 2, 1)]
+        for measured, value in zip(stage_neighbors(grid, metadata), expected, strict=True):
+            self.assertAlmostEqual(measured, value)
 
 
 class TestWriteExportInputs(unittest.TestCase):
