@@ -71,7 +71,7 @@ select a datamodule config from `configs/datamodule/` and override what they nee
 
 ```yaml
 defaults:
-  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - /database@database: t4dataset/t4dataset_base
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
   - _self_
 
@@ -372,6 +372,10 @@ AUTOWARE_ML_CONFIGS_PATH=/path/to/configs
 # Root of the scenario lists of custom databases.
 AUTOWARE_ML_SCENARIOS_PATH=/path/to/scenarios
 ```
+
+The bundled T4Dataset configs train on the `t4dataset/t4dataset_base` database. It reads the
+scenario list `t4dataset/detection3d_segmentation3d/db_default.yaml` below
+`AUTOWARE_ML_SCENARIOS_PATH` and the scenes under `t4dataset/db_default/` of the data directory.
 
 The external configs only add configs. They use the bundled ones by the same names, relative
 defaults included, and run by name like a bundled config. A config path that exists in both is an

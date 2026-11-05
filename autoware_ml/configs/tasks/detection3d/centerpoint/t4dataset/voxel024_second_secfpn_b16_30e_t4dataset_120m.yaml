@@ -1,13 +1,13 @@
 # @package _global_
 defaults:
   - base_voxel024_120m
-  - /database@database: t4dataset/t4dataset_jpntaxi_base
+  - /database@database: t4dataset/t4dataset_base
   - override /database/t4dataset/taxonomy@database.taxonomy: default_dynamic
   - _self_
 
 batch_size: 16
 num_workers: 16
-experiment_group_name: centerpoint/${database.version}/jpntaxi_base
+experiment_group_name: centerpoint/${database.version}/t4dataset
 experiment_name: voxel024_second_secfpn_b16_30e_t4dataset_120m
 
 trainer:
@@ -18,12 +18,8 @@ callbacks:
     # Validate every 5 epochs, then every epoch over the last 10 of the 30-epoch schedule.
     epoch_intervals: [[0, 5], [20, 1]]
 
-# Include weights for pre-training
-weights: ???
-
-# Load a lower learning rate when it loads from a pre-training weight
 optimizer:
-  lr: 5.0e-5
+  lr: 1.0e-4
 
 model:
   scheduler:

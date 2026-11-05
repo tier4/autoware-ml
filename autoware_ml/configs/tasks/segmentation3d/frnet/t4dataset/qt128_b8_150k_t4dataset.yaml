@@ -1,10 +1,10 @@
 # @package _global_
 defaults:
   - base_qt128
-  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - /database@database: t4dataset/t4dataset_base
   - _self_
 
 batch_size: 8
 num_workers: 8
-experiment_group_name: frnet/${database.version}/j6gen2_semaseg
+experiment_group_name: frnet/${database.version}/t4dataset
 experiment_name: qt128_b8_150k_t4dataset

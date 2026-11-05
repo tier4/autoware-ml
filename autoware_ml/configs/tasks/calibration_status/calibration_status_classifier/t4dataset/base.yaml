@@ -11,3 +11,16 @@ camera_sources:
   - CAM_BACK_LEFT
   - CAM_FRONT_RIGHT
   - CAM_BACK_RIGHT
+
+datamodule:
+  predict_dataloader:
+    batch_size: 1
+
+# Image sizes of the T4 cameras, the TensorRT profile of the export.
+deploy:
+  tensorrt:
+    input_shapes:
+      input:
+        min_shape: [1, 5, 1080, 1920]
+        opt_shape: [1, 5, 1860, 2880]
+        max_shape: [1, 5, 2160, 3840]

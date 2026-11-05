@@ -96,7 +96,7 @@ def test_stamp_release_export_with_metainfo(tmp_path) -> None:
     _tiny_model(path)
     stamp_onnx_meta(
         path,
-        config_name="multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m_j6gen2_det3d_seg3d",
+        config_name="multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m",
         module="ptv3_det3d_head",
         release="v0.0.1",
         export_git_sha="be5b967",
@@ -136,7 +136,7 @@ def test_stamp_unversioned_export_without_metainfo(tmp_path) -> None:
     _tiny_model(path)
     stamp_onnx_meta(
         path,
-        config_name="segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg",
+        config_name="segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m",
         module="ptv3_encoder",
         release=None,
         export_git_sha="be5b967",
@@ -156,7 +156,7 @@ def test_stamp_rejects_reserved_metainfo_keys(tmp_path) -> None:
     with pytest.raises(ValueError, match="reserved"):
         stamp_onnx_meta(
             path,
-            config_name="segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg",
+            config_name="segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m",
             module="ptv3_encoder",
             release=None,
             export_git_sha="be5b967",

@@ -303,16 +303,16 @@ datamodule:
     batch_size: 1
 ```
 
-```yaml title="configs/tasks/my_task/my_model/t4dataset/my_model_b8_50e_t4dataset_122m_j6gen2_semaseg.yaml"
+```yaml title="configs/tasks/my_task/my_model/t4dataset/my_model_b8_50e_t4dataset_122m.yaml"
 # @package _global_
 defaults:
   - base_122m
-  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
+  - /database@database: t4dataset/t4dataset_base
   - _self_
 
 batch_size: 8
 num_workers: 4
-experiment_group_name: my_model/${database.version}/j6gen2_semaseg
+experiment_group_name: my_model/${database.version}/t4dataset
 experiment_name: my_model_b8_50e_t4dataset_122m
 
 trainer:
@@ -462,13 +462,13 @@ Use these rules when creating `<variant>`:
 - do not encode properties that are inherent to the model family
 - normalize voxel sizes as `voxel020`, `voxel005`
 - encode ranges as human-readable suffixes such as `50m`, `90m`, `102m`, `121m`
-- keep dataset names explicit and stable, for example `nuscenes` and `t4dataset_j6gen2`
+- keep dataset names explicit and stable, for example `nuscenes` and `t4dataset`
 
 Examples:
 
 ```text
 segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m
-segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m_j6gen2_semaseg
+segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m
 my_task/my_model/my_dataset/my_variant_my_dataset
 ```
 

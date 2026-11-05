@@ -59,14 +59,14 @@ def test_resolve_deploy_lineage_has_no_parent_for_a_multi_checkpoint_export(
         tmp_path,
         "detection",
         run_id="det-run",
-        experiment_name="ptv3/t4_v2/j6gen2/voxel012",
+        experiment_name="ptv3/t4_v2/base/voxel012",
         config_name="detection3d/ptv3/voxel012",
     )
     segmentation3d_checkpoint = _write_checkpoint_metadata(
         tmp_path,
         "segmentation",
         run_id="seg-run",
-        experiment_name="ptv3_seg3d/t4_v2/j6gen2/voxel012",
+        experiment_name="ptv3_seg3d/t4_v2/base/voxel012",
         config_name="segmentation3d/ptv3/voxel012",
     )
 
@@ -88,14 +88,14 @@ def test_resolve_deploy_lineage_keeps_single_checkpoint_parent(tmp_path: Path) -
         tmp_path,
         "detection",
         run_id="det-run",
-        experiment_name="ptv3/t4_v2/j6gen2/voxel012",
+        experiment_name="ptv3/t4_v2/base/voxel012",
         config_name=config_name,
     )
 
     parent_run_id, source_checkpoints = resolve_deploy_lineage([checkpoint])
 
     assert parent_run_id == "det-run"
-    assert source_checkpoints[0]["experiment_name"] == "ptv3/t4_v2/j6gen2/voxel012"
+    assert source_checkpoints[0]["experiment_name"] == "ptv3/t4_v2/base/voxel012"
 
 
 def _deploy_cfg(tmp_path: Path, logger_enabled: bool = True) -> DictConfig:
@@ -105,9 +105,9 @@ def _deploy_cfg(tmp_path: Path, logger_enabled: bool = True) -> DictConfig:
     return OmegaConf.create(
         {
             "experiment_group_name": "centerpoint/t4_v2",
-            "experiment_name": "gen1_base",
+            "experiment_name": "base",
             "experiment_uid": "2026.10.15.12.00.00",
-            "experiment_run_dir": str(tmp_path / "work" / "gen1_base"),
+            "experiment_run_dir": str(tmp_path / "work" / "base"),
             "seed": 0,
             "deploy": {"onnx": {"modules": {}}},
             "logger": (
@@ -176,7 +176,7 @@ def test_record_deploy_run_writes_config_overrides_metadata_and_params(
     )
 
     config_dir = run_context.artifact_dir / CONFIG_ARTIFACTS_DIRNAME
-    assert OmegaConf.load(config_dir / "resolved.yaml").experiment_name == "gen1_base"
+    assert OmegaConf.load(config_dir / "resolved.yaml").experiment_name == "base"
     assert (config_dir / "overrides.txt").read_text(encoding="utf-8").splitlines() == list(
         hydra_runtime.overrides
     )
@@ -190,7 +190,7 @@ def test_record_deploy_run_writes_config_overrides_metadata_and_params(
     assert metadata["checkpoint_path"] == str(checkpoint_path)
     assert metadata["source_checkpoints"] == source_checkpoints
     run = MlflowClient(tracking_uri=cfg.logger.tracking_uri).get_run(run_context.run_id)
-    assert run.data.params["experiment_name"] == "gen1_base"
+    assert run.data.params["experiment_name"] == "base"
 
 
 def test_run_deploy_refuses_configured_tensor_names_before_the_run_exists(
