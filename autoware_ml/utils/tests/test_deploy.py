@@ -31,7 +31,6 @@ from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
     ExportSpec,
-    apply_spec_modifiers,
     dynamic_shapes_from_spec,
     export_to_onnx,
     merge_module_onnx_cfg,
@@ -198,38 +197,6 @@ def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
     dynamic_shapes = ({0: "dim0"}, {0: "dim1"})
 
     assert normalize_dynamic_shapes_for_model(_VarArgsModel(), dynamic_shapes) == (dynamic_shapes,)
-
-
-def test_apply_spec_modifiers_runs_them_in_order_and_returns_the_last_path(
-    tmp_path: Path,
-) -> None:
-    calls: list[tuple[str, Path]] = []
-
-    def _modifier(tag: str):
-        def modify(onnx_path: Path) -> Path:
-            calls.append((tag, onnx_path))
-            return onnx_path.with_name(f"{onnx_path.stem}.{tag}.onnx")
-
-        return modify
-
-    spec = ExportSpec(
-        module=torch.nn.Identity(),
-        args=(torch.zeros(1),),
-        input_names=["x"],
-        output_names=["y"],
-        onnx_modifiers=(_modifier("first"), _modifier("second")),
-    )
-
-    final_path = apply_spec_modifiers(spec, tmp_path / "head.onnx")
-
-    assert calls == [("first", tmp_path / "head.onnx"), ("second", tmp_path / "head.first.onnx")]
-    assert final_path == tmp_path / "head.first.second.onnx"
-    assert (
-        apply_spec_modifiers(
-            ExportSpec(torch.nn.Identity(), (torch.zeros(1),), ["x"], ["y"]), tmp_path / "head.onnx"
-        )
-        == tmp_path / "head.onnx"
-    )
 
 
 def test_should_modify_graph_handles_none_and_config() -> None:

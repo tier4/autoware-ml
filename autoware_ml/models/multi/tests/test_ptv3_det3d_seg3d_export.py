@@ -37,7 +37,6 @@ from autoware_ml.models.segmentation3d.ptv3_base import seg3d_head_export_input_
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.checkpoints import apply_matching_weights
-from autoware_ml.utils.onnx_modifiers import TransHeadTensorRTModifier
 
 EXPECTED_PTV3_INPUT_NAMES = [
     "voxels",
@@ -357,25 +356,3 @@ def test_ptv3_det3d_seg3d_seg3d_logits_invariant_to_det3d_branch_pass() -> None:
         seg3d_only_logits = model.seg3d_head(point)
 
     torch.testing.assert_close(joint_logits, seg3d_only_logits)
-
-
-@pytest.mark.skipif(
-    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
-    reason="PTv3 sparse-convolution tests require CUDA spconv",
-)
-def test_ptv3_det3d_seg3d_split_export_patches_only_the_detection_head() -> None:
-    """
-    Input: the split export of the joint model.
-    Expected: only the detection head spec declares the TransHead TensorRT patches, with the
-        head's proposal count; the encoder and the segmentation head declare none.
-    Check: ``onnx_modifiers`` of the three specs.
-    """
-    model = _build_det3d_seg3d_model().cuda().eval()
-
-    specs = model.build_export_specs(build_inputs(device=torch.device("cuda")))
-
-    assert specs["ptv3_det3d_head"].onnx_modifiers == (
-        TransHeadTensorRTModifier(k=model.bbox_head.num_proposals),
-    )
-    assert specs["ptv3_encoder"].onnx_modifiers == ()
-    assert specs["ptv3_seg3d_head"].onnx_modifiers == ()

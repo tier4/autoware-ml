@@ -23,7 +23,6 @@ from omegaconf import DictConfig, OmegaConf
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
-    apply_spec_modifiers,
     ExportSpec,
     resolve_export_specs,
     validate_onnx_modules_exported,
@@ -132,8 +131,6 @@ class DeploymentExport:
                 else:
                     validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
                     export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
-                    # The architecture's own patches first, then the config's fallback.
-                    module_onnx_path = apply_spec_modifiers(export_spec, module_onnx_path)
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
