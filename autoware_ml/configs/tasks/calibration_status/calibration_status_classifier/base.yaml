@@ -33,7 +33,6 @@ callbacks:
 
 deploy:
   onnx:
-    # One entry per module the model exports; {} keeps the shared deploy.onnx settings.
     modules:
       end_to_end: {}
 
