@@ -1,5 +1,0 @@
-# @package _global_
-defaults:
-  - base
-  - /tasks/segmentation3d/ptv3/encoder_tiny
-  - _self_

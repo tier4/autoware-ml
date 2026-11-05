@@ -117,7 +117,7 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
-        taxonomy: DatabaseTaxonomy,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         lidar_pointcloud_num_features: int,
@@ -196,8 +196,8 @@ See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Record Generation
 
-There is no separate generation entrypoint. A task config composes its database from
-`autoware_ml/configs/database/`, Hydra instantiates it, and the datamodule builds the record
+There is no separate generation entrypoint. A task config composes its database from the
+`database` config group, Hydra instantiates it, and the datamodule builds the record
 table of every database that has no cache yet in `prepare_data()`, which Lightning calls once
 on the main node before `setup()`:
 
@@ -214,11 +214,10 @@ the cached table. Override the generation parameters from the command line with 
 autoware-ml train --config-name <task>/<model>/<config> database.num_workers=32
 ```
 
-The table is written under `cache_root_path`, `<data_root_path>/.cache` next to the data by
-default where `data_root_path` is `AUTOWARE_ML_DATA_PATH`, as
-`<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet`. The hash covers the scenario
-lists and every field that changes the records, so a changed database writes a new table next
-to the old one. See [Configuration Guide](../user-guide/configuration.md) for the path keys.
+The table is written under `cache_root_path`, `AUTOWARE_ML_CACHE_PATH` of `.env` or `.cache` of
+the repository root, as `<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet`. The
+hash covers the scenario lists and every field that changes the records, so a changed database
+writes a new table next to the old one. See [Configuration Guide](../user-guide/configuration.md) for the path keys.
 
 ## Extending the Database
 
@@ -237,4 +236,4 @@ to the old one. See [Configuration Guide](../user-guide/configuration.md) for th
 | `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
 | `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |
 | `autoware_ml/datamodule/data_module.py`       | `prepare_data()` builds the record tables             |
-| `autoware_ml/configs/database/`               | YAML configs of every database                        |
+| `autoware_ml/configs/database/`               | Bundled database configs                              |

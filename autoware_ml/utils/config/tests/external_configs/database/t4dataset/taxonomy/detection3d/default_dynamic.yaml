@@ -1,0 +1,19 @@
+_target_: autoware_ml.databases.taxonomy.LabelTaxonomy
+
+defaults:
+  - /database/t4dataset/taxonomy/vocabulary@vocabulary: default_detection3d
+  - _self_
+
+ignore_index: -1
+class_names: ???
+class_mapping:
+  car: car
+  truck: truck
+  bus: bus
+  motorcycle: bicycle
+  bicycle: bicycle
+  pedestrian: pedestrian
+  animal: null
+  barrier: barrier
+  traffic_cone: traffic_cone
+  debris: barrier

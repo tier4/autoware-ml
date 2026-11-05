@@ -601,7 +601,7 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
             lidar_network=self._build_lidar_network(),
             camera_network=None,
             partial_annotations=PartialAnnotations(
-                class_names=self.class_names, partial_ignore_labels=["cyclist"]
+                class_names=self.class_names, partially_annotated_classes=["cyclist"]
             ),
         )
 

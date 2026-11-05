@@ -1,9 +1,9 @@
 # @package _global_
 defaults:
   - /tasks/default_task
-  - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/segmentation3d/ptv3/encoder
   - /tasks/segmentation3d/ptv3/voxel_encoder
-  - /tasks/segmentation3d/ptv3/seg3d_head_base
+  - /tasks/segmentation3d/ptv3/seg3d_head
   - _self_
 
 database: ???
@@ -60,7 +60,7 @@ deploy:
       ptv3_seg3d_head:
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
-          class_names: ${database.taxonomy.segmentation3d.class_names}
+          class_names: ${taxonomy.segmentation3d.class_names}
   tensorrt:
     enabled: false
 

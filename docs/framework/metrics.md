@@ -364,6 +364,12 @@ own reachable sets enter through the collision metrics, not through the filter.
     </svg>
 </div>
 
+**Class catalog.** Every dataset family keeps a class catalog per task in
+`configs/metrics/<dataset>/<task>/class_catalog/`, one row per class name with its behaviour group,
+the distance it is evaluated up to (`max_distance`), its collision `motion_model` and `max_speed`,
+and whether the partial detection score checks it. A model reads the rows of the classes it
+trains, and a trained class the catalog does not list stops the run.
+
 **Behaviour groups.** `class_groups` folds the trained classes onto behaviour-equivalent groups.
 Confusing a bus for a truck does not change how the vehicle drives, so inside a group it counts
 as a hit. Grouping always replaces the class axis, never extends it: the same suite is configured
@@ -481,9 +487,9 @@ configs and tunable there, the rest are code defaults.
 | object body                           | the object's own box length and width                                                     |
 | wheeled speed on the map              | the lanelet speed limit at the agent's position                                           |
 | off-map fallback speed                | 16.7 m/s (config)                                                                         |
-| living run speeds                     | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
+| omnidirectional max speeds            | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
 | wheeled classes                       | car, truck, bus, train, motorcycle                                                        |
-| living classes                        | pedestrian, animal, bicycle                                                               |
+| omnidirectional classes               | pedestrian, animal, bicycle                                                               |
 | static classes (footprint only)       | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension                            |
 | corridor width                        | 3.0 m (config)                                                                            |
 
@@ -1156,8 +1162,8 @@ right there.
 rewards partial hits with a saturating credit: for a pedestrian or a cone, classifying even a few
 points correctly is far better than none, which point-averaged mIoU cannot see. A diagnostic
 metric of the joint detection plus segmentation suite (`datasets/<dataset>/det3d_seg3d`), whose
-`seg3d_frames` carry the detection ground-truth boxes. The metric config of each taxonomy lists the
-classes it reports in `partial_detection3d_classes`.
+`seg3d_frames` carry the detection ground-truth boxes. The detection class catalog marks the
+classes it reports with `partial_detection`.
 
 <div class="metrics-fig">
 <svg viewBox="0 0 660 210" width="660" height="210" role="img" aria-labelledby="fig-d3-title">
@@ -1299,8 +1305,8 @@ it, so overriding a suite directly would mean restating every field.
 model:
   metrics:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
-      class_names: ${database.taxonomy.detection3d.class_names}
-      eval_class_range: ${eval_class_range}
+      class_names: ${taxonomy.detection3d.class_names}
+      max_distances: ${metric_params.detection3d.max_distances}
       ranges: ${metric_ranges}
       components:
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }

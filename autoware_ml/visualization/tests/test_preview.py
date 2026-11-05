@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -47,6 +47,7 @@ from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
 from autoware_ml.types.dataset import SplitType
+from autoware_ml.types.tasks import TaskType
 from autoware_ml.types.geometry import (
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
@@ -252,13 +253,16 @@ class _PreviewDataModule:
         self.datasets: dict[SplitType, ConcatDataset] = {}
         self.prepared = False
         self.stages: list[str | None] = []
-        taxonomy = SimpleNamespace(
-            segmentation3d=SimpleNamespace(
-                class_names=_SEGMENTATION_CLASSES, ignore_index=_IGNORE_INDEX
+        dataset.dataset_tasks = {
+            TaskType.SEGMENTATION3D: SimpleNamespace(
+                taxonomy=SimpleNamespace(
+                    class_names=_SEGMENTATION_CLASSES, ignore_index=_IGNORE_INDEX
+                )
             ),
-            detection3d=SimpleNamespace(class_names=_DETECTION_CLASSES),
-        )
-        self.source = SimpleNamespace(database=SimpleNamespace(taxonomy=taxonomy))
+            TaskType.DETECTION3D: SimpleNamespace(
+                taxonomy=SimpleNamespace(class_names=_DETECTION_CLASSES)
+            ),
+        }
 
     def prepare_data(self) -> None:
         """Record that the record tables were prepared."""
@@ -268,11 +272,6 @@ class _PreviewDataModule:
         """Serve the dataset as the test split."""
         self.stages.append(stage)
         self.datasets[SplitType.TEST] = ConcatDataset(datasets=[self.dataset], repeats=[1])
-
-    def split_sources(self, split: SplitType) -> Mapping[str, SimpleNamespace]:
-        """Return the single source of every split."""
-        del split
-        return {"preview": self.source}
 
 
 class _PreviewModel:
@@ -484,8 +483,8 @@ class TestDataPreview(_PreviewTestCase):
         self.assertEqual(backend.timestamps, [1.0])
         self.assertTrue(backend.waited)
 
-    def test_preview_labels_classes_from_the_database_taxonomy(self) -> None:
-        """Without configured class names the legend uses the database taxonomy."""
+    def test_preview_labels_classes_from_the_task_taxonomy(self) -> None:
+        """Without configured class names the legend uses the taxonomy of the task."""
         backend = self.run_preview(_SampleDataset([_sample(segmentation=True)]))
 
         self.assertLessEqual(set(_SEGMENTATION_CLASSES), _legend_labels(backend))

@@ -18,13 +18,26 @@ from autoware_ml.datamodule.samplers import (
     GroupStreamingSampler,
     compute_frame_sampling_weights,
 )
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
 _CLASSES = ["car", "pedestrian", "bicycle"]
 _RULES = [["bicycle", "vehicle_state.parked"]]
-_IGNORE_INDEX = -1
+# A police car trains as a car, an animal is of no trained class
+_TAXONOMY = LabelTaxonomy(
+    LabelVocabulary({name: name for name in (*_CLASSES, "police_car", "animal")}),
+    _CLASSES,
+    {
+        "car": "car",
+        "pedestrian": "pedestrian",
+        "bicycle": "bicycle",
+        "police_car": "car",
+        "animal": None,
+    },
+    -1,
+)
 
 
 def config(**overrides) -> FrameSamplingConfig:
@@ -35,8 +48,7 @@ def config(**overrides) -> FrameSamplingConfig:
         pedestrian_class_name="pedestrian",
         low_pedestrian_height_threshold=1.5,
         low_pedestrian_bev_range=[-50.0, -50.0, 50.0, 50.0],
-        class_names=_CLASSES,
-        ignore_index=_IGNORE_INDEX,
+        taxonomy=_TAXONOMY,
         filter_attributes=_RULES,
         seed=0,
     )
@@ -62,9 +74,6 @@ def box(
         "box3d_instance_id": f"{label_name}-{x}",
         "box3d_dataset_label_name": label_name,
         "box3d_label_name": label_name,
-        "box3d_label_index": (
-            _CLASSES.index(label_name) if label_name in _CLASSES else _IGNORE_INDEX
-        ),
         "box3d_num_lidar_points": points,
         "box3d_num_radar_points": 0,
         "box3d_valid": valid,
@@ -122,7 +131,7 @@ def test_a_frame_weighs_as_much_as_its_rarest_category() -> None:
     assert weights[2:] == [1.0, 1.0]
 
 
-def test_a_box_counts_as_the_class_its_label_index_names() -> None:
+def test_a_box_counts_as_the_class_the_taxonomy_folds_it_onto() -> None:
     # A police car keeps its annotated name and trains as a car, so a frame of police cars
     # weighs like a frame of cars and not like a frame without a counted box.
     police_car = {**box("car"), "box3d_label_name": "police_car"}
@@ -215,11 +224,11 @@ def test_a_repeated_source_weighs_like_its_records_listed_that_many_times() -> N
     assert repeated == listed == single * 3
 
 
-def test_rejects_a_box_label_index_outside_the_classes() -> None:
-    # Only the ignore index marks a box of no trained class, any other index is a corrupt table
-    stray = {**box("car"), "box3d_label_index": len(_CLASSES)}
+def test_rejects_a_box_label_the_taxonomy_does_not_map() -> None:
+    # A fine name outside the vocabulary of the taxonomy is a corrupt table
+    stray = {**box("car"), "box3d_label_name": "tram"}
 
-    with pytest.raises(ValueError, match="outside the 3 trained classes"):
+    with pytest.raises(KeyError, match="tram"):
         compute_frame_sampling_weights(ConcatDataset([dataset([[stray]])], [1]), config())
 
 
@@ -234,7 +243,14 @@ def test_rejects_a_split_without_boxes() -> None:
         {"repeat_sampling_factor": 0.0},
         {"object_bev_range": [0.0, 0.0, 0.0, 0.0]},
         {"pedestrian_class_name": "person"},
-        {"class_names": [*_CLASSES, LOW_PEDESTRIAN_CATEGORY]},
+        {
+            "taxonomy": LabelTaxonomy(
+                LabelVocabulary({"car": "car"}),
+                [*_CLASSES, LOW_PEDESTRIAN_CATEGORY],
+                {"car": "car"},
+                -1,
+            )
+        },
         {"filter_attributes": [["bicycle"]]},
     ],
 )

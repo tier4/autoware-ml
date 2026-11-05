@@ -12,24 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Label taxonomies of a database.
+"""Label vocabularies of a database and label taxonomies of a model.
 
 A vocabulary maps the raw label names of a dataset family onto fine label names, the finest
-distinction the corpus supports, and names the raw labels that are outside every level. A raw
+distinction the corpus supports, and names the raw labels that are outside every taxonomy. A raw
 label the vocabulary does not list is an error, so a new category of a corpus is discovered
-instead of being ignored. A taxonomy selects the classes trained at one level of granularity
-and folds every fine name onto one of them or drops it. Boxes are baked with the fine name and
-the class index of the level when the record table is generated, and masks are resolved
-through the same objects when they are loaded, so one definition decides the labels of both
-heads.
+instead of being ignored. The record table stores the fine name of every box. A taxonomy holds
+the classes a model trains and folds every fine name onto one of them or drops it. The tasks
+resolve the fine names of the boxes and the raw categories of the masks through it when a
+sample is loaded, so the record table serves every taxonomy.
 """
 
 from __future__ import annotations
 
 from types import MappingProxyType
 from typing import Iterable, Mapping, Sequence
-
-from autoware_ml.types.metrics import AgentKind
 
 
 class LabelVocabulary:
@@ -41,7 +38,7 @@ class LabelVocabulary:
 
         Args:
           class_renaming: Raw label name to fine label name, None for a raw label the corpora
-            carry that is outside every level. Every raw label of the corpora needs an entry.
+            carry that is outside every taxonomy. Every raw label of the corpora needs an entry.
         """
 
         for raw_name, fine_name in class_renaming.items():
@@ -65,7 +62,7 @@ class LabelVocabulary:
 
     @property
     def class_renaming(self) -> Mapping[str, str | None]:
-        """Raw label name to fine label name, None for a raw label outside every level."""
+        """Raw label name to fine label name, None for a raw label outside every taxonomy."""
         return MappingProxyType(self._class_renaming)
 
     def unlisted(self, raw_names: Iterable[str]) -> list[str]:
@@ -89,13 +86,13 @@ class LabelVocabulary:
           raw_name: Raw label name of the dataset.
 
         Returns:
-          str | None: The fine label name, None for a raw label outside every level.
+          str | None: The fine label name, None for a raw label outside every taxonomy.
         """
 
         if raw_name not in self._class_renaming:
             raise KeyError(
                 f"Raw label name {raw_name!r} is not listed in the vocabulary. List it with "
-                "its fine label name, or with null when it is outside every level."
+                "its fine label name, or with null when it is outside every taxonomy."
             )
         return self._class_renaming[raw_name]
 
@@ -117,7 +114,7 @@ class LabelVocabulary:
 
 
 class LabelTaxonomy:
-    """Classes trained at one level of granularity over a vocabulary."""
+    """Classes a model trains over a vocabulary."""
 
     def __init__(
         self,
@@ -125,20 +122,17 @@ class LabelTaxonomy:
         class_names: Sequence[str],
         class_mapping: Mapping[str, str | None],
         ignore_index: int,
-        class_groups: Mapping[str, Sequence[str]],
     ) -> None:
         """
         Initialize the taxonomy.
 
         Args:
           vocabulary: Raw label names mapped onto fine label names.
-          class_names: Classes of the level, in index order.
-          class_mapping: Fine label name to class name, null for a fine label the level drops.
-            Every fine name of the vocabulary needs an entry. A class no fine label coarsens
-            to is a placeholder the level trains without data.
-          ignore_index: Label index of a label outside the classes of the level.
-          class_groups: Behaviour groups the metrics report besides the classes, group name to
-            its classes. Every class belongs to exactly one group.
+          class_names: Classes the model trains, in index order.
+          class_mapping: Fine label name to class name, null for a fine label the model does not
+            train. Every fine name of the vocabulary needs an entry. A class no fine label
+            coarsens to is a placeholder the model trains without data.
+          ignore_index: Label index of a label outside the trained classes.
         """
 
         if not len(class_names):
@@ -166,42 +160,15 @@ class LabelTaxonomy:
         for fine_name, class_name in class_mapping.items():
             if class_name is not None and class_name not in class_set:
                 raise ValueError(
-                    f"Fine label {fine_name!r} coarsens to {class_name!r}, which is not a class "
-                    f"of the level {list(class_names)}."
+                    f"Fine label {fine_name!r} coarsens to {class_name!r}, which is not a trained "
+                    f"class of {list(class_names)}."
                 )
-        grouped = [name for members in class_groups.values() for name in members]
-        if sorted(grouped) != sorted(class_names):
-            raise ValueError(
-                "Every class must belong to exactly one class group, the groups list "
-                f"{sorted(grouped)} for the classes {sorted(class_names)}."
-            )
 
         self._vocabulary = vocabulary
         self._class_names = tuple(class_names)
         self._class_mapping = dict(class_mapping)
         self._ignore_index = ignore_index
-        self._class_groups = {name: tuple(members) for name, members in class_groups.items()}
         self._class_indices = {name: index for index, name in enumerate(self._class_names)}
-
-    @staticmethod
-    def _validate_class_table(
-        table: Mapping[str, object], class_names: Sequence[str], table_name: str
-    ) -> None:
-        """
-        Check that a class keyed table has exactly one entry per class of the level.
-
-        Args:
-          table: Class name to value.
-          class_names: Classes of the level.
-          table_name: Name of the table for the error message.
-        """
-
-        if set(table) != set(class_names):
-            raise ValueError(
-                f"{table_name} must have one entry per class, missing "
-                f"{sorted(set(class_names) - set(table))}, unknown "
-                f"{sorted(set(table) - set(class_names))}."
-            )
 
     @property
     def vocabulary(self) -> LabelVocabulary:
@@ -210,28 +177,23 @@ class LabelTaxonomy:
 
     @property
     def class_names(self) -> tuple[str, ...]:
-        """Classes of the level, in index order."""
+        """Trained classes, in index order."""
         return self._class_names
 
     @property
     def num_classes(self) -> int:
-        """Number of classes of the level."""
+        """Number of trained classes."""
         return len(self._class_names)
 
     @property
     def ignore_index(self) -> int:
-        """Label index of a label outside the classes of the level."""
+        """Label index of a label outside the trained classes."""
         return self._ignore_index
 
     @property
     def class_mapping(self) -> Mapping[str, str | None]:
-        """Fine label name to class name, None for a dropped fine label."""
+        """Fine label name to class name, None for a fine label the model does not train."""
         return MappingProxyType(self._class_mapping)
-
-    @property
-    def class_groups(self) -> Mapping[str, tuple[str, ...]]:
-        """Behaviour groups the metrics report, group name to its classes."""
-        return MappingProxyType(self._class_groups)
 
     def fine_name(self, raw_name: str) -> str | None:
         """
@@ -241,20 +203,20 @@ class LabelTaxonomy:
           raw_name: Raw label name of the dataset, listed in the vocabulary.
 
         Returns:
-          str | None: The fine label name, None for a raw label outside every level.
+          str | None: The fine label name, None for a raw label outside every taxonomy.
         """
 
         return self._vocabulary.fine_name(raw_name)
 
     def class_name(self, fine_name: str | None) -> str | None:
         """
-        Class of the level a fine label name coarsens to.
+        Trained class a fine label name coarsens to.
 
         Args:
-          fine_name: Fine label name of the vocabulary, None for a label outside every level.
+          fine_name: Fine label name of the vocabulary, None for a label outside every taxonomy.
 
         Returns:
-          str | None: The class name, None for a label the level drops.
+          str | None: The class name, None for a label the model does not train.
         """
 
         if fine_name is None:
@@ -265,13 +227,13 @@ class LabelTaxonomy:
 
     def class_index(self, fine_name: str | None) -> int:
         """
-        Label index of a fine label name at the level.
+        Label index of a fine label name.
 
         Args:
-          fine_name: Fine label name of the vocabulary, None for a label outside every level.
+          fine_name: Fine label name of the vocabulary, None for a label outside every taxonomy.
 
         Returns:
-          int: The class index, the ignore index for a label the level drops.
+          int: The class index, the ignore index for a label the model does not train.
         """
 
         class_name = self.class_name(fine_name)
@@ -281,19 +243,19 @@ class LabelTaxonomy:
 
     def resolve_index(self, raw_name: str) -> int:
         """
-        Label index of a raw label name at the level.
+        Label index of a raw label name.
 
         Args:
           raw_name: Raw label name of the dataset, listed in the vocabulary.
 
         Returns:
-          int: The class index, the ignore index for a label outside the level.
+          int: The class index, the ignore index for a label the model does not train.
         """
 
         return self.class_index(self.fine_name(raw_name))
 
     def __str__(self) -> str:
-        """Canonical string form, the input of the database hash."""
+        """Canonical string form, which identifies the taxonomy."""
         class_mapping = ", ".join(
             f"{fine_name}: {class_name}"
             for fine_name, class_name in sorted(self._class_mapping.items())
@@ -310,130 +272,4 @@ class LabelTaxonomy:
 
     def __hash__(self) -> int:
         """Hash the taxonomy by its string form."""
-        return hash(str(self))
-
-
-class Detection3DTaxonomy(LabelTaxonomy):
-    """
-    Detection classes of one level together with the class keyed evaluation tables of the
-    detection metrics. The tables are validated against the class list here and read by the
-    dataset configs, they do not enter the database hash because they do not change the table.
-    """
-
-    def __init__(
-        self,
-        vocabulary: LabelVocabulary,
-        class_names: Sequence[str],
-        class_mapping: Mapping[str, str | None],
-        ignore_index: int,
-        class_groups: Mapping[str, Sequence[str]],
-        eval_range: Mapping[str, float],
-        collision_kinds: Mapping[str, str],
-        living_speeds: Mapping[str, float],
-    ) -> None:
-        """
-        Initialize the detection taxonomy.
-
-        Args:
-          vocabulary: Raw label names mapped onto fine label names.
-          class_names: Classes of the level, in index order.
-          class_mapping: Fine label name to class name, null for a dropped fine label.
-          ignore_index: Label index of a label outside the classes of the level.
-          class_groups: Behaviour groups the metrics report, group name to its classes.
-          eval_range: Range in meters up to which every class is evaluated.
-          collision_kinds: Reachable set kind of every class in the collision metrics.
-          living_speeds: Run speed in meters per second of every living class.
-        """
-
-        super().__init__(vocabulary, class_names, class_mapping, ignore_index, class_groups)
-        self._validate_class_table(eval_range, class_names, "eval_range")
-        self._validate_class_table(collision_kinds, class_names, "collision_kinds")
-        unknown_kinds = sorted(set(collision_kinds.values()) - set(AgentKind))
-        if unknown_kinds:
-            raise ValueError(
-                f"Unknown collision kinds {unknown_kinds}, valid kinds are "
-                f"{[kind.value for kind in AgentKind]}."
-            )
-        living_classes = {
-            name for name, kind in collision_kinds.items() if kind == AgentKind.LIVING
-        }
-        if set(living_speeds) != living_classes:
-            raise ValueError(
-                "living_speeds must list exactly the living classes, missing "
-                f"{sorted(living_classes - set(living_speeds))}, unknown "
-                f"{sorted(set(living_speeds) - living_classes)}."
-            )
-        self._eval_range = {name: float(value) for name, value in eval_range.items()}
-        self._collision_kinds = {name: AgentKind(kind) for name, kind in collision_kinds.items()}
-        self._living_speeds = {name: float(speed) for name, speed in living_speeds.items()}
-
-    @property
-    def eval_range(self) -> Mapping[str, float]:
-        """Range in meters up to which every class is evaluated."""
-        return MappingProxyType(self._eval_range)
-
-    @property
-    def collision_kinds(self) -> Mapping[str, AgentKind]:
-        """Reachable set kind of every class in the collision metrics."""
-        return MappingProxyType(self._collision_kinds)
-
-    @property
-    def living_speeds(self) -> Mapping[str, float]:
-        """Run speed in meters per second of every living class."""
-        return MappingProxyType(self._living_speeds)
-
-
-class Segmentation3DTaxonomy(LabelTaxonomy):
-    """Segmentation classes of one level together with the behaviour groups of the metrics."""
-
-
-class DatabaseTaxonomy:
-    """Taxonomies of the label spaces a database describes."""
-
-    def __init__(
-        self, detection3d: Detection3DTaxonomy, segmentation3d: Segmentation3DTaxonomy
-    ) -> None:
-        """
-        Initialize the database taxonomy.
-
-        Args:
-          detection3d: Taxonomy the box labels are baked with.
-          segmentation3d: Taxonomy the semantic mask categories are resolved with.
-        """
-
-        if not isinstance(detection3d, Detection3DTaxonomy):
-            raise TypeError(
-                f"detection3d must be a Detection3DTaxonomy, got {type(detection3d).__name__}."
-            )
-        if not isinstance(segmentation3d, Segmentation3DTaxonomy):
-            raise TypeError(
-                "segmentation3d must be a Segmentation3DTaxonomy, got "
-                f"{type(segmentation3d).__name__}."
-            )
-        self._detection3d = detection3d
-        self._segmentation3d = segmentation3d
-
-    @property
-    def detection3d(self) -> Detection3DTaxonomy:
-        """Taxonomy the box labels are baked with."""
-        return self._detection3d
-
-    @property
-    def segmentation3d(self) -> Segmentation3DTaxonomy:
-        """Taxonomy the semantic mask categories are resolved with."""
-        return self._segmentation3d
-
-    def __str__(self) -> str:
-        """Canonical string form, the input of the database hash."""
-        return (
-            f"{self.__class__.__name__}(detection3d={self._detection3d}, "
-            f"segmentation3d={self._segmentation3d})"
-        )
-
-    def __eq__(self, other: object) -> bool:
-        """Compare two database taxonomies by their definition."""
-        return type(self) is type(other) and str(self) == str(other)
-
-    def __hash__(self) -> int:
-        """Hash the database taxonomy by its string form."""
         return hash(str(self))

@@ -25,7 +25,6 @@ from omegaconf import OmegaConf
 
 from autoware_ml.databases.box3d_pipelines.box3d_merger import Box3DExtendLongerMerger
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
-from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
@@ -33,14 +32,6 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
     """Unit tests for Box3DExtendLongerMerger."""
 
     def setUp(self) -> None:
-        self.label_names = ("car", "truck", "trailer")
-        self.taxonomy = LabelTaxonomy(
-            vocabulary=LabelVocabulary({name: name for name in self.label_names}),
-            class_names=self.label_names,
-            class_mapping={name: name for name in self.label_names},
-            ignore_index=-1,
-            class_groups={"vehicle": list(self.label_names)},
-        )
         self.target_labels = MappingProxyType({"truck": ["truck", "trailer"]})
         # Maximum front/back face-center distance in meters for two boxes to count as one object.
         self.proximity_distance_threshold = 2.0
@@ -64,7 +55,6 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
             box3d_instance_id=f"{label_name}_instance",
             box3d_dataset_label_name=dataset_label_name or label_name,
             box3d_label_name=label_name,
-            box3d_label_index=self.label_names.index(label_name),
             box3d_num_lidar_points=num_lidar_points,
             box3d_num_radar_points=0,
             box3d_valid=True,
@@ -79,11 +69,10 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
     def _build_merger(
         self, target_labels: MappingProxyType[str, Sequence[str]] | None = None
     ) -> Box3DExtendLongerMerger:
-        """Build a merger folding trucks and trailers into trucks against the test taxonomy."""
+        """Build a merger folding trucks and trailers into trucks."""
         return Box3DExtendLongerMerger(
             target_labels=self.target_labels if target_labels is None else target_labels,
             proximity_distance_threshold=self.proximity_distance_threshold,
-            taxonomy=self.taxonomy,
         )
 
     def test_extend_longer_geometry_matches_reference(self) -> None:
@@ -103,7 +92,6 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
         self.assertEqual(len(merged), 1)
         merged_box = merged[0]
         self.assertEqual(merged_box.box3d_label_name, "truck")
-        self.assertEqual(merged_box.box3d_label_index, self.label_names.index("truck"))
         np.testing.assert_allclose(
             merged_box.box3d_params,
             [2.5, 0.0, 0.0, 9.0, 2.0, 2.0, 0.0, 1.0, 0.0, 0.0],
@@ -180,7 +168,6 @@ class TestBox3DExtendLongerMerger(unittest.TestCase):
         merger = Box3DExtendLongerMerger(
             target_labels=OmegaConf.create({"truck": ["truck", "trailer"]}),
             proximity_distance_threshold=self.proximity_distance_threshold,
-            taxonomy=self.taxonomy,
         )
 
         merged = merger(

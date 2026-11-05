@@ -7,7 +7,29 @@ defaults:
   - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
   - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: ???
+  - /ego@ego: ???
   - _self_
+
+taxonomy:
+  segmentation3d:
+    class_names:
+      - car
+      - truck
+      - bus
+      - motorcycle
+      - bicycle
+      - pedestrian
+      - animal
+      - barrier
+      - traffic_cone
+      - debris
+      - driveable_flat
+      - non_driveable_flat
+      - vegetation
+      - manmade
+      - vertical_thin
+      - noise
 
 point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
 

@@ -1,0 +1,5 @@
+# @package model.encoder
+enc_depths: [3, 3, 3, 12, 3]
+enc_channels: [54, 108, 216, 432, 576]
+enc_num_head: [3, 6, 12, 24, 32]
+enc_patch_size: [1024, 1024, 1024, 1024, 1024]

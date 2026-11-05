@@ -101,7 +101,7 @@ model:
     auxiliary: true
     in_channels: 512
     hidden_channel: 128
-    class_names: ${database.taxonomy.detection3d.class_names}
+    class_names: ${taxonomy.detection3d.class_names}
     dense_heatmap_pooling_class_names: [car, truck, bus]
     num_decoder_layers: 1
     num_heads: 8
@@ -117,7 +117,7 @@ model:
       pc_range: ${point_cloud_range}
       out_size_factor: ${out_size_factor}
       voxel_size: ${voxel_size}
-      class_names: ${database.taxonomy.detection3d.class_names}
+      class_names: ${taxonomy.detection3d.class_names}
       # One ScoreThresholdConfig per class group, resolved once at construction. null keeps
       # every proposal regardless of its score.
       score_threshold_configs: null

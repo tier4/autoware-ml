@@ -46,12 +46,12 @@ class TestRotated2DIouLoss(unittest.TestCase):
         self.weights = torch.ones(self.labels.shape, device=self.device)
 
     def _build_loss(
-        self, labels_to_ignore_rotation: list[str] | None = None, loss_weight: float = 1.0
+        self, rotation_invariant_classes: list[str] | None = None, loss_weight: float = 1.0
     ) -> Rotated2DIouLoss:
         """Build the loss on the fixture classes."""
         return Rotated2DIouLoss(
             class_names=self.class_names,
-            labels_to_ignore_rotation=labels_to_ignore_rotation,
+            rotation_invariant_classes=rotation_invariant_classes,
             loss_weight=loss_weight,
         )
 
@@ -63,7 +63,7 @@ class TestRotated2DIouLoss(unittest.TestCase):
 
     def test_resolves_ignored_labels_to_ids(self) -> None:
         """Class names to compare axis-aligned resolve to their label ids."""
-        loss = self._build_loss(labels_to_ignore_rotation=["pedestrian"])
+        loss = self._build_loss(rotation_invariant_classes=["pedestrian"])
 
         self.assertEqual(loss.labels_id_to_ignore_rotation, [1])
         self.assertEqual(self._build_loss().labels_id_to_ignore_rotation, [])
@@ -71,7 +71,7 @@ class TestRotated2DIouLoss(unittest.TestCase):
     def test_rejects_unknown_ignored_label(self) -> None:
         """A class name outside class_names is a configuration error."""
         with self.assertRaises(ValueError):
-            self._build_loss(labels_to_ignore_rotation=["cone"])
+            self._build_loss(rotation_invariant_classes=["cone"])
 
     def test_bev_boxes_pick_the_footprint_fields(self) -> None:
         """The BEV boxes are (x, y, length, width, yaw) of the metric boxes."""
@@ -82,7 +82,7 @@ class TestRotated2DIouLoss(unittest.TestCase):
 
     def test_bev_boxes_drop_the_yaw_of_ignored_classes(self) -> None:
         """Ignored classes are laid out axis-aligned while the others keep their yaw."""
-        loss = self._build_loss(labels_to_ignore_rotation=["pedestrian"])
+        loss = self._build_loss(rotation_invariant_classes=["pedestrian"])
 
         bev = loss._bev_boxes(self.boxes, self.labels)
 
@@ -141,7 +141,7 @@ class TestRotated2DIouLoss(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
     def test_ignored_rotation_makes_the_loss_insensitive_to_yaw(self) -> None:
         """For an ignored class, a prediction that only differs in yaw has zero loss."""
-        loss = self._build_loss(labels_to_ignore_rotation=["pedestrian"])
+        loss = self._build_loss(rotation_invariant_classes=["pedestrian"])
         target = self.boxes[:, 1:2]
         prediction = target.clone()
         prediction[..., 6] = 0.0
@@ -167,7 +167,7 @@ class TestRotated2DIouLoss(unittest.TestCase):
     @unittest.skipUnless(torch.cuda.is_available(), "the rotated IoU op requires CUDA")
     def test_half_precision_inputs_under_autocast_give_the_float32_loss(self) -> None:
         """Half boxes under fp16 autocast give a finite float32 loss equal to the fp32 one."""
-        loss = self._build_loss(labels_to_ignore_rotation=["pedestrian"])
+        loss = self._build_loss(rotation_invariant_classes=["pedestrian"])
         prediction = self._shifted_prediction(0.5)
         expected = loss(prediction, self.boxes, self.labels, self.weights)
 

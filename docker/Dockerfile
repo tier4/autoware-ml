@@ -8,8 +8,7 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 
 # Core environment variables
-ENV AUTOWARE_ML_DATA_PATH="/workspace/data" \
-  CUDA_HOME="/usr/local/cuda" \
+ENV CUDA_HOME="/usr/local/cuda" \
   FORCE_CUDA="1" \
   LC_ALL=C.UTF-8 \
   PIXI_HOME="/opt/pixi" \
@@ -83,9 +82,13 @@ WORKDIR /workspace
 RUN CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi install --locked --environment dev && \
     PIXI_HOME=/opt/pixi PIXI_BIN_DIR=/opt/pixi/bin /opt/pixi/bin/pixi shell-hook --manifest-path /workspace --environment dev --change-ps1 false > /etc/profile.d/autoware-ml.sh
 
-# Install the project itself in editable mode inside the environment
+# Install the project itself in editable mode inside the environment, and link the environment
+# to a stable path for editors
 COPY . /workspace/
 RUN /opt/pixi/bin/pixi run --environment dev install-project \
+  && DEV_ENV="$(echo /opt/pixi/envs/*/envs/dev)" \
+  && test -d "${DEV_ENV}" \
+  && ln -s "${DEV_ENV}" /opt/pixi/dev \
   && mkdir -p /usr/share/bash-completion/completions \
   && /opt/pixi/bin/pixi run --environment dev autoware-ml --show-completion bash \
       > /usr/share/bash-completion/completions/autoware-ml \
