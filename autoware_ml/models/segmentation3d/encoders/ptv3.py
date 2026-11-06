@@ -708,8 +708,13 @@ class SerializedAttention(PointModule):
                 if roped is None
                 else torch.stack(roped, dim=1)
             )
+            # flash attention takes fp16 or bf16; keep the autocast dtype instead of forcing
+            # fp16, and fall back to fp16 outside autocast.
+            flash_dtype = (
+                packed.dtype if packed.dtype in (torch.float16, torch.bfloat16) else torch.float16
+            )
             feat = self.flash_attn.flash_attn_varlen_qkvpacked_func(
-                packed.half(),
+                packed.to(flash_dtype),
                 cu_seqlens,
                 max_seqlen=patch_size,
                 dropout_p=self.attn_drop_p if self.training else 0.0,
@@ -899,6 +904,34 @@ class Block(PointModule):
         return point
 
 
+class _LinearBeforeNorm(nn.Linear):
+    """``nn.Linear`` that runs in fp32 under autocast, for layers feeding a BatchNorm.
+
+    Batch normalisation makes the network invariant to the scale of the layer in
+    front of it, so nothing keeps that layer's output small. Under bf16 the output
+    mean drifts far from zero relative to its spread, the 8-bit mantissa quantizes
+    the per-point variation away and the gradients explode; under fp16 the output
+    overflows (in the 6 cm foundation model the stage 3 pooling projection passed
+    65,504 within one epoch). These projections cost a fraction of a percent of the
+    step, so they run in fp32 and the normalisation behind them stays in fp32 too.
+    Outside autocast this is a plain linear layer.
+    """
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """Apply the projection, in fp32 when CUDA autocast is enabled.
+
+        Args:
+            input: Input features, in whatever precision autocast produced.
+
+        Returns:
+            fp32 projection of ``input`` under autocast, otherwise the plain projection.
+        """
+        if input.is_cuda and torch.is_autocast_enabled("cuda"):
+            with torch.autocast("cuda", enabled=False):
+                return super().forward(input.float())
+        return super().forward(input)
+
+
 class SerializedPooling(PointModule):
     """Pool serialized point groups into a coarser hierarchy level.
 
@@ -929,7 +962,7 @@ class SerializedPooling(PointModule):
         self.shuffle_orders = shuffle_orders
         self.export_mode = False
         self.export_stage_index = export_stage_index
-        self.proj = nn.Linear(in_channels, out_channels)
+        self.proj = _LinearBeforeNorm(in_channels, out_channels)
         self.norm = PointSequential(nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01))
         self.act = PointSequential(nn.GELU())
 
@@ -1044,12 +1077,12 @@ class SerializedUnpooling(PointModule):
         """
         super().__init__()
         self.proj = PointSequential(
-            nn.Linear(in_channels, out_channels),
+            _LinearBeforeNorm(in_channels, out_channels),
             nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
         self.proj_skip = PointSequential(
-            nn.Linear(skip_channels, out_channels),
+            _LinearBeforeNorm(skip_channels, out_channels),
             nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
