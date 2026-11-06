@@ -116,9 +116,56 @@ def read_scenario_metadata(tracks_path: Path) -> ScenarioMetadata:
         scenario_id=scenario.scenario_id,
         city=scenario.city_name,
         focal_track_id=scenario.focal_track_id,
-        timestamps_seconds=np.asarray(scenario.timestamps_ns, dtype=np.float64) * 1e-9,
+        timestamps_seconds=_window_timestamps_seconds(scenario),
         num_tracks=len(scenario.tracks),
     )
+
+
+def _window_steps(scenario: ArgoverseScenario) -> int:
+    """
+    Number of steps of the window of a scenario: the steps its tracks carry states for.
+
+    The scenario file stores the timestamps of the full 11 s window in every split, but the
+    test split ships the object states of the 50 observed steps only, so the timestamps
+    overstate the window there. The window ends at the last step any track has a state at,
+    which is the last step of the focal track: 110 for train / val and 50 for test.
+
+    Args:
+      scenario: The scenario.
+
+    Returns:
+      int: Number of steps of the window.
+
+    Raises:
+      ValueError: If no track carries a state, or a state lies past the stored timestamps.
+    """
+
+    last_steps = [state.timestep for track in scenario.tracks for state in track.object_states]
+    if not last_steps:
+        raise ValueError(f"Scenario {scenario.scenario_id} carries no object state.")
+    num_steps = max(last_steps) + 1
+    num_timestamps = len(scenario.timestamps_ns)
+    if num_steps > num_timestamps:
+        raise ValueError(
+            f"Scenario {scenario.scenario_id} has a state at step {num_steps - 1}, past its "
+            f"{num_timestamps} stored timestamps."
+        )
+    return num_steps
+
+
+def _window_timestamps_seconds(scenario: ArgoverseScenario) -> Float64[np.ndarray, " num_steps"]:
+    """
+    Timestamps of the steps of the window of a scenario in seconds.
+
+    Args:
+      scenario: The scenario.
+
+    Returns:
+      Float64[np.ndarray, " num_steps"]: One timestamp per step of the window.
+    """
+
+    timestamps_ns = np.asarray(scenario.timestamps_ns, dtype=np.float64)
+    return timestamps_ns[: _window_steps(scenario)] * 1e-9
 
 
 def read_agent_tracks(
@@ -138,7 +185,8 @@ def read_agent_tracks(
     """
 
     scenario = load_argoverse_scenario_parquet(Path(tracks_path))
-    num_steps = len(scenario.timestamps_ns)
+    timestamps_seconds = _window_timestamps_seconds(scenario)
+    num_steps = len(timestamps_seconds)
     if not 0 <= current_step_index < num_steps:
         raise ValueError(
             f"current_step_index must lie in [0, {num_steps}) for scenario "
@@ -176,7 +224,7 @@ def read_agent_tracks(
         agent_roles=torch.from_numpy(agent_roles),
         track_ids=[track.track_id for track in tracks],
         current_step_index=current_step_index,
-        step_seconds=step_seconds_of(np.asarray(scenario.timestamps_ns, dtype=np.float64) * 1e-9),
+        step_seconds=step_seconds_of(timestamps_seconds),
         ignore_index=taxonomy.ignore_index,
         sizes=None,
     )

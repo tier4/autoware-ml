@@ -33,6 +33,8 @@ from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 
 FOCAL_TRACK_ID = "focal"
 STEP_NS = 100_000_000
+# Steps of the full window the scenario files store the timestamps of.
+WINDOW_STEPS = 110
 CITY = "PIT"
 
 # The object types of the three tracks every synthetic scenario carries, in file order
@@ -91,7 +93,8 @@ def write_scenario(
     Args:
       split_path: The split directory, created when missing.
       scenario_id: Identifier of the scenario, also the name of its directory.
-      num_steps: Number of steps of the window, 110 for train / val and 50 for test.
+      num_steps: Number of steps the tracks carry states for, 110 for train / val and 50 for
+        test; the file stores the timestamps of all 110 steps either way, as the dataset does.
       object_types: Object type of every track by track id, the default three tracks when None.
       start_timestamp_ns: Timestamp of the first step in nanoseconds.
 
@@ -111,7 +114,9 @@ def write_scenario(
     )
 
     object_types = TRACK_OBJECT_TYPES if object_types is None else object_types
-    timestamps_ns = start_timestamp_ns + STEP_NS * np.arange(num_steps, dtype=np.int64)
+    # The scenario file stores the timestamps of the full window in every split, the test
+    # split included, where the tracks carry states for the observed steps only.
+    timestamps_ns = start_timestamp_ns + STEP_NS * np.arange(WINDOW_STEPS, dtype=np.int64)
 
     def states(steps: Sequence[int], along_x: bool) -> list[ObjectState]:
         return [
