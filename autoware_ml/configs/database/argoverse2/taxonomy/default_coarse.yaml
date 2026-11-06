@@ -1,0 +1,5 @@
+# Coarse taxonomy of Argoverse 2 Motion Forecasting
+
+defaults:
+  - /database/argoverse2/taxonomy/prediction@prediction: default_coarse
+  - _self_

@@ -1,0 +1,17 @@
+# Prediction vocabulary of Argoverse 2 Motion Forecasting: the object_type of every track mapped
+# onto the fine agent names. A type outside every level, such as static or background, is
+# listed with null; its agents stay in the tensors as context with the ignore index.
+_target_: autoware_ml.databases.taxonomy.LabelVocabulary
+_convert_: all
+
+class_renaming:
+  vehicle: vehicle
+  bus: bus
+  pedestrian: pedestrian
+  cyclist: cyclist
+  motorcyclist: motorcyclist
+  riderless_bicycle: riderless_bicycle
+  static: null
+  background: null
+  construction: null
+  unknown: null

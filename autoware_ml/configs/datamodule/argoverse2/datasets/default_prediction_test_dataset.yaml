@@ -1,0 +1,33 @@
+_target_: autoware_ml.datamodule.prediction.dataset.PredictionDataset
+_convert_: all
+
+# Database the dataset reads. A source over another database composes its own copy of this
+# config with that database's values.
+database_root_path: ${database.root_path}
+
+# The pipeline starts with the loading transforms of the prediction task: the agent tracks of
+# the scenario resolved with the prediction taxonomy of the experiment, then the vector map
+# resampled to a fixed number of points per polyline. An experiment extends the pipeline with
+# its own transforms after them.
+transforms:
+  _target_: autoware_ml.transforms.base.TransformsCompose
+  _convert_: all
+
+  pipeline:
+    - _target_: autoware_ml.transforms.prediction.loading.LoadAgentTracks
+      _convert_: all
+
+      taxonomy: ${taxonomy.prediction}
+
+    - _target_: autoware_ml.transforms.prediction.loading.LoadVectorMap
+      _convert_: all
+
+      # Number of points every polyline is resampled to.
+      num_points_per_polyline: 20
+      # Kinds of polylines to keep, refer PolylineType for the names.
+      polyline_types:
+        - LANE_CENTERLINE
+        - LANE_LEFT_BOUNDARY
+        - LANE_RIGHT_BOUNDARY
+        - CROSSWALK_EDGE
+        - DRIVABLE_AREA_BOUNDARY

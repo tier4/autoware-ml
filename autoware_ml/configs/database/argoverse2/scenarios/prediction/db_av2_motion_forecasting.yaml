@@ -1,0 +1,24 @@
+_target_: autoware_ml.databases.argoverse2.av2_motion_scenarios.AV2MotionScenarios
+_convert_: all
+
+# Directory holding the split directories (train, val, test) of the dataset, the root of the
+# database.
+scenario_root_path: ${database.root_path}
+
+# List of dataset parameters, one per split directory to include. The dataset_name is the split
+# directory name and must be one of train, val, test; the scenarios of the split are discovered
+# from the corpus. One scenario is one sample, so sample_steps is a stride over the scenarios of
+# the split rather than over the frames of a scenario: sample_steps=10 keeps every tenth scenario.
+dataset_params:
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: train
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: val
+    sample_steps: 1
+  - _target_: autoware_ml.databases.scenarios.DatasetParams
+    _convert_: all
+    dataset_name: test
+    sample_steps: 1

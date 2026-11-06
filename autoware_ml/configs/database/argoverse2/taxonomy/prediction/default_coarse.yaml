@@ -1,0 +1,16 @@
+# Coarse prediction taxonomy of Argoverse 2 Motion Forecasting
+_target_: autoware_ml.databases.taxonomy.LabelTaxonomy
+
+defaults:
+  - /database/argoverse2/taxonomy/vocabulary@vocabulary: default_prediction
+  - _self_
+
+ignore_index: -1
+class_names: ???
+class_mapping:
+  vehicle: vehicle
+  bus: vehicle
+  pedestrian: pedestrian
+  cyclist: cyclist
+  motorcyclist: cyclist
+  riderless_bicycle: null

@@ -1,0 +1,25 @@
+_target_: autoware_ml.databases.argoverse2.av2_motion_database.AV2MotionDatabase
+_convert_: all
+
+version: AV2MotionForecasting-base-v1.0.0
+# Directory holding the train / val / test split directories of the Argoverse 2 Motion
+# Forecasting dataset, one directory per scenario under each split:
+# <split>/<scenario_id>/scenario_<scenario_id>.parquet and log_map_archive_<scenario_id>.json
+# The dataset has no fixed name under the data root, so the experiment sets the directory, e.g.
+# database.root_path=${data_root_path}/argoverse2/motion_forecasting/
+root_path: ???
+
+# Caches
+cache_path: ${cache_root_path}/prediction/
+# Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
+cache_file_prefix_name: av2_motion_forecasting_database
+
+defaults:
+  - argoverse2/taxonomy/vocabulary@vocabulary: default_prediction
+  - argoverse2/scenarios@scenarios.db_av2_motion_forecasting: prediction/db_av2_motion_forecasting
+
+# Processor settings
+num_workers: 16
+# Number of scenarios every worker task builds the records of, so a database of 250k scenarios
+# does not submit 250k tasks.
+scenarios_per_worker_task: 256

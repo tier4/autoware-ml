@@ -1,0 +1,4 @@
+defaults:
+  - default_datamodule@_here_
+  - argoverse2/datasets@_global_.datasets.train: default_prediction_train_dataset
+  - argoverse2/datasets@_global_.datasets.test: default_prediction_test_dataset
