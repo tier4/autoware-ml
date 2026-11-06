@@ -210,8 +210,8 @@ def run_deploy(cfg: DictConfig) -> None:
         source["run_id"] for source in source_checkpoints if source["run_id"] is not None
     ]
 
-    # Built before the run exists: a model that does not build, or a config that names a module
-    # it does not export, stops the deploy without leaving a FAILED run behind.
+    # Built before the run exists: a model that does not build, or a module without its
+    # deploy.onnx.modules entry, stops the deploy without leaving a FAILED run behind.
     datamodule, model, export_specs = _build(cfg, weights_path)
     validate_onnx_modules_exported(cfg.deploy.onnx, export_specs)
 

@@ -517,13 +517,13 @@ class TestErrorPaths:
         Input: the default deploy config without any ``modules`` block, a model exporting
             ``head``.
         Expected: the module would silently export without its overrides, so the export stops.
-        Check: a ValueError naming the missing entry, and no file written.
+        Check: a KeyError naming the missing entry, and no file written.
         """
         deploy_cfg = OmegaConf.load(DEPLOY_YAML).deploy
         deploy_cfg.tensorrt.enabled = False
         exporter = _exporter(tmp_path, deploy_cfg)
 
-        with pytest.raises(ValueError, match=r"no entry for the exported modules \['head'\]"):
+        with pytest.raises(KeyError, match="no entry for exported module 'head'"):
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
 

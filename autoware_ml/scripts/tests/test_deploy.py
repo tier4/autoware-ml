@@ -228,13 +228,13 @@ def test_run_deploy_refuses_a_module_without_an_entry_before_the_run_exists(
 ) -> None:
     """
     Input: MLflow enabled, a model exporting ``head`` and a config whose ``modules`` has an
-        entry of ``haed`` only.
+        entry of ``misspelled_head`` only.
     Expected: the deploy fails naming the missing entry after the model is built but before
         the MLflow run is created, so no FAILED run is left behind.
     Check: the raised error, the export not running and the absence of the SQLite store.
     """
     cfg = _deploy_cfg(tmp_path)
-    cfg.deploy.onnx.modules = {"haed": {}}
+    cfg.deploy.onnx.modules = {"misspelled_head": {}}
     checkpoint_path = _checkpoint(tmp_path)
 
     with (
@@ -245,7 +245,7 @@ def test_run_deploy_refuses_a_module_without_an_entry_before_the_run_exists(
         ),
         patch.object(deploy_script, "_build", return_value=_built(("head",))),
         patch.object(deploy_script, "_export") as export_mock,
-        pytest.raises(ValueError, match=r"\['head'\].*entries are \['haed'\]"),
+        pytest.raises(ValueError, match=r"\['head'\].*entries are \['misspelled_head'\]"),
     ):
         deploy_script.run_deploy(cfg)
 

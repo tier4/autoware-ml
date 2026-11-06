@@ -25,7 +25,6 @@ from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
     ExportSpec,
     resolve_export_specs,
-    validate_onnx_modules_exported,
     merge_module_onnx_cfg,
     should_export_stage,
     supports_export_stage,
@@ -111,7 +110,6 @@ class DeploymentExport:
         logger.info("Starting model export...")
 
         export_specs = self.prepare_export_specs()
-        validate_onnx_modules_exported(self.deploy_cfg.onnx, export_specs)
         export_git_sha = get_git_sha()
 
         onnx_exported_paths: Sequence[Path] = []
