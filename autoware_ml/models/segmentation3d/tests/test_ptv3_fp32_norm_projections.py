@@ -24,7 +24,6 @@ from torch import nn
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     SerializedUnpooling,
     _LinearBeforeNorm,
-    linear_before_norm,
 )
 
 
@@ -35,13 +34,15 @@ class TestLinearBeforeNorm(unittest.TestCase):
     def test_projection_survives_inputs_that_overflow_fp16(self) -> None:
         """Test that the guarded projection stays finite where plain fp16 overflows."""
         torch.manual_seed(0)
-        linear = nn.Linear(64, 32).cuda()
+        layer = _LinearBeforeNorm(64, 32).cuda()
         with torch.no_grad():
-            linear.weight.mul_(40.0)
+            layer.weight.mul_(40.0)
+        linear = nn.Linear(64, 32).cuda()
+        linear.load_state_dict(layer.state_dict())
         feat = torch.randn(1000, 64, device="cuda") * 3000.0  # products exceed 65,504
         with torch.autocast("cuda", dtype=torch.float16):
             naive = linear(feat)
-            guarded = linear_before_norm(linear, feat)
+            guarded = layer(feat)
         self.assertFalse(
             torch.isfinite(naive).all(), "the test input must overflow the plain fp16 path"
         )
@@ -49,7 +50,7 @@ class TestLinearBeforeNorm(unittest.TestCase):
         self.assertTrue(torch.isfinite(guarded).all())
         torch.testing.assert_close(guarded, linear(feat.float()), rtol=1e-4, atol=1e-2)
 
-    def test_linear_before_norm_is_a_plain_linear_outside_autocast(self) -> None:
+    def test_layer_is_a_plain_linear_outside_autocast(self) -> None:
         """Test that the layer matches nn.Linear outside autocast with the same state dict."""
         torch.manual_seed(1)
         layer = _LinearBeforeNorm(8, 4)

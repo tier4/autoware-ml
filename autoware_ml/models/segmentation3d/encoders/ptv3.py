@@ -29,7 +29,6 @@ from typing import Any
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
@@ -536,7 +535,6 @@ class SerializedAttention(PointModule):
         upcast_attention: bool,
         upcast_softmax: bool,
         rope_base: float | None = None,
-        fp32_projections: bool = False,
     ) -> None:
         """Initialize serialized attention.
 
@@ -556,9 +554,6 @@ class SerializedAttention(PointModule):
             rope_base: Frequency base for axis-split 3D rotary embedding over
                 voxel coordinates. ``None`` disables RoPE, which is the PTv3
                 default and leaves the attention path unchanged.
-            fp32_projections: Run the qkv and output projections in fp32 under
-                autocast; the attention core itself stays 16-bit (flash attention
-                has no fp32 path).
         """
         super().__init__()
         if channels % num_heads != 0:
@@ -586,7 +581,6 @@ class SerializedAttention(PointModule):
         self.qkv = nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = nn.Linear(channels, channels)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.fp32_projections = bool(fp32_projections)
         self.attn_drop_p = attn_drop
         self.attn_drop = nn.Dropout(attn_drop)
         self.softmax = nn.Softmax(dim=-1)
@@ -671,11 +665,7 @@ class SerializedAttention(PointModule):
             pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
             order = point.serialized_order[self.order_index][pad]
             inverse = unpad[point.serialized_inverse[self.order_index]]
-        if self.fp32_projections and point.feat.is_cuda and torch.is_autocast_enabled("cuda"):
-            with torch.autocast("cuda", enabled=False):
-                qkv = self.qkv(point.feat.float())[order]
-        else:
-            qkv = self.qkv(point.feat)[order]
+        qkv = self.qkv(point.feat)[order]
         head_dim = channel_count // head_count
 
         # With RoPE the projection has to be split before attention so queries
@@ -719,7 +709,7 @@ class SerializedAttention(PointModule):
                 else torch.stack(roped, dim=1)
             )
             # flash attention takes fp16 or bf16; keep the autocast dtype instead of forcing
-            # fp16, and fall back to fp16 for an fp32 (no autocast) projection.
+            # fp16, and fall back to fp16 outside autocast.
             flash_dtype = (
                 packed.dtype if packed.dtype in (torch.float16, torch.bfloat16) else torch.float16
             )
@@ -733,11 +723,7 @@ class SerializedAttention(PointModule):
             ).reshape(-1, channel_count)
             feat = feat.to(qkv.dtype)
         feat = feat[inverse]
-        if self.fp32_projections and feat.is_cuda and torch.is_autocast_enabled("cuda"):
-            with torch.autocast("cuda", enabled=False):
-                point.feat = self.proj_drop(self.proj(feat.float()))
-        else:
-            point.feat = self.proj_drop(self.proj(feat))
+        point.feat = self.proj_drop(self.proj(feat))
         return point
 
 
@@ -748,17 +734,13 @@ class MLP(nn.Module):
     projects features back to the original dimension with dropout.
     """
 
-    def __init__(
-        self, channels: int, mlp_ratio: float, drop: float, fp32_out: bool = False
-    ) -> None:
+    def __init__(self, channels: int, mlp_ratio: float, drop: float) -> None:
         """Initialize the feed-forward network.
 
         Args:
             channels: Input and output feature dimension.
             mlp_ratio: Hidden-layer expansion ratio.
             drop: Dropout applied between linear layers.
-            fp32_out: Compute the output projection in fp32 under autocast (the
-                hidden layer stays 16-bit).
         """
         super().__init__()
         hidden_channels = int(channels * mlp_ratio)
@@ -766,7 +748,6 @@ class MLP(nn.Module):
         self.act = nn.GELU()
         self.fc2 = nn.Linear(hidden_channels, channels)
         self.drop = nn.Dropout(drop)
-        self.fp32_out = bool(fp32_out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply the feed-forward network.
@@ -777,11 +758,7 @@ class MLP(nn.Module):
         Returns:
             Tensor after the MLP stack.
         """
-        hidden = self.drop(self.act(self.fc1(x)))
-        if self.fp32_out and hidden.is_cuda and torch.is_autocast_enabled("cuda"):
-            with torch.autocast("cuda", enabled=False):
-                return self.drop(self.fc2(hidden.float()))
-        return self.drop(self.fc2(hidden))
+        return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
 class Block(PointModule):
@@ -812,7 +789,6 @@ class Block(PointModule):
         enable_conv: bool = True,
         enable_attn: bool = True,
         rope_base: float | None = None,
-        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -842,29 +818,14 @@ class Block(PointModule):
                 stages.
             rope_base: Frequency base for axis-split 3D rotary embedding, or
                 ``None`` to disable it.
-            fp32_sublayers: Sublayers computed in fp32 under autocast: ``"mlp"`` runs
-                the feed-forward network in fp32, ``"mlp_out"`` only its output
-                projection, ``"attn_proj"`` the qkv and output projections of the
-                attention (its core stays 16-bit). Empty by default. Measured on the
-                foundation model (docs of branch feat/offline-foundation-model-training,
-                2026-09-20 ablation): plain bf16 loses about 10 % relative mIoU and
-                ``["mlp"]`` restores the fp32 accuracy.
 
         Raises:
-            ValueError: Raised when the block would carry no operation at all, or
-                when ``fp32_sublayers`` names an unknown sublayer.
+            ValueError: Raised when the block would carry no operation at all.
         """
         super().__init__()
         if not enable_conv and not enable_attn:
             raise ValueError("A block must enable at least one of convolution or attention.")
         self.pre_norm = pre_norm
-        self.fp32_sublayers = frozenset(fp32_sublayers)
-        unknown = self.fp32_sublayers - {"mlp", "mlp_out", "attn_proj"}
-        if unknown:
-            raise ValueError(
-                "fp32_sublayers must be drawn from {'mlp', 'mlp_out', 'attn_proj'}, "
-                f"got {sorted(unknown)}."
-            )
         self.enable_conv = bool(enable_conv)
         self.enable_attn = bool(enable_attn)
 
@@ -897,12 +858,9 @@ class Block(PointModule):
                 upcast_attention=upcast_attention,
                 upcast_softmax=upcast_softmax,
                 rope_base=rope_base,
-                fp32_projections="attn_proj" in self.fp32_sublayers,
             )
             self.norm2 = PointSequential(nn.LayerNorm(channels))
-            self.mlp = PointSequential(
-                MLP(channels, mlp_ratio, proj_drop, fp32_out="mlp_out" in self.fp32_sublayers)
-            )
+            self.mlp = PointSequential(MLP(channels, mlp_ratio, proj_drop))
         else:
             self.norm1 = None
             self.attn = None
@@ -938,16 +896,7 @@ class Block(PointModule):
             shortcut = point.feat
             if self.pre_norm:
                 point = self.norm2(point)
-            if (
-                "mlp" in self.fp32_sublayers
-                and point.feat.is_cuda
-                and torch.is_autocast_enabled("cuda")
-            ):
-                with torch.autocast("cuda", enabled=False):
-                    point.feat = point.feat.float()
-                    point = self.drop_path(self.mlp(point))
-            else:
-                point = self.drop_path(self.mlp(point))
+            point = self.drop_path(self.mlp(point))
             point.feat = shortcut + point.feat
             if not self.pre_norm:
                 point = self.norm2(point)
@@ -955,39 +904,32 @@ class Block(PointModule):
         return point
 
 
-def linear_before_norm(linear: nn.Linear, feat: torch.Tensor) -> torch.Tensor:
-    """Apply a linear layer whose output feeds a BatchNorm in full precision.
+class _LinearBeforeNorm(nn.Linear):
+    """``nn.Linear`` that runs in fp32 under autocast, for layers feeding a BatchNorm.
 
     Batch normalisation makes the network invariant to the scale of the layer in
-    front of it, so nothing keeps that layer's output small: in the 6 cm foundation
-    model the stage 3 pooling projection grew past the fp16 range (65,504) within
-    one epoch of pre-training and turned every BatchNorm statistic behind it into
-    NaN. These projections cost a fraction of a percent of the step, so they run in
-    fp32 and the normalisation resets the scale before the features re-enter the
-    16-bit path. Outside autocast this is a plain linear layer.
-
-    Args:
-        linear: Projection whose output is normalised next.
-        feat: Input features, in whatever precision autocast produced.
-
-    Returns:
-        fp32 projection of ``feat`` under autocast, otherwise the plain projection.
+    front of it, so nothing keeps that layer's output small. Under bf16 the output
+    mean drifts far from zero relative to its spread, the 8-bit mantissa quantizes
+    the per-point variation away and the gradients explode; under fp16 the output
+    overflows (in the 6 cm foundation model the stage 3 pooling projection passed
+    65,504 within one epoch). These projections cost a fraction of a percent of the
+    step, so they run in fp32 and the normalisation behind them stays in fp32 too.
+    Outside autocast this is a plain linear layer.
     """
-    if feat.is_cuda and torch.is_autocast_enabled("cuda"):
-        with torch.autocast("cuda", enabled=False):
-            return F.linear(
-                feat.float(),
-                linear.weight.float(),
-                None if linear.bias is None else linear.bias.float(),
-            )
-    return F.linear(feat, linear.weight, linear.bias)
 
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        """Apply the projection, in fp32 when CUDA autocast is enabled.
 
-class _LinearBeforeNorm(nn.Linear):
-    """``nn.Linear`` that runs in fp32 under autocast, for layers feeding a BatchNorm."""
+        Args:
+            input: Input features, in whatever precision autocast produced.
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:  # noqa: A002 (torch signature)
-        return linear_before_norm(self, input)
+        Returns:
+            fp32 projection of ``input`` under autocast, otherwise the plain projection.
+        """
+        if input.is_cuda and torch.is_autocast_enabled("cuda"):
+            with torch.autocast("cuda", enabled=False):
+                return super().forward(input.float())
+        return super().forward(input)
 
 
 class SerializedPooling(PointModule):
@@ -1310,7 +1252,6 @@ class PointTransformerV3Encoder(PointModule):
         enc_conv: Sequence[bool] | bool = True,
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
-        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1344,17 +1285,9 @@ class PointTransformerV3Encoder(PointModule):
                 every stage.
             enc_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
-            fp32_sublayers: Sublayers computed in fp32 under autocast: ``"mlp"`` runs
-                the feed-forward network in fp32, ``"mlp_out"`` only its output
-                projection, ``"attn_proj"`` the qkv and output projections of the
-                attention (its core stays 16-bit). Empty by default. Measured on the
-                foundation model (docs of branch feat/offline-foundation-model-training,
-                2026-09-20 ablation): plain bf16 loses about 10 % relative mIoU and
-                ``["mlp"]`` restores the fp32 accuracy.
         """
         super().__init__()
         self.in_channels = in_channels
-        self.fp32_sublayers = tuple(fp32_sublayers)
         self.order = list(order)
         self.stride = list(stride)
         self.shuffle_orders = shuffle_orders
@@ -1404,7 +1337,6 @@ class PointTransformerV3Encoder(PointModule):
                         enable_conv=self.enc_conv[stage_index],
                         enable_attn=self.enc_attn[stage_index],
                         rope_base=self.enc_rope_base[stage_index],
-                        fp32_sublayers=self.fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
@@ -1509,7 +1441,6 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_conv: Sequence[bool] = (True, True, True, False, False),
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
-        fp32_sublayers: Sequence[str] = (),
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1542,8 +1473,6 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv: Per-stage convolution flags.
             enc_attn: Per-stage attention flags.
             enc_rope_base: Rotary-embedding frequency base per stage.
-            fp32_sublayers: Sublayers computed in fp32 under autocast, see
-                :class:`PointTransformerV3Encoder`.
         """
         super().__init__(
             in_channels=in_channels,
@@ -1570,7 +1499,6 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv=enc_conv,
             enc_attn=enc_attn,
             enc_rope_base=enc_rope_base,
-            fp32_sublayers=fp32_sublayers,
         )
 
 
