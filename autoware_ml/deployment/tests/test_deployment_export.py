@@ -35,7 +35,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.deployment.deployment_export import DeploymentExport, DeploymentExportOutputs
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.utils.deploy import ExportSpec, resolve_export_specs
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import MODEL_DOMAIN, PRODUCER_NAME
 
@@ -169,20 +169,25 @@ def _deploy_cfg(
     return cfg
 
 
+def _specs(model: ModuleBaseModel) -> dict[str, ExportSpec]:
+    """The model's export specs from one point batch, as the deploy script resolves them."""
+    return model.build_export_specs(ModelBatchInputs.from_gt_batch(_point_batch()))
+
+
 def _exporter(
     tmp_path: Path,
     deploy_cfg: DictConfig,
     model: ModuleBaseModel | None = None,
-    datamodule: _PredictDatamodule | None = None,
     release: str | None = None,
     tracker: str | None = None,
     run_id: str | None = None,
 ) -> DeploymentExport:
+    model = model if model is not None else _ExportModel()
     return DeploymentExport(
         deploy_cfg=deploy_cfg,
         output_dir=tmp_path / "exports",
-        datamodule=datamodule if datamodule is not None else _PredictDatamodule([_point_batch()]),
-        model=model if model is not None else _ExportModel(),
+        model=model,
+        export_specs=_specs(model),
         config_name=CONFIG_NAME,
         release=release,
         tracker=tracker,
@@ -214,11 +219,12 @@ class TestOutputLayout:
         Expected: the constructor creates it, with parents, before any export.
         Check: the directory exists and the device is the model's.
         """
+        model = _ExportModel()
         exporter = DeploymentExport(
             deploy_cfg=_deploy_cfg({"head": {}}),
             output_dir=tmp_path / "exports" / "nested",
-            datamodule=_PredictDatamodule([_point_batch()]),
-            model=_ExportModel(),
+            model=model,
+            export_specs=_specs(model),
             config_name=CONFIG_NAME,
             release=None,
         )
@@ -265,59 +271,68 @@ class TestOutputLayout:
 
 
 class TestExportSpecs:
-    """The export specs come from one preprocessed predict batch."""
+    """The export specs come from one preprocessed predict batch, read before the exporter."""
 
-    def test_prepare_export_specs_reads_the_predict_split(self, tmp_path: Path) -> None:
+    def test_resolve_export_specs_reads_the_predict_split(self) -> None:
         """
         Input: a datamodule serving one batch.
-        Expected: the datamodule is prepared and set up for ``predict``, and the read-only spec
-            mapping carries the model's head with the points of that batch as example input.
-        Check: the datamodule state, the mapping type and the spec contents.
+        Expected: the datamodule is prepared and set up for ``predict``, and the spec mapping
+            carries the model's head with the points of that batch as example input.
+        Check: the datamodule state and the spec contents.
         """
         batch = _point_batch()
         datamodule = _PredictDatamodule([batch])
         model = _ExportModel()
-        exporter = _exporter(
-            tmp_path, _deploy_cfg({"head": {}}), model=model, datamodule=datamodule
-        )
 
-        specs = exporter.prepare_export_specs()
+        specs = resolve_export_specs(datamodule, model, torch.device("cpu"))
 
         assert datamodule.prepared
         assert datamodule.stage == "predict"
-        assert isinstance(specs, MappingProxyType)
         assert list(specs) == ["head"]
         assert specs["head"].module is model.head
         assert specs["head"].input_names == ["points", "scale"]
         assert torch.equal(specs["head"].args[0], batch.point_cloud_gt_batch.points)
 
-    def test_given_export_specs_are_used_without_reading_the_datamodule(
-        self, tmp_path: Path
-    ) -> None:
+    def test_given_export_specs_are_kept_read_only(self, tmp_path: Path) -> None:
         """
         Input: an exporter handed the resolved export specs, as the deploy script does after
             checking them before the MLflow run exists.
-        Expected: the specs come back as given, read-only, and the datamodule is left alone.
-        Check: the datamodule state and the returned mapping.
+        Expected: the exporter keeps them as given, read-only.
+        Check: the mapping type and contents.
         """
-        datamodule = _PredictDatamodule([_point_batch()])
         model = _ExportModel()
-        given = model.build_export_specs(ModelBatchInputs.from_gt_batch(_point_batch()))
+        given = _specs(model)
         exporter = DeploymentExport(
             deploy_cfg=_deploy_cfg({"head": {}}),
             output_dir=tmp_path / "exports",
-            datamodule=datamodule,
             model=model,
+            export_specs=given,
             config_name=CONFIG_NAME,
             release=None,
-            export_specs=given,
         )
 
-        specs = exporter.prepare_export_specs()
+        assert isinstance(exporter.export_specs, MappingProxyType)
+        assert dict(exporter.export_specs) == given
 
-        assert not datamodule.prepared
-        assert isinstance(specs, MappingProxyType)
-        assert dict(specs) == given
+    def test_spec_without_example_inputs_is_rejected(self) -> None:
+        """
+        Input: an export spec carrying no example inputs and no input names.
+        Expected: the spec is refused when the model builds it, so nothing is traced.
+        Check: a ValueError counting the names and the args is raised.
+        """
+        datamodule = _PredictDatamodule([_point_batch()])
+
+        with pytest.raises(ValueError, match="names 0 inputs for 0 args"):
+            resolve_export_specs(datamodule, _NoInputsModel(), torch.device("cpu"))
+
+    def test_empty_predict_split_has_no_example_batch(self) -> None:
+        """
+        Input: a datamodule whose predict dataloader yields nothing.
+        Expected: no example batch can be read, so the specs cannot be resolved.
+        Check: the iteration failure propagates.
+        """
+        with pytest.raises(StopIteration):
+            resolve_export_specs(_PredictDatamodule([]), _ExportModel(), torch.device("cpu"))
 
 
 class TestOnnxExport:
@@ -526,28 +541,6 @@ class TestErrorPaths:
         with pytest.raises(KeyError, match="no entry for exported module 'head'"):
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
-
-    def test_spec_without_example_inputs_is_rejected(self, tmp_path: Path) -> None:
-        """
-        Input: an export spec carrying no example inputs and no input names.
-        Expected: the spec is refused when the model builds it, so nothing is traced.
-        Check: a ValueError counting the names and the args is raised.
-        """
-        exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), model=_NoInputsModel())
-
-        with pytest.raises(ValueError, match="names 0 inputs for 0 args"):
-            exporter.export()
-
-    def test_empty_predict_split_has_no_example_batch(self, tmp_path: Path) -> None:
-        """
-        Input: a datamodule whose predict dataloader yields nothing.
-        Expected: no example batch can be read, so the export cannot start.
-        Check: the iteration failure propagates.
-        """
-        exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), datamodule=_PredictDatamodule([]))
-
-        with pytest.raises(StopIteration):
-            exporter.export()
 
     def test_module_without_onnx_support_is_rejected_when_onnx_is_enabled(
         self, tmp_path: Path

@@ -72,39 +72,36 @@ CONFIG_NAME_PREFIX = "tasks/"
 def deploy(
     deploy_cfg: DictConfig,
     output_dir: Path,
-    datamodule: DataModule,
     model: ModuleBaseModel,
+    export_specs: Mapping[str, ExportSpec],
     config_name: str,
     release: str | None,
     tracker: str | None = None,
     run_id: str | None = None,
-    export_specs: Mapping[str, ExportSpec] | None = None,
 ) -> None:
     """Deploy the trained model for inference.
 
     Args:
         deploy_cfg: Hydra configuration for deployment.
         output_dir: Directory to save the exported models.
-        datamodule: Data module providing the example batch used for tracing.
         model: The trained model to be deployed.
+        export_specs: The model's export specifications, resolved and checked before the
+            deploy run exists.
         config_name: User-facing config name stamped into the ONNX metadata.
         release: ``vMAJOR.MINOR.PATCH`` stamped into the ONNX metadata, or ``None``
             for an unversioned export.
         tracker: Active experiment tracker name recorded in the stamp, if any.
         run_id: Deploy run id recorded in the stamp, if any.
-        export_specs: The model's export specifications when already resolved, else the
-            exporter resolves them from the datamodule's first prediction batch.
     """
     deployment_exporter = DeploymentExport(
         deploy_cfg=deploy_cfg,
         output_dir=output_dir,
-        datamodule=datamodule,
         model=model,
+        export_specs=export_specs,
         config_name=config_name,
         release=release,
         tracker=tracker,
         run_id=run_id,
-        export_specs=export_specs,
     )
     export_outputs = deployment_exporter.export()
     logger.info("Deployment completed successfully.")
@@ -233,7 +230,7 @@ def run_deploy(cfg: DictConfig) -> None:
     )
 
     if run_context is None:
-        _export(cfg, config_name, datamodule, model, export_specs, release, run_context=None)
+        _export(cfg, config_name, model, export_specs, release, run_context=None)
         return
 
     try:
@@ -245,7 +242,7 @@ def run_deploy(cfg: DictConfig) -> None:
             checkpoint_path=checkpoint_path,
             source_checkpoints=source_checkpoints,
         )
-        _export(cfg, config_name, datamodule, model, export_specs, release, run_context=run_context)
+        _export(cfg, config_name, model, export_specs, release, run_context=run_context)
     except Exception:
         MlflowClient(tracking_uri=run_context.tracking_uri).set_terminated(
             run_context.run_id, status=RunStatus.to_string(RunStatus.FAILED)
@@ -296,7 +293,6 @@ def _build(
 def _export(
     cfg: DictConfig,
     config_name: str,
-    datamodule: DataModule,
     model: ModuleBaseModel,
     export_specs: Mapping[str, ExportSpec],
     release: str | None,
@@ -307,7 +303,6 @@ def _export(
     Args:
         cfg: Hydra configuration.
         config_name: User-facing config name.
-        datamodule: The data module the model was built with.
         model: The built model.
         export_specs: The model's export specifications.
         release: ``vMAJOR.MINOR.PATCH`` of the export, or ``None``.
@@ -327,13 +322,12 @@ def _export(
     deploy(
         deploy_cfg=cfg.deploy,
         output_dir=output_dir,
-        datamodule=datamodule,
         model=model,
+        export_specs=export_specs,
         config_name=config_name,
         release=release,
         tracker="mlflow" if run_context is not None else None,
         run_id=run_context.run_id if run_context is not None else None,
-        export_specs=export_specs,
     )
 
 

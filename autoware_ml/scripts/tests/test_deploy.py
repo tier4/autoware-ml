@@ -337,10 +337,9 @@ def test_run_deploy_without_logger_exports_into_the_experiment_run_dir(
     ):
         deploy_script.run_deploy(cfg)
 
-    datamodule, model, export_specs = build_mock.return_value
+    _, model, export_specs = build_mock.return_value
     kwargs = deploy_mock.call_args.kwargs
     assert kwargs["output_dir"] == Path(cfg.experiment_run_dir)
-    assert kwargs["datamodule"] is datamodule
     assert kwargs["model"] is model
     assert kwargs["export_specs"] is export_specs
     assert kwargs["tracker"] is None

@@ -20,11 +20,9 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict
 from omegaconf import DictConfig, OmegaConf
 
-from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
     ExportSpec,
-    resolve_export_specs,
     merge_module_onnx_cfg,
     should_export_stage,
     supports_export_stage,
@@ -61,55 +59,43 @@ class DeploymentExport:
         self,
         deploy_cfg: DictConfig,
         output_dir: Path,
-        datamodule: DataModule,
         model: ModuleBaseModel,
+        export_specs: Mapping[str, ExportSpec],
         config_name: str,
         release: str | None,
         tracker: str | None = None,
         run_id: str | None = None,
-        export_specs: Mapping[str, ExportSpec] | None = None,
     ) -> None:
         """Initialize the exporter.
 
         Args:
             deploy_cfg: ``deploy`` section of the Hydra configuration.
             output_dir: Directory that receives the exported ONNX and TensorRT files.
-            datamodule: Data module providing the example batch used for tracing.
             model: Trained model whose export modules are traced.
+            export_specs: The model's export specifications, resolved and checked by the caller
+                (see :func:`autoware_ml.utils.deploy.resolve_export_specs`).
             config_name: User-facing config name stamped into every ONNX module.
             release: ``vMAJOR.MINOR.PATCH`` stamped into every ONNX module, or ``None``
                 for an unversioned export.
             tracker: Active experiment tracker name recorded in the stamp, if any.
             run_id: Deploy run id recorded in the stamp, if any.
-            export_specs: The model's export specifications when the caller resolved them
-                already, else :meth:`prepare_export_specs` resolves them from the datamodule.
         """
         self.deploy_cfg = deploy_cfg
         self.output_dir = output_dir
-        self.datamodule = datamodule
         self.model = model
+        self.export_specs: MappingProxyType[str, ExportSpec] = MappingProxyType(dict(export_specs))
         self.config_name = config_name
         self.release = release
         self.tracker = tracker
         self.run_id = run_id
-        self.export_specs = export_specs
         self.device = self.model.device
         self.output_dir.mkdir(parents=True, exist_ok=True)
-
-    def prepare_export_specs(self) -> MappingProxyType[str, ExportSpec]:
-        """Return the export specifications, resolving them from the datamodule when not given."""
-        if self.export_specs is not None:
-            return MappingProxyType(dict(self.export_specs))
-        export_specs = resolve_export_specs(
-            datamodule=self.datamodule, model=self.model, device=self.device
-        )
-        return MappingProxyType(export_specs)
 
     def export(self) -> DeploymentExportOutputs:
         """Export the trained model for deployment."""
         logger.info("Starting model export...")
 
-        export_specs = self.prepare_export_specs()
+        export_specs = self.export_specs
         export_git_sha = get_git_sha()
 
         onnx_exported_paths: Sequence[Path] = []
