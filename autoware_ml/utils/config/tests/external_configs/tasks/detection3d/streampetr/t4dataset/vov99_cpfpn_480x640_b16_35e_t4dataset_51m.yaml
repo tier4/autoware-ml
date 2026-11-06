@@ -1,0 +1,43 @@
+# @package _global_
+# T4Dataset leaf of the test config root, the shape of the T4 stages of the external config
+# root: the recipe of the j6gen2 fine-tune, stage 3 of the StreamPETR flow (nuScenes pretrain
+# -> T4 gen base -> j6gen2 fine-tune). It pins the accepted run: 4 GPUs x batch 16 (total batch
+# 64), 35 epochs, AdamW lr 4.0e-4 with the image backbone at a tenth; for any other total batch
+# size N rescale both LRs by N/64. The detector trains the seven classes of the dynamic T4
+# taxonomy, in the order of the base (barrier before traffic_cone); the model package of the
+# deployed node lists the classes in this order.
+defaults:
+  - base_51m
+  - /database@database: t4dataset/t4dataset_base
+  - override /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: default_dynamic
+  - override /ego@ego: default_t4dataset
+  - _self_
+
+batch_size: 16
+# More workers oversubscribe a shared host's CPU and starve the GPUs; raise only together with
+# per-worker thread pinning (cv2.setNumThreads(0), OMP_NUM_THREADS=1) and measure.
+num_workers: 8
+experiment_group_name: streampetr/${database.version}/t4dataset
+experiment_name: vov99_cpfpn_480x640_b16_35e_t4dataset_51m
+
+# Initialize from the stage-2 checkpoint (--weights), the T4 gen base leaf.
+weights: ???
+
+trainer:
+  # Pin to 4 GPUs so the total batch stays 64 and the learning rates match. Lightning would
+  # otherwise grab every visible GPU and change the batch size.
+  devices: 4
+  max_epochs: 35
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 35-epoch schedule.
+    epoch_intervals: [[0, 5], [25, 1]]
+
+optimizer:
+  lr: 4.0e-4
+
+model:
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 4.0e-5

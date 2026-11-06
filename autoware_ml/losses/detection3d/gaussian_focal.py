@@ -33,20 +33,27 @@ class GaussianFocalLoss(nn.Module):
         prediction: torch.Tensor,
         target: torch.Tensor,
         weights: torch.Tensor | None = None,
+        avg_factor: float | None = None,
     ) -> torch.Tensor:
         """Compute Gaussian focal loss on dense heatmaps.
 
         Args:
-            prediction: Raw heatmap logits.
+            prediction: Raw heatmap logits of any float dtype; the loss is computed in float32.
             target: Gaussian heatmap targets.
             weights: Optional weights broadcastable to ``prediction``, for example one weight
                 per sample and class. A zero drops the cell from the loss and, if it is a peak,
                 from the positive count normalizing the loss.
+            avg_factor: Normalizer of the summed loss given by the caller and used as given,
+                for example a positive count shared with other losses, which averaged over the
+                DDP ranks can be below 1. None divides by the weighted number of peaks, at
+                least 1.
 
         Returns:
             Scalar heatmap loss value.
         """
-        prediction = prediction.sigmoid().clamp(min=1e-4, max=1 - 1e-4)
+        # In float32: bfloat16 rounds the clamp bound 1 - 1e-4 to 1, so under bf16 autocast a
+        # confident logit would make log(1 - prediction) infinite and the gradients NaN.
+        prediction = prediction.float().sigmoid().clamp(min=1e-4, max=1 - 1e-4)
         pos_mask = target.eq(1).float()
         neg_mask = target.lt(1).float()
         if weights is not None:
@@ -58,4 +65,5 @@ class GaussianFocalLoss(nn.Module):
         # leaves the positive count normalizing the loss.
         pos_loss = -torch.log(prediction) * (1 - prediction).pow(self.alpha) * pos_mask
         neg_loss = -torch.log(1 - prediction) * prediction.pow(self.alpha) * neg_weights * neg_mask
-        return (pos_loss.sum() + neg_loss.sum()) / pos_mask.sum().clamp_min(1)
+        normalizer = pos_mask.sum().clamp_min(1) if avg_factor is None else avg_factor
+        return (pos_loss.sum() + neg_loss.sum()) / normalizer
