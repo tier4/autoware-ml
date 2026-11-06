@@ -1,0 +1,49 @@
+# @package _global_
+# Stage 1 of the three-stage StreamPETR flow (nuScenes pretrain -> T4 gen base -> j6gen2
+# fine-tune), the reference StreamPETR nuScenes recipe: 30 epochs, AdamW with the image
+# backbone at a tenth of the learning rate, grad-clip 35, 500-iteration warmup into a
+# per-epoch cosine decay to lr * 1e-3, and the auxiliary FocalHead2D. It pins the accepted run:
+# 4 GPUs x batch 8 (total batch 32), lr 8.0e-4 / 8.0e-5 (the reference total-batch-16 recipe
+# uses 4.0e-4 / 4.0e-5; rescale both LRs by N/32 for another total batch size N). Watch the
+# first few hundred iterations: at this LR a loss spike or NaN means both LRs should back off
+# (e.g. to 6e-4 / 6e-5). The nuScenes detection taxonomy and the dynamic T4 taxonomy of stage 2
+# are the same seven classes with the last two swapped (traffic_cone, barrier here; barrier,
+# traffic_cone there), so permute the classification rows of the checkpoint before stage 2
+# loads it (see docs/models/streampetr.md).
+defaults:
+  - base_51m
+  - ../focal2d_head
+  - /database@database: nuscenes/nuscenes_base
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: streampetr/${database.version}/nuscenes
+experiment_name: vov99_cpfpn_320x800_b8_30e_nuscenes_51m_pretrain
+
+# Initialize from an RGB-stem DD3D/FCOS3D-pretrained VoVNet-99 backbone (--weights, see
+# docs/models/streampetr.md); without that init the recipe underperforms.
+weights: ???
+
+trainer:
+  # Pin to 4 GPUs so the total batch stays 32 and the learning rates match.
+  devices: 4
+  max_epochs: 30
+  # The reference nuScenes recipe clips at 35 (the T4 stages clip at 1).
+  gradient_clip_val: 35.0
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 30-epoch schedule.
+    epoch_intervals: [[0, 5], [20, 1]]
+
+optimizer:
+  lr: 8.0e-4
+
+model:
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 8.0e-5
+  scheduler:
+    # The reference nuScenes schedule anneals to lr * 1e-3, not the 1e-4 of the T4 stages.
+    eta_min_factor: 1.0e-3
