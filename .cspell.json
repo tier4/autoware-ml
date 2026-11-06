@@ -291,6 +291,7 @@
     "timonwong",
     "tofile",
     "torchmetrics",
+    "torchscript",
     "torchvision",
     "tperr",
     "trafficcone",

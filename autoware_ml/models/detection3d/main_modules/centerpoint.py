@@ -22,7 +22,7 @@ around the reusable PointPillars and CenterPoint detection components.
 from __future__ import annotations
 
 from types import MappingProxyType
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from jaxtyping import Float32
@@ -34,7 +34,12 @@ from torch.optim.lr_scheduler import LRScheduler
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    CenterHeadOutputs,
+    Detection3DHeadOutputs,
+)
+from autoware_ml.deployment.stages import GraphStage, RunState, Stage, TorchStage
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -227,69 +232,84 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         )
         return multi_task_predictions
 
+    # TODO(vividf): Remove together with ModuleBaseModel.build_export_spec().
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
         del multi_task_batch_inputs
-        raise RuntimeError("CenterPoint deployment uses split modules; call build_export_specs().")
+        raise RuntimeError(
+            "CenterPoint deployment uses split modules; build_export_specs() derives them "
+            "from build_stages()."
+        )
 
-    def build_export_specs(
-        self, multi_task_batch_inputs: ModelBatchInputs
-    ) -> dict[str, ExportSpec]:
-        """Build split CenterPoint deployment export specifications.
+    def build_stages(self) -> Sequence[Stage]:
+        """Declare the split the Autoware runtime loads; stage names match its artifact names::
 
-        The exported ABI follows the original CenterPoint deployment split:
-        decorated pillar features feed the PFN ONNX module, and dense BEV
-        spatial features feed the backbone/neck/head ONNX module. Scatter is a
-        runtime preprocessing step between the two exported modules.
+            decorate (torch) -> pts_voxel_encoder_centerpoint (graph)
+                -> scatter (torch) -> pts_backbone_neck_head_centerpoint (graph)
 
-        Args:
-            multi_task_batch_inputs: Example preprocessed batch used to trace both modules.
-
-        Returns:
-            Ordered mapping of module name to export specification.
-
-        Raises:
-            RuntimeError: If the model is in training mode. Tracing the pillar encoder would
-                update its BatchNorm running statistics, so the caller puts the model in eval
-                mode first, as the deploy script does.
-            ValueError: If the batch carries no voxel data.
+        Pillar decoration and the BEV scatter have no learned parameters and stay out of the
+        graphs.
         """
-        if self.training:
-            raise RuntimeError("CenterPoint export needs the model in eval mode.")
-        voxels_data = multi_task_batch_inputs.voxels_data
-        if voxels_data is None:
-            raise ValueError(
-                "ModelBatchInputs must contain voxels_data to build CenterPoint export specs."
-            )
 
-        with torch.no_grad():
-            input_features = self.pts_voxel_encoder.encode(voxels_data)
-            pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
+        def voxels_data(state: RunState) -> VoxelsData:
+            voxels_data = state.batch.voxels_data
+            if voxels_data is None:
+                raise ValueError(
+                    "ModelBatchInputs must contain voxels_data to run the CenterPoint stages."
+                )
+            return voxels_data
+
+        def decorate(state: RunState) -> dict[str, torch.Tensor]:
+            return {"input_features": self.pts_voxel_encoder.encode(voxels_data(state))}
+
+        def scatter(state: RunState) -> dict[str, torch.Tensor]:
+            voxels = voxels_data(state)
+            pillar_features = state["pillar_features"].to(state.device).squeeze(1)
             # Sized by the batch, as in forward(): the voxel batch indices miss a sample
             # without voxels.
-            spatial_features = self.pts_middle_encoder(
-                pillar_features=pillar_features,
-                coords=voxels_data.coords,
-                batch_indices=voxels_data.batch_indices,
-                batch_size=multi_task_batch_inputs.batch_size(),
-            )
+            return {
+                "spatial_features": self.pts_middle_encoder(
+                    pillar_features=pillar_features,
+                    coords=voxels.coords.to(state.device),
+                    batch_indices=voxels.batch_indices.to(state.device),
+                    batch_size=state.batch.batch_size(),
+                )
+            }
 
         head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
-            self.pts_backbone,
-            self.pts_neck,
-            self.bbox_head,
+            self.pts_backbone, self.pts_neck, self.bbox_head
         )
-        return {
-            "pts_voxel_encoder_centerpoint": ExportSpec(
+        return (
+            TorchStage("decorate", run=decorate, inputs=(), outputs=("input_features",)),
+            GraphStage(
+                "pts_voxel_encoder_centerpoint",
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
-                args=(input_features,),
-                input_names=["input_features"],
-                output_names=["pillar_features"],
+                inputs=("input_features",),
+                outputs=("pillar_features",),
             ),
-            "pts_backbone_neck_head_centerpoint": ExportSpec(
+            TorchStage(
+                "scatter", run=scatter, inputs=("pillar_features",), outputs=("spatial_features",)
+            ),
+            GraphStage(
+                "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,
-                args=(spatial_features,),
-                input_names=["spatial_features"],
-                output_names=head_wrapper.output_names,
+                inputs=("spatial_features",),
+                # Named after the CenterHeadOutputs fields; build_deployed_eval_output
+                # rebuilds the typed outputs by name.
+                outputs=tuple(head_wrapper.output_names),
             ),
-        }
+        )
+
+    def build_deployed_eval_output(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: Mapping[str, torch.Tensor]
+    ) -> dict[str, Any]:
+        """Score the deployed head maps exactly like forward()'s."""
+        return self.build_eval_output(
+            multi_task_batch_inputs,
+            ModelOutputs(
+                detection3d_head_outputs=Detection3DHeadOutputs(
+                    center_head_outputs=CenterHeadOutputs.from_export_tensors(outputs),
+                    transfusion_head_outputs=None,
+                )
+            ),
+        )

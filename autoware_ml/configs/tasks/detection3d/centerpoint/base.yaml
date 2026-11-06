@@ -39,6 +39,7 @@ deploy:
     dynamo: false
     opset_version: 17
     do_constant_folding: false
+    # build_stages() names every module's inputs and outputs.
     modules:
       pts_voxel_encoder_centerpoint:
         dynamic_axes:

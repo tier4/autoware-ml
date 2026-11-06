@@ -308,6 +308,34 @@ class TestCenterHeadOutputs(unittest.TestCase):
         for name, tensor in zip(("heatmap", "reg", "height", "dim", "rot", "vel"), exported):
             self.assertIs(tensor, tensors[name])
 
+    def test_from_export_tensors_inverts_export_tensors(self) -> None:
+        """Test that the named exported tensors rebuild the outputs, an unexported branch unset."""
+        for names in (
+            ["heatmap", "reg", "height", "dim", "rot", "vel"],
+            ["heatmap", "reg", "height", "dim", "rot"],
+        ):
+            with self.subTest(names=names):
+                tensors = self._build_tensors()
+                if "vel" not in names:
+                    tensors["vel"] = None
+                outputs = CenterHeadOutputs.model_validate(tensors)
+
+                rebuilt = CenterHeadOutputs.from_export_tensors(
+                    dict(zip(names, outputs.export_tensors(names)))
+                )
+
+                for name, tensor in tensors.items():
+                    self.assertIs(getattr(rebuilt, name), tensor)
+
+    def test_from_export_tensors_rejects_an_unknown_or_missing_branch(self) -> None:
+        """Test that a name the head does not output, or a missing required branch, is rejected."""
+        tensors = self._build_tensors()
+
+        with self.assertRaisesRegex(ValueError, r"no output named \['score'\]"):
+            CenterHeadOutputs.from_export_tensors({**tensors, "score": torch.zeros(1)})
+        with self.assertRaises(ValidationError):
+            CenterHeadOutputs.from_export_tensors({"heatmap": tensors["heatmap"]})
+
     def test_is_frozen(self) -> None:
         """Test that the outputs cannot be mutated after construction."""
         outputs = CenterHeadOutputs.model_validate(self._build_tensors())

@@ -178,7 +178,9 @@ deploy:
 Set `dynamo: false` for models that rely on legacy ONNX symbolic functions
 instead of `torch.export`. In that mode, `dynamic_axes` is passed to the legacy
 exporter directly, and `dynamic_shapes` can still be used as a shorthand to
-derive equivalent symbolic axes.
+derive equivalent symbolic axes. An export spec that carries its own
+`dynamic_axes` needs `dynamo: false`: with `dynamo: true` the export stops with
+an error instead of producing a graph with those axes static.
 
 ### TensorRT Settings
 
@@ -209,6 +211,19 @@ return an explicit export module plus example tensor inputs.
 
 This keeps export-time behavior close to the model implementation and avoids
 ad hoc post-processing for most cases.
+
+A model whose deployment splits into several exported graphs with PyTorch glue
+between them can declare that split once instead, by overriding
+`build_stages()`: an ordered list of `GraphStage` (one exported module, named
+after the stage, with the tensor names it reads and writes) and `TorchStage`
+(glue that is not exported). `build_export_specs()` then checks the dataflow,
+runs the stages once on the example batch in eval mode, and returns one export
+spec per `GraphStage`, traced on the tensors the glue produced. No stage may
+modify an input in place, since other stages read the same tensors; a run
+rejects a stage that does. The model
+outputs are the graph outputs no later stage reads, so a declaration ends with
+a `GraphStage`; PyTorch post-processing of the deployed outputs belongs in
+`build_deployed_eval_output()`. CenterPoint declares its two modules this way.
 
 ## Optional Graph Modification
 

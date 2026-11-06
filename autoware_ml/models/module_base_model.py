@@ -36,6 +36,8 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.deployment.export_specs import build_export_specs_from_stages
+from autoware_ml.deployment.stages import Stage
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -399,6 +401,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             else None,
         )
 
+    # TODO(vividf): Remove once TransFusion, FRNet, CalibrationStatus and camera-lidar BEVFusion
+    # declare build_stages().
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the single-module deployment export specification.
 
@@ -416,13 +420,48 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         raise NotImplementedError("Model must implement build_export_spec()")
 
+    def build_stages(self) -> Sequence[Stage] | None:
+        """Declare the deployment stage graph, or return ``None`` for a model without one.
+
+        When declared, :meth:`build_export_specs` derives from it. Each call builds fresh
+        export wrappers, some holding copies of submodules (CenterPoint's head), so call it
+        after replacing modules (e.g. with quantized ones) instead of reusing earlier stages.
+
+        Returns:
+            The ordered stages, or ``None``.
+        """
+        return None
+
+    def build_deployed_eval_output(
+        self, multi_task_batch_inputs: ModelBatchInputs, outputs: Mapping[str, torch.Tensor]
+    ) -> dict[str, Any]:
+        """Map a deployed run's model outputs to what :meth:`build_eval_output` returns.
+
+        The model outputs are the stage graph's unconsumed graph outputs
+        (:func:`~autoware_ml.deployment.stages.model_output_names`). They can differ from
+        ``forward()``'s (decoded boxes, or labels and scores instead of logits), so each
+        model maps them itself.
+
+        Args:
+            multi_task_batch_inputs: Model inputs the run started from.
+            outputs: The model outputs, keyed by name.
+
+        Returns:
+            Flat dict the attached metric suites read.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement build_deployed_eval_output(), so the "
+            "outputs of its deployed graphs cannot be scored."
+        )
+
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 
-        The default implementation wraps :meth:`build_export_spec` as a single
-        ``end_to_end`` module. Models with separate exportable sub-graphs
+        A model that declares :meth:`build_stages` gets one spec per ``GraphStage``, keyed
+        by stage name. Otherwise the default implementation wraps :meth:`build_export_spec`
+        as a single ``end_to_end`` module. Models with separate exportable sub-graphs
         override this to return one spec per architectural component.
 
         Args:
@@ -430,5 +469,25 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         Returns:
             Ordered mapping of module name to export specification.
+
+        Raises:
+            RuntimeError: If a stage-graph model or any submodule is in training mode:
+                tracing would update the BatchNorm running statistics.
         """
+        stages = self.build_stages()
+        if stages is not None:
+            # A submodule can be in training mode under a model in eval mode.
+            in_training = [
+                name or "<model>" for name, module in self.named_modules() if module.training
+            ]
+            if in_training:
+                raise RuntimeError(
+                    f"{type(self).__name__}.build_export_specs() needs the model in eval "
+                    "mode: tracing the stage graph in training mode would update the "
+                    f"BatchNorm running statistics. In training mode: {in_training[:3]}"
+                    f"{' ...' if len(in_training) > 3 else ''}."
+                )
+            return build_export_specs_from_stages(stages, multi_task_batch_inputs, self.device)
+        # TODO(vividf): Drop this fallback with build_export_spec(). Once every model declares
+        # build_stages(), this method only derives the specs and is no longer overridden.
         return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
