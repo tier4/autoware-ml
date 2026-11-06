@@ -250,11 +250,15 @@ def _build_frame_meta(
     ego2globals: torch.Tensor | None = None,
 ) -> FrameMetaBatch:
     batch_size = len(timestamps)
+    if ego2globals is None:
+        ego2globals = torch.eye(4).repeat(batch_size, 1, 1)
     return FrameMetaBatch(
-        ego2globals=torch.eye(4).repeat(batch_size, 1, 1) if ego2globals is None else ego2globals,
+        # The dataset serves the poses in float64
+        ego2globals=ego2globals.double(),
         scene_tokens=list(scene_tokens or [f"db/scene_{index}/0" for index in range(batch_size)]),
         timestamps=torch.tensor(timestamps, dtype=torch.float64),
         lanelet_map_paths=[None] * batch_size,
+        key_frames=[True] * batch_size,
     )
 
 
@@ -1373,6 +1377,7 @@ def test_a_padded_eval_batch_keeps_one_entry_per_sample() -> None:
     frames = eval_out.detection3d.frames
     assert len(frames) == 3
     assert [frame.is_padding for frame in frames] == [False, True, False]
+    assert [frame.scored for frame in frames] == [True, False, True]
     assert [frame.frame_meta.scene_token for frame in frames if frame.frame_meta] == [
         "db/a/0",
         "db/b/0",

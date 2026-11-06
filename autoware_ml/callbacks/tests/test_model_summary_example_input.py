@@ -90,6 +90,7 @@ def _datamodule(train_dataset: BaseDataset | None) -> DataModule:
     database.taxonomy = "taxonomy"
     database.version = "v1"
     database.database_hash = "h"
+    database.serves_non_key_frames = False
     datamodule = DataModule(
         splitter=MagicMock(spec=SplitterInterface),
         sources={

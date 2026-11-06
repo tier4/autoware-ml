@@ -403,7 +403,8 @@ def _reanchor_on_frame(metadata: ModelGTSample, frame_index: int) -> ModelGTSamp
     frame_meta = metadata.frame_meta
     if frame_meta is not None:
         frame_meta = frame_meta._replace(
-            ego2global=anchor.lidar_to_ego_pose_to_global_matrix @ anchor.sensor_to_ego_pose_matrix,
+            ego2global=anchor.lidar_to_ego_pose_to_global_matrix
+            @ anchor.sensor_to_ego_pose_matrix.double(),
             timestamp=float(anchor.timestamp),
         )
     return metadata._replace(

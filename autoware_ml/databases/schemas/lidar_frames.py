@@ -54,7 +54,7 @@ class LidarFrameDatasetSchema(BaseFieldSchema):
         "lidar_sensor_to_ego_pose_matrix", pl.Array(pl.Float32, shape=(4, 4))
     )
     lidar_frame_ego_pose_to_global_matrix = DatasetTableColumn(
-        "lidar_frame_ego_pose_to_global_matrix", pl.Array(pl.Float32, shape=(4, 4))
+        "lidar_frame_ego_pose_to_global_matrix", pl.Array(pl.Float64, shape=(4, 4))
     )
     lidar_sensor_to_lidar_sweep_matrix = DatasetTableColumn(
         "lidar_sensor_to_lidar_sweep_matrix", pl.Array(pl.Float32, shape=(4, 4))
@@ -152,17 +152,6 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
         return self.lidar_sensor_to_ego_pose_matrix.astype(np.float32)
 
     @property
-    def lidar_frame_ego_pose_to_global_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
-        """
-        Convert the lidar frame ego pose to global matrix to float32.
-
-        Returns:
-          Float32[np.ndarray, "4 4"]: Lidar frame ego pose to global matrix.
-        """
-
-        return self.lidar_frame_ego_pose_to_global_matrix.astype(np.float32)
-
-    @property
     def lidar_sensor_to_lidar_sweep_matrix_fp32(self) -> Float32[np.ndarray, "4 4"]:
         """
         Convert the lidar sensor to lidar sweep matrix to float32.
@@ -194,7 +183,7 @@ class LidarFrameDataModel(BaseModel, DataModelInterface):
             LidarFrameDatasetSchema.lidar_pointcloud_source_relative_path.name: self.lidar_pointcloud_source_relative_path,
             LidarFrameDatasetSchema.lidar_pointcloud_num_features.name: self.lidar_pointcloud_num_features,
             LidarFrameDatasetSchema.lidar_sensor_to_ego_pose_matrix.name: self.lidar_sensor_to_ego_pose_matrix_fp32,
-            LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name: self.lidar_frame_ego_pose_to_global_matrix_fp32,
+            LidarFrameDatasetSchema.lidar_frame_ego_pose_to_global_matrix.name: self.lidar_frame_ego_pose_to_global_matrix,
             LidarFrameDatasetSchema.lidar_sensor_to_lidar_sweep_matrix.name: self.lidar_sensor_to_lidar_sweep_matrix_fp32,
             LidarFrameDatasetSchema.lidar_pointcloud_semantic_mask_relative_path.name: self.lidar_pointcloud_semantic_mask_relative_path,
             LidarFrameDatasetSchema.lidar_pointcloud_t4pack_frame.name: (

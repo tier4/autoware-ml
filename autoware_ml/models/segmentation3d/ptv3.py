@@ -22,7 +22,7 @@ head; losses and prediction formatting are owned by the head module.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 
@@ -51,6 +51,8 @@ from autoware_ml.metrics.eval_output import EvalOutput
 
 class PTv3Segmentation3DModel(PTv3BaseModel):
     """Wrap PTv3 semantic segmentation in the shared training interface."""
+
+    skips_unsupervised_frames: ClassVar[bool] = True
 
     def __init__(
         self,

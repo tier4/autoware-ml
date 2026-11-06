@@ -45,9 +45,10 @@ def frame_meta(
         The frame metadata.
     """
     return FrameMetaSample(
-        ego2global=torch.eye(4, dtype=torch.float32) if ego2global is None else ego2global,
+        ego2global=torch.eye(4, dtype=torch.float64) if ego2global is None else ego2global,
         scene_token=scene_token,
         timestamp=0.0,
+        key_frame=True,
         lanelet_map_path=lanelet_map_path,
     )
 
@@ -93,6 +94,7 @@ def detection_frame(
     gt_num_points: torch.Tensor | None = None,
     is_padding: bool = False,
     meta: FrameMetaSample | None = None,
+    key_frame: bool = True,
 ) -> Detection3DEvalFrame:
     """One detection frame, the ground truth cast to the dtypes the typed output takes.
 
@@ -103,6 +105,7 @@ def detection_frame(
         gt_num_points: ``(M,)`` lidar points per box, or ``None``.
         is_padding: Whether the frame only pads a streaming lane.
         meta: Metadata of the frame, or ``None``.
+        key_frame: Whether the frame is a key frame of its scene.
 
     Returns:
         The frame.
@@ -113,6 +116,7 @@ def detection_frame(
         gt_labels=gt_labels.to(torch.long),
         gt_num_points=gt_num_points,
         is_padding=is_padding,
+        key_frame=key_frame,
         frame_meta=meta,
     )
 
@@ -137,6 +141,8 @@ def segmentation_frame(
     meta: FrameMetaSample | None = None,
     gt_boxes: torch.Tensor | None = None,
     gt_box_labels: torch.Tensor | None = None,
+    is_padding: bool = False,
+    key_frame: bool = True,
 ) -> Segmentation3DEvalFrame:
     """One segmentation frame.
 
@@ -148,6 +154,8 @@ def segmentation_frame(
         meta: Metadata of the frame, or ``None``.
         gt_boxes: ``(M, 7+)`` detection ground truth boxes, or ``None``.
         gt_box_labels: ``(M,)`` detection ground truth class indices, or ``None``.
+        is_padding: Whether the frame only pads a streaming lane.
+        key_frame: Whether the frame is a key frame of its scene.
 
     Returns:
         The frame.
@@ -157,6 +165,8 @@ def segmentation_frame(
         pred=pred,
         target=target,
         scores=scores,
+        is_padding=is_padding,
+        key_frame=key_frame,
         frame_meta=meta,
         gt_boxes=None if gt_boxes is None else gt_boxes.to(torch.float32),
         gt_box_labels=None if gt_box_labels is None else gt_box_labels.to(torch.long),

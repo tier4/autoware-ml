@@ -53,16 +53,24 @@ class DatasetParams(BaseModel):
     Attributes:
       dataset_name: Name of the dataset.
       sample_steps: Number of steps to sample.
+      non_key_frames: Also serve the lidar frames between the key frames, without annotations,
+        so a temporal model can run on the full stream of a key frame annotated scene. Every
+        ``sample_steps``-th key frame keeps its annotations, the other key frames are served
+        like the frames between them.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
     sample_steps: int = Field(ge=1)
+    non_key_frames: bool = False
 
     def __str__(self) -> str:
         """String representation of the database version."""
-        return f"DatasetParams(dataset_name={self.dataset_name}, sample_steps={self.sample_steps})"
+        return (
+            f"DatasetParams(dataset_name={self.dataset_name}, sample_steps={self.sample_steps}, "
+            f"non_key_frames={self.non_key_frames})"
+        )
 
     @property
     def hash_repr(self) -> str:
@@ -75,12 +83,17 @@ class DatasetParams(BaseModel):
         """
 
         return (
-            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps})"
+            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps}, "
+            f"non_key_frames={self.non_key_frames})"
         )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
+        return (
+            self.dataset_name == other.dataset_name
+            and self.sample_steps == other.sample_steps
+            and self.non_key_frames == other.non_key_frames
+        )
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
