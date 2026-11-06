@@ -55,6 +55,8 @@ def _det3d_state(class_names=("car",)) -> Detection3DState:
         pred_labels=torch.tensor([0]),
         gt_boxes=box.clone(),
         gt_labels=torch.tensor([0]),
+        ignored_gt_boxes=torch.zeros((0, 9)),
+        ignored_gt_labels=torch.zeros(0, dtype=torch.long),
     )
     return Detection3DState(samples=[sample], class_names=class_names)
 
@@ -108,6 +110,8 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
         pred_labels=torch.zeros(10, dtype=torch.long),
         gt_boxes=boxes.clone(),
         gt_labels=torch.zeros(10, dtype=torch.long),
+        ignored_gt_boxes=torch.zeros((0, 9)),
+        ignored_gt_labels=torch.zeros(0, dtype=torch.long),
     )
     state = Detection3DState(samples=[sample], class_names=("car", "truck"))
 
@@ -137,6 +141,8 @@ def _det3d_state_tp_fp() -> Detection3DState:
         pred_labels=torch.tensor([0, 0]),
         gt_boxes=gt,
         gt_labels=torch.tensor([0]),
+        ignored_gt_boxes=torch.zeros((0, 9)),
+        ignored_gt_labels=torch.zeros(0, dtype=torch.long),
     )
     return Detection3DState(samples=[sample], class_names=("car",))
 

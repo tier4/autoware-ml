@@ -54,6 +54,8 @@ def _det3d_sample(pred_xy_label, gt_xy_label) -> Detection3DSample:
         pred_labels=torch.tensor([lbl for _, _, lbl in pred_xy_label], dtype=torch.long),
         gt_boxes=torch.tensor([box(x, y) for x, y, _ in gt_xy_label]),
         gt_labels=torch.tensor([lbl for _, _, lbl in gt_xy_label], dtype=torch.long),
+        ignored_gt_boxes=torch.zeros((0, 9)),
+        ignored_gt_labels=torch.zeros(0, dtype=torch.long),
     )
 
 

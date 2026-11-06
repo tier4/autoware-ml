@@ -43,7 +43,9 @@ DEFAULT_TP_THRESHOLD = 2.0
 class Detection3DSample:
     """Prediction and ground-truth tensors for one detection frame.
 
-    ``gt_ttc`` / ``pred_ttc`` are the per-box reachability time-to-collision to
+    ``ignored_gt_boxes`` / ``ignored_gt_labels`` are the ground truth boxes the evaluation
+    leaves out, the boxes below the point filter of the suite. A prediction that claims one
+    counts neither as a true nor as a false positive. ``gt_ttc`` / ``pred_ttc`` are the per-box reachability time-to-collision to
     ego in seconds (``inf`` means unreachable), present only when the suite is
     built with a collision provider, and read by the criticality
     metrics. ``ttc_covered`` is False for frames whose scene has no lanelet map
@@ -57,6 +59,8 @@ class Detection3DSample:
     pred_labels: torch.Tensor
     gt_boxes: torch.Tensor
     gt_labels: torch.Tensor
+    ignored_gt_boxes: torch.Tensor
+    ignored_gt_labels: torch.Tensor
     gt_ttc: torch.Tensor | None = None
     pred_ttc: torch.Tensor | None = None
     ttc_covered: bool = True

@@ -91,8 +91,12 @@ class ConfusionMatrix(Metric[Detection3DState]):
             pred_centers = sample.pred_boxes[:, :2].cpu().numpy()[keep]
             if pred_centers.shape[0] == 0:
                 continue
-            is_tp, matched_gt = greedy_match(
-                gt_centers, pred_centers, pred_scores[keep], self.match_threshold
+            is_tp, matched_gt, _ = greedy_match(
+                gt_centers,
+                sample.ignored_gt_boxes[:, :2].cpu().numpy(),
+                pred_centers,
+                pred_scores[keep],
+                self.match_threshold,
             )
             true_labels = sample.gt_labels.cpu().numpy()[matched_gt[is_tp]]
             pred_labels = sample.pred_labels.cpu().numpy()[keep][is_tp]

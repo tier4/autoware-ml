@@ -101,6 +101,7 @@ class CriticalFPFN(Metric[Detection3DState]):
             gt_boxes = sample.gt_boxes.numpy().astype(np.float64)
             gt_labels = sample.gt_labels.numpy().astype(np.int64)
             gt_critical = np.isfinite(sample.gt_ttc.numpy())
+            ignored_centers = sample.ignored_gt_boxes.numpy().astype(np.float64)[:, :2]
             pred_boxes = sample.pred_boxes.numpy().astype(np.float64)
             pred_scores = sample.pred_scores.numpy().astype(np.float64)
             pred_labels = sample.pred_labels.numpy().astype(np.int64)
@@ -117,11 +118,15 @@ class CriticalFPFN(Metric[Detection3DState]):
                         "below its score floor, which must be the lowest confidence read here."
                     )
                 kept_critical = np.isfinite(kept_ttc)
-                is_tp, matched_gt = greedy_match(
-                    gt_boxes[:, :2], kept_boxes[:, :2], kept_scores, self.match_threshold
+                is_tp, matched_gt, ignored = greedy_match(
+                    gt_boxes[:, :2],
+                    ignored_centers,
+                    kept_boxes[:, :2],
+                    kept_scores,
+                    self.match_threshold,
                 )
-                # Critical false positives: unmatched predictions that are in-path.
-                false_positive = (~is_tp) & kept_critical
+                # Critical false positives: unmatched in-path predictions on no ignored box.
+                false_positive = (~is_tp) & (~ignored) & kept_critical
                 matched = np.zeros(gt_boxes.shape[0], dtype=bool)
                 matched[matched_gt[is_tp]] = True
                 # Critical false negatives: unmatched ground truth that is in-path.

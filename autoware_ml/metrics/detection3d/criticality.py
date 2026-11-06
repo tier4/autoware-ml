@@ -22,78 +22,170 @@ and the weighted average precision, so they are tested without the suite.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
+from jaxtyping import Bool, Float, Int64
+
+
+class GreedyMatch(NamedTuple):
+    """Result of one greedy claim pass, aligned to the predictions in their original order.
+
+    Attributes:
+        is_tp: Whether the prediction claimed a ground truth box the metrics count.
+        matched_gt: Index of the claimed ground truth box, -1 for an unmatched prediction.
+        ignored: Whether the prediction claimed an ignored ground truth box instead, which
+            leaves it out of the evaluation as neither a true nor a false positive.
+    """
+
+    is_tp: Bool[np.ndarray, " num_preds"]
+    matched_gt: Int64[np.ndarray, " num_preds"]
+    ignored: Bool[np.ndarray, " num_preds"]
+
+
+def greedy_match_costs(
+    costs: Float[np.ndarray, "num_preds num_gts"],
+    ignored_costs: Float[np.ndarray, "num_preds num_ignored"],
+    pred_scores: Float[np.ndarray, " num_preds"],
+    thresholds: tuple[float, ...],
+) -> dict[float, GreedyMatch]:
+    """Score-ordered greedy matching on a cost matrix at several thresholds.
+
+    In score order every prediction claims its nearest unclaimed counted box within the
+    threshold. A prediction left without one claims its nearest unclaimed ignored box within
+    the threshold instead, one prediction per box, so a duplicate stays a false positive. The
+    candidate order and the score order are threshold independent, so they are built once and
+    each threshold runs only its own claim pass.
+
+    Args:
+        costs: Match cost of every prediction and counted ground truth pair ``(N, M)``.
+        ignored_costs: Match cost of every prediction and ignored ground truth pair ``(N, I)``.
+        pred_scores: Prediction confidences, shape ``(N,)``.
+        thresholds: Largest match cost of each claim pass.
+
+    Returns:
+        Mapping of threshold to the match of its claim pass.
+    """
+    num_pred = costs.shape[0]
+    matches = {
+        threshold: GreedyMatch(
+            np.zeros(num_pred, dtype=bool),
+            np.full(num_pred, -1, dtype=np.int64),
+            np.zeros(num_pred, dtype=bool),
+        )
+        for threshold in thresholds
+    }
+    if num_pred == 0:
+        return matches
+    # Candidates in ascending cost order, computed once: each claim pass then only walks a row
+    # past its claimed entries. The stable sort keeps the lowest index first among equal
+    # costs, the argmin tie rule.
+    candidates = np.argsort(costs, axis=1, kind="stable").tolist()
+    ignored_candidates = np.argsort(ignored_costs, axis=1, kind="stable").tolist()
+    score_order = np.argsort(-pred_scores, kind="stable")
+    for threshold, match in matches.items():
+        claimed = np.zeros(costs.shape[1], dtype=bool)
+        claimed_ignored = np.zeros(ignored_costs.shape[1], dtype=bool)
+        for pred_index in score_order:
+            candidate = _first_unclaimed(
+                costs[pred_index], candidates[pred_index], claimed, threshold
+            )
+            if candidate >= 0:
+                match.is_tp[pred_index] = True
+                match.matched_gt[pred_index] = candidate
+                continue
+            candidate = _first_unclaimed(
+                ignored_costs[pred_index],
+                ignored_candidates[pred_index],
+                claimed_ignored,
+                threshold,
+            )
+            match.ignored[pred_index] = candidate >= 0
+    return matches
+
+
+def _first_unclaimed(
+    row: Float[np.ndarray, " num_gts"],
+    candidates: list[int],
+    claimed: Bool[np.ndarray, " num_gts"],
+    threshold: float,
+) -> int:
+    """Claim the nearest unclaimed box within the threshold and return it, -1 for none.
+
+    Args:
+        row: Match cost of the prediction to every box.
+        candidates: Box indices in ascending cost order.
+        claimed: Claimed flags of the boxes, updated in place.
+        threshold: Largest match cost.
+
+    Returns:
+        Index of the claimed box, -1 when no unclaimed box lies within the threshold.
+    """
+    for candidate in candidates:
+        if row[candidate] > threshold:
+            return -1
+        if not claimed[candidate]:
+            claimed[candidate] = True
+            return candidate
+    return -1
+
+
+def center_distances(
+    pred_centers: Float[np.ndarray, "num_preds _"], gt_centers: Float[np.ndarray, "num_gts _"]
+) -> Float[np.ndarray, "num_preds num_gts"]:
+    """BEV center distance of every prediction and ground truth pair."""
+    return np.linalg.norm(pred_centers[:, None, :2] - gt_centers[None, :, :2], axis=2)
 
 
 def greedy_match_thresholds(
-    gt_centers: np.ndarray,
-    pred_centers: np.ndarray,
-    pred_scores: np.ndarray,
+    gt_centers: Float[np.ndarray, "num_gts _"],
+    ignored_centers: Float[np.ndarray, "num_ignored _"],
+    pred_centers: Float[np.ndarray, "num_preds _"],
+    pred_scores: Float[np.ndarray, " num_preds"],
     thresholds: tuple[float, ...],
-) -> dict[float, tuple[np.ndarray, np.ndarray]]:
+) -> dict[float, GreedyMatch]:
     """Score-ordered greedy center-distance matching at several thresholds.
 
-    The distance matrix, the candidate order, and the score order are threshold
-    independent, so they are built once and each threshold runs only its own
-    claim pass.
-
     Args:
-        gt_centers: Ground-truth BEV centers, shape ``(M, 2+)``.
+        gt_centers: Counted ground truth BEV centers, shape ``(M, 2+)``.
+        ignored_centers: Ignored ground truth BEV centers, shape ``(I, 2+)``.
         pred_centers: Predicted BEV centers, shape ``(N, 2+)``.
         pred_scores: Prediction confidences, shape ``(N,)``.
         thresholds: Center-distance match thresholds in meters.
 
     Returns:
-        Mapping of threshold to ``(is_tp, matched_gt)`` arrays aligned to the
-        predictions in their original order. ``is_tp`` is a boolean mask and
-        ``matched_gt`` holds the matched ground-truth index, ``-1`` for
-        non-matches.
+        Mapping of threshold to the match of its claim pass, see :func:`greedy_match_costs`.
     """
-    num_pred = pred_centers.shape[0]
-    empty = {
-        threshold: (np.zeros(num_pred, dtype=bool), np.full(num_pred, -1, dtype=np.int64))
-        for threshold in thresholds
-    }
-    if num_pred == 0 or gt_centers.shape[0] == 0:
-        return empty
-    distances = np.linalg.norm(pred_centers[:, None, :2] - gt_centers[None, :, :2], axis=2)
-    # Candidates in ascending distance order, computed once: each claim pass
-    # then only walks a row past its claimed entries. The stable sort keeps
-    # the lowest index first among equal distances, the argmin tie rule.
-    candidates = np.argsort(distances, axis=1, kind="stable").tolist()
-    score_order = np.argsort(-pred_scores, kind="stable")
-    for threshold, (is_tp, matched_gt) in empty.items():
-        claimed = np.zeros(gt_centers.shape[0], dtype=bool)
-        for pred_index in score_order:
-            row = distances[pred_index]
-            for candidate in candidates[pred_index]:
-                if row[candidate] > threshold:
-                    break
-                if claimed[candidate]:
-                    continue
-                is_tp[pred_index] = True
-                matched_gt[pred_index] = candidate
-                claimed[candidate] = True
-                break
-    return empty
+    return greedy_match_costs(
+        center_distances(pred_centers, gt_centers),
+        center_distances(pred_centers, ignored_centers),
+        pred_scores,
+        thresholds,
+    )
 
 
 def greedy_match(
-    gt_centers: np.ndarray, pred_centers: np.ndarray, pred_scores: np.ndarray, threshold: float
-) -> tuple[np.ndarray, np.ndarray]:
+    gt_centers: Float[np.ndarray, "num_gts _"],
+    ignored_centers: Float[np.ndarray, "num_ignored _"],
+    pred_centers: Float[np.ndarray, "num_preds _"],
+    pred_scores: Float[np.ndarray, " num_preds"],
+    threshold: float,
+) -> GreedyMatch:
     """Score-ordered greedy center-distance matching for one frame and class.
 
     Args:
-        gt_centers: Ground-truth BEV centers ``(G, 2)``.
-        pred_centers: Prediction BEV centers ``(P, 2)``.
+        gt_centers: Counted ground truth BEV centers ``(G, 2+)``.
+        ignored_centers: Ignored ground truth BEV centers ``(I, 2+)``.
+        pred_centers: Prediction BEV centers ``(P, 2+)``.
         pred_scores: Prediction confidences ``(P,)``.
         threshold: Maximum center distance for a match, in meters.
 
     Returns:
-        ``(is_tp, matched_gt)`` aligned to the predictions in their original
-        order, with the matched GT index ``-1`` for unmatched predictions.
+        The match of the claim pass, aligned to the predictions in their original order.
     """
-    return greedy_match_thresholds(gt_centers, pred_centers, pred_scores, (threshold,))[threshold]
+    return greedy_match_thresholds(
+        gt_centers, ignored_centers, pred_centers, pred_scores, (threshold,)
+    )[threshold]
 
 
 def weighted_average_precision(

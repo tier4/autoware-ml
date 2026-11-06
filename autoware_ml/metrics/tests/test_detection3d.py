@@ -575,6 +575,8 @@ def test_match_by_cost_equals_reference_global_greedy() -> None:
             pred_labels=torch.from_numpy(rng.integers(0, 3, num_pred)),
             gt_boxes=_boxes(num_gt),
             gt_labels=torch.from_numpy(rng.integers(0, 3, num_gt)),
+            ignored_gt_boxes=torch.zeros((0, 9)),
+            ignored_gt_labels=torch.zeros(0, dtype=torch.long),
         )
 
     def _reference(samples, label, threshold):

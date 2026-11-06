@@ -263,6 +263,8 @@ def test_a_metric_reading_a_skipped_prediction_fails_loud() -> None:
                 pred_labels=torch.tensor([0]),
                 gt_boxes=torch.zeros((0, 9)),
                 gt_labels=torch.zeros(0, dtype=torch.long),
+                ignored_gt_boxes=torch.zeros((0, 9)),
+                ignored_gt_labels=torch.zeros(0, dtype=torch.long),
                 pred_ttc=torch.tensor([float("nan")]),
                 gt_ttc=torch.zeros(0),
                 ttc_covered=True,

@@ -1045,6 +1045,10 @@ and one keeping everything, differ exactly by the occlusion effect on recall.
 </svg>
 </div>
 
+### Boxes below the point filter
+
+A suite with `min_num_points` ignores the ground truth boxes in range with fewer lidar points. An ignored box counts neither as a true positive nor as a missed box, and a prediction that claims it counts neither as a true nor as a false positive, so a temporal model that keeps an occluded object it saw before is not penalised. Every matching runs in score order at its own threshold and in the match cost of the suite: a prediction first claims its nearest unclaimed counted box of its class, or of its group in a grouped suite. Only a prediction left without one claims its nearest unclaimed ignored box within the same threshold, one prediction per box, so a duplicate on an occluded box stays a false positive and a prediction a counted box can match is never left out. `num_preds` counts every prediction, the ignored ones included. A suite without `min_num_points` ignores no box.
+
 ## Segmentation metrics
 
 ### IoU, accuracy, precision / recall / F1
