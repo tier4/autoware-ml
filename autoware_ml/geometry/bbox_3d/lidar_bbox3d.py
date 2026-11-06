@@ -8,14 +8,13 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d
 
 from typing import Sequence
 from torch import Tensor
-from jaxtyping import Float32, Int32
+from jaxtyping import Bool, Float32, Int32
 import torch
 
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.utils import (
     create_axis_rotation_matrices,
     rotate_points_3d,
-    points_in_convex_polygon_3d,
 )
 from autoware_ml.types.spatial import BEVDirection, RotationAxis
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
@@ -147,32 +146,41 @@ class LidarBBoxes3D(BaseBBoxes3D):
 
     def compute_points_in_bboxes(
         self, points: Float32[Tensor, "num_points 3"]
-    ) -> Float32[Tensor, "num_bboxes num_points"]:
+    ) -> Bool[Tensor, "num_bboxes num_points"]:
         """
-        Compute the number of points inside each 3D bounding box.
+        Mark the points inside every 3D bounding box, the surface included.
 
         Args:
             points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            Bool[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
             inside each bounding box.
         """
-        if self.bbox_params.numel() == 0 or points.numel() == 0:
-            return torch.zeros(
-                (self.bbox_params.shape[0], points.shape[0]), device=self.bbox_params.device
-            )
-
-        # Create a mask for each bounding box to check if points are inside
+        num_bboxes = self.bbox_params.shape[0]
         in_bboxes_mask = torch.zeros(
-            (self.bbox_params.shape[0], points.shape[0]),
-            dtype=torch.bool,
-            device=self.bbox_params.device,
+            (num_bboxes, points.shape[0]), dtype=torch.bool, device=self.bbox_params.device
         )
+        if num_bboxes == 0 or points.shape[0] == 0:
+            return in_bboxes_mask
 
-        # Compute the surfaces of the bounding boxes
-        surfaces = self.corners_to_surfaces_3d()
-        in_bboxes_mask = points_in_convex_polygon_3d(points, surfaces)
+        centers = self.bbox_params[:, :3]
+        half_dims = self.dims / 2
+        # Only the points within the circumscribed radius of a box along x are tested: one
+        # slice of the points sorted along x, found by binary search. The radius carries a
+        # rounding margin so that the slice holds every point of the box surface.
+        bev_radius = torch.linalg.vector_norm(half_dims[:, :2], dim=1) * (1 + 1e-5)
+        order = torch.argsort(points[:, 0])
+        sorted_x = points[order, 0]
+        slice_begins = torch.searchsorted(sorted_x, centers[:, 0] - bev_radius)
+        slice_ends = torch.searchsorted(sorted_x, centers[:, 0] + bev_radius, right=True)
+        to_box_frame = create_axis_rotation_matrices(-self.yaw, axis=self.YAW_AXIS)
+        for index, (begin, end) in enumerate(zip(slice_begins.tolist(), slice_ends.tolist())):
+            candidates = order[begin:end]
+            offsets = points[candidates] - centers[index]
+            local_offsets = rotate_points_3d(offsets[None], to_box_frame[index : index + 1])[0]
+            inside = (local_offsets.abs() <= half_dims[index]).all(dim=1)
+            in_bboxes_mask[index, candidates[inside]] = True
         return in_bboxes_mask
 
     def rotate(

@@ -94,58 +94,6 @@ def rotate_points_3d(
     return points_new
 
 
-def surface_equ_3d(
-    polygon_surfaces: Float32[Tensor, "num_polygon max_num_surfaces max_num_points_of_surface 3"],
-) -> tuple[
-    Float32[Tensor, "num_polygon max_num_surfaces 3"],
-    Float32[Tensor, "num_polygon max_num_surfaces"],
-]:
-    """
-    Calculate the surface equations [a, b, c], d in ax+by+cz+d=0 for a set of polygon surfaces
-        in 3D space.
-
-    The function is modified from:
-    https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/ops/box_np_ops.py
-    Args:
-        polygon_surfaces (Float32[Tensor, "num_polygon max_num_surfaces max_num_points_of_surface 3"]): Polygon surfaces with shape of
-            [num_polygon, max_num_surfaces, max_num_points_of_surface, 3].
-            All surfaces' normal vector must direct to internal.
-            Max_num_points_of_surface must at least 3.
-
-    Returns:
-        tuple: normal vector and its direction.
-    """
-    # return [a, b, c], d in ax+by+cz+d=0
-    # polygon_surfaces: [num_polygon, num_surfaces, num_points_of_polygon, 3]
-    surface_vec = polygon_surfaces[:, :, :2, :] - polygon_surfaces[:, :, 1:3, :]
-    normal_vec = torch.cross(surface_vec[:, :, 0, :], surface_vec[:, :, 1, :], dim=-1)
-    d = torch.einsum("aij, aij->ai", normal_vec, polygon_surfaces[:, :, 0, :])
-    return normal_vec, -d
-
-
-def points_in_convex_polygon_3d(
-    points: Float32[Tensor, "num_points 3"],
-    polygon_surfaces: Float32[Tensor, "num_polygon max_num_surfaces max_num_points_of_surface 3"],
-) -> Float32[Tensor, "num_polygon num_points"]:
-    """
-    Check if points are inside a convex polygon in 3D space and assign their corresponding polygon.
-
-    Args:
-        points (Float32[Tensor, "num_points 3"]): Points with shape of [num_points, 3].
-        polygon_surfaces (Float32[Tensor, "num_polygon max_num_surfaces max_num_points_of_surface 3"]): Polygon surfaces with shape of
-            [num_polygon, max_num_surfaces, max_num_points_of_surface, 3].
-            All surfaces' normal vector must direct to internal.
-            Max_num_points_of_surface must at least 3.
-
-    Returns:
-        Float32[Tensor, "num_polygon num_points"]: A tensor indicating whether each point is inside each polygon.
-    """
-    normal_vec, d = surface_equ_3d(polygon_surfaces)
-    # ax + by + cz + d <= 0 inequality for points inside or on the surfaces
-    inner_product = torch.einsum("aij, kj->aik", normal_vec, points) + d.unsqueeze(-1)
-    return (inner_product <= 0).all(dim=1).float()
-
-
 def points_in_rotated_box(coord: np.ndarray, box: np.ndarray) -> np.ndarray:
     """Boolean mask of the points inside one oriented 3D box.
 
