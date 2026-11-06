@@ -15,15 +15,21 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    StreamPETRHeadOutputs,
+)
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
+from autoware_ml.models.detection3d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.task_modules.streaming import (
     compose_poses,
     memory_refresh,
@@ -31,7 +37,7 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
 )
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.types.geometry import Box3DFieldIndex
+from autoware_ml.types.geometry import Box2DFieldIndex, Box3DFieldIndex
 from autoware_ml.utils.deploy import ExportSpec
 
 
@@ -61,6 +67,29 @@ def _ground_truth(
         [boxes[:0] if is_padding else boxes for boxes, is_padding in zip(gt_boxes, padded)],
         [labels[:0] if is_padding else labels for labels, is_padding in zip(gt_labels, padded)],
     )
+
+
+def _ground_truth_2d(
+    gt_detections_2d: Detection2DGTBatch,
+) -> tuple[list[list[torch.Tensor]], list[list[torch.Tensor]], list[list[torch.Tensor]]]:
+    """Unpad the 2D boxes of every camera of every sample into the 2D head's layout.
+
+    A collated row holds the box edges and the object center, laid out by
+    ``Box2DFieldIndex``. FocalHead2D takes the ``(x_min, y_min, x_max, y_max)`` edges and the
+    ``(center_x, center_y)`` centers as separate tensors and reshapes the boxes to four
+    columns, so the rows are split here: whole rows would be reshaped into wrong boxes.
+
+    Returns:
+        The edges, the labels and the object centers of every camera of every sample.
+    """
+    edges = slice(Box2DFieldIndex.X_MIN, Box2DFieldIndex.Y_MAX + 1)
+    center = slice(Box2DFieldIndex.CENTER_X, Box2DFieldIndex.CENTER_Y + 1)
+    rows = gt_detections_2d.valid_bboxes_2d()
+    gt_bboxes_2d = [[camera_rows[:, edges] for camera_rows in sample_rows] for sample_rows in rows]
+    gt_centers_2d = [
+        [camera_rows[:, center] for camera_rows in sample_rows] for sample_rows in rows
+    ]
+    return gt_bboxes_2d, gt_detections_2d.valid_labels_2d(), gt_centers_2d
 
 
 class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
@@ -197,6 +226,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         img_neck: nn.Module,
         bbox_head: StreamPETRHead,
         log_dict_configs: LogDictConfigs,
+        img_roi_head: FocalHead2D | None = None,
+        partial_annotations: PartialAnnotations | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
@@ -211,6 +242,11 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             img_neck: Image neck producing the tokens the head attends to.
             bbox_head: StreamPETR query head.
             log_dict_configs: Logging configuration for training and validation.
+            img_roi_head: Optional auxiliary 2D head that supervises the image features
+                in training (Focal-PETR style); inference and the exported graphs never
+                run it.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the heads must not supervise in that sample. None supervises every class.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             optimizer_group_overrides: Optimizer overrides keyed by the groups of
@@ -233,6 +269,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             img_backbone=img_backbone, img_neck=img_neck
         )
         self.bbox_head = bbox_head
+        self.img_roi_head = img_roi_head
+        self.partial_annotations = partial_annotations
 
     def _start_streams(self) -> None:
         """Reset the temporal memory: the lanes of a new phase or epoch start new streams.
@@ -278,7 +316,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
                 the frame metadata of every lane.
 
         Returns:
-            The StreamPETR head outputs.
+            The StreamPETR head outputs, with the auxiliary 2D outputs in training.
 
         Raises:
             ValueError: If the model inputs miss the images or the frame metadata.
@@ -296,7 +334,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
 
         img = image_data.images
         img_features = self.image_feature_extractor(img)
-        head_outputs = self.bbox_head(
+        head_outputs: StreamPETRHeadOutputs = self.bbox_head(
             img_features=img_features,
             image_height=int(img.shape[-2]),
             image_width=int(img.shape[-1]),
@@ -315,6 +353,17 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
         )
+        # The auxiliary 2D head only shapes image features during training;
+        # inference and deployment never execute it.
+        if self.img_roi_head is not None and self.training:
+            head_outputs = StreamPETRHeadOutputs(
+                all_cls_scores=head_outputs.all_cls_scores,
+                all_bbox_preds=head_outputs.all_bbox_preds,
+                denoising=head_outputs.denoising,
+                auxiliary_2d=self.img_roi_head(
+                    img_features, image_height=int(img.shape[-2]), image_width=int(img.shape[-1])
+                ),
+            )
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(streampetr_head_outputs=head_outputs)
         )
@@ -322,32 +371,69 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
     def compute_metrics(
         self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> dict[str, torch.Tensor]:
-        """Compute the head's multi-layer detection and denoising losses.
+        """Compute the head's detection and denoising losses plus the auxiliary 2D losses.
 
-        The padding samples of a streaming batch take no part in them: they carry no box,
-        and the head gives their queries no classification weight.
+        With ``partial_annotations`` the annotation flag of every frame becomes the mask of
+        the classes both heads supervise in that frame.
+
+        The padding samples of a streaming batch take no part in them: they carry no 3D box,
+        both heads count them as annotated with no class, so their queries and tokens get no
+        classification weight, and the 2D head also leaves out their 2D boxes and the
+        centerness of their images.
 
         Args:
-            multi_task_batch_inputs: Model inputs holding the ground truth boxes and the
-                padding mask.
+            multi_task_batch_inputs: Model inputs holding the 3D ground truth, the padding
+                mask, and in training with an auxiliary 2D head the per-camera 2D boxes.
             multi_task_outputs: StreamPETR head outputs.
 
         Returns:
-            Loss dictionary produced by the detection head.
+            Loss dictionary of the detection head, extended by the ``loss_*2d`` terms.
 
         Raises:
-            ValueError: If the batch carries no detection ground truth.
+            ValueError: If the batch carries no detection ground truth, or the auxiliary
+                2D head trains without 2D boxes.
         """
         gt_batch = multi_task_batch_inputs.multi_task_gt_batch
-        if gt_batch.detection3d_gt_batch is None:
+        gt_detections = gt_batch.detection3d_gt_batch
+        if gt_detections is None:
             raise ValueError("StreamPETR losses need the 3D detection ground truth of the batch.")
-        gt_boxes, gt_labels = _ground_truth(gt_batch.detection3d_gt_batch, gt_batch.padding_mask)
-        return self.bbox_head.loss(
-            multi_task_outputs.detection3d().streampetr_head(),
+        gt_boxes, gt_labels = _ground_truth(gt_detections, gt_batch.padding_mask)
+        gt_annotated_class_masks = (
+            self.partial_annotations.build_annotated_class_masks(
+                gt_detections.gt_traffic_cone_barrier_bbox_status
+            )
+            if self.partial_annotations is not None
+            else None
+        )
+        head_outputs = multi_task_outputs.detection3d().streampetr_head()
+        losses = self.bbox_head.loss(
+            head_outputs,
             gt_boxes,
             gt_labels,
+            gt_annotated_class_masks=gt_annotated_class_masks,
             padding_mask=gt_batch.padding_mask,
         )
+        if self.img_roi_head is not None and self.training:
+            detection2d = gt_batch.detection2d_gt_batch
+            if detection2d is None or head_outputs.auxiliary_2d is None:
+                raise ValueError(
+                    "The auxiliary 2D head trains on the 2D boxes of the batch; add "
+                    "LoadAnnotations2DFromBoxes3D to the training transforms."
+                )
+            gt_bboxes_2d, gt_labels_2d, gt_centers_2d = _ground_truth_2d(detection2d)
+            roi_losses = self.img_roi_head.loss(
+                head_outputs.auxiliary_2d,
+                gt_bboxes_2d=gt_bboxes_2d,
+                gt_labels_2d=gt_labels_2d,
+                centers_2d=gt_centers_2d,
+                gt_annotated_class_masks=gt_annotated_class_masks,
+                padding_mask=gt_batch.padding_mask,
+            )
+            losses.update(roi_losses)
+            losses["loss"] = losses["loss"] + sum(
+                value for key, value in roi_losses.items() if key.startswith("loss_")
+            )
+        return losses
 
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
