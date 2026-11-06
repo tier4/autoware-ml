@@ -39,7 +39,7 @@ from autoware_ml.utils.mlflow_helpers import (
 
 CONFIG_NAME = "detection3d/tiny/tiny_b1_1e_corpus"
 EXPERIMENT_GROUP_NAME = "centerpoint/t4_v2"
-EXPERIMENT_NAME = "gen1_base"
+EXPERIMENT_NAME = "base"
 EXPERIMENT_UID = "2026.10.15.12.00.00"
 FULL_EXPERIMENT_NAME = f"{EXPERIMENT_GROUP_NAME}/{EXPERIMENT_NAME}"
 
@@ -91,7 +91,7 @@ def test_experiment_and_run_names_come_from_the_config_keys(
 
     assert context is not None
     assert context.experiment_name == FULL_EXPERIMENT_NAME
-    assert context.run_name == f"train_gen1_base_{EXPERIMENT_UID}"
+    assert context.run_name == f"train_base_{EXPERIMENT_UID}"
     client = MlflowClient(tracking_uri=context.tracking_uri)
     run = client.get_run(context.run_id)
     assert run.info.run_name == context.run_name
@@ -124,7 +124,7 @@ def test_builder_and_cli_runs_land_in_the_same_experiment(
     assert context is not None
     assert context.experiment_id == cli_run.experiment_id
     assert context.artifact_dir.parent.parent == cli_run.artifact_dir.parent.parent
-    assert context.run_name == f"deploy_gen1_base_{EXPERIMENT_UID}"
+    assert context.run_name == f"deploy_base_{EXPERIMENT_UID}"
 
 
 def test_builder_requires_the_experiment_keys(tmp_path: Path, hydra_runtime: HydraRuntime) -> None:
@@ -196,7 +196,7 @@ def test_parent_run_and_extra_tags_are_recorded(
     assert run.data.tags[MLFLOW_PARENT_RUN_ID] == parent.run_id
     assert run.data.tags["checkpoint_path"] == "/ckpt/best.ckpt"
     assert run.data.tags["count"] == "2"
-    assert context.run_name == f"deploy_gen1_base_{EXPERIMENT_UID}"
+    assert context.run_name == f"deploy_base_{EXPERIMENT_UID}"
 
 
 def test_disabled_logger_returns_no_context_and_touches_no_store(
@@ -231,7 +231,7 @@ def test_pre_created_run_is_loaded_instead_of_creating_a_new_one(
         hydra_dir=hydra_runtime.work_dir,
         stage="train",
         experiment_name=FULL_EXPERIMENT_NAME,
-        run_name="train_gen1_base_resumed",
+        run_name="train_base_resumed",
     )
     monkeypatch.setenv(AUTOWARE_ML_RUN_ID_ENV, prepared.run_id)
 
@@ -239,7 +239,7 @@ def test_pre_created_run_is_loaded_instead_of_creating_a_new_one(
 
     assert context is not None
     assert context.run_id == prepared.run_id
-    assert context.run_name == "train_gen1_base_resumed"
+    assert context.run_name == "train_base_resumed"
     assert context.hydra_dir == hydra_runtime.work_dir
     client = MlflowClient(tracking_uri=context.tracking_uri)
     assert len(client.search_runs([context.experiment_id])) == 1
@@ -262,7 +262,7 @@ def test_pre_created_run_on_another_hydra_dir_is_rejected(
         hydra_dir=other_dir,
         stage="train",
         experiment_name=FULL_EXPERIMENT_NAME,
-        run_name="train_gen1_base_other",
+        run_name="train_base_other",
     )
     monkeypatch.setenv(AUTOWARE_ML_RUN_ID_ENV, prepared.run_id)
 

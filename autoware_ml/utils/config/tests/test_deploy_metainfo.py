@@ -1,0 +1,77 @@
+"""Composition tests for the per-module deploy metainfo blocks."""
+
+from __future__ import annotations
+
+import pytest
+from omegaconf import OmegaConf
+
+from autoware_ml.utils.config.tests.config_roots import compose_task
+from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
+from autoware_ml.utils.deploy import merge_module_onnx_cfg
+
+PTV3_CONFIGS = [
+    "tasks/multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m",
+    "tasks/multi/litept/t4dataset/voxel012_b8_100e_t4dataset_122m",
+    "tasks/segmentation3d/ptv3/t4dataset/voxel012_b16_50e_t4dataset_122m",
+    "tasks/segmentation3d/litept/t4dataset/voxel012_b16_50e_t4dataset_122m",
+    "tasks/detection3d/ptv3/t4dataset/voxel012_b8_30e_t4dataset_122m",
+    "tasks/multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m",
+    "tasks/segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m",
+    "tasks/detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m",
+]
+DET3D_CONFIGS = [name for name in PTV3_CONFIGS if "segmentation3d" not in name]
+
+
+@pytest.mark.parametrize("config_name", PTV3_CONFIGS)
+def test_encoder_metainfo_serialization_orders_match_export_order(config_name: str) -> None:
+    # The encoder metainfo declares the orders the exported graph is built with;
+    # config drift against the code constant must fail loud, never ship.
+    cfg = compose_task(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    assert list(module_cfg.metainfo.serialization_orders) == list(PTv3BaseModel.EXPORT_ORDER)
+
+
+@pytest.mark.parametrize("config_name", PTV3_CONFIGS)
+def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> None:
+    # Every metainfo value must resolve through the production merge path; a
+    # broken interpolation must fail at composition, not at deploy time.
+    cfg = compose_task(config_name)
+    for module_name in cfg.deploy.onnx.modules:
+        module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, module_name)
+        metainfo = OmegaConf.to_container(module_cfg.metainfo, resolve=True)
+        assert metainfo, f"{config_name}: {module_name} has an empty metainfo block"
+        if module_name in ("ptv3_seg3d_head", "ptv3_det3d_head"):
+            assert len(metainfo["class_names"]) > 0
+
+
+@pytest.mark.parametrize("config_name", DET3D_CONFIGS)
+def test_det3d_head_has_twist_follows_use_velocity(config_name: str) -> None:
+    # The runtime learns from has_twist whether a velocity output exists, so it
+    # is derived from the head configuration instead of being declared twice.
+    cfg = compose_task(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
+    assert isinstance(module_cfg.metainfo.has_twist, bool)
+    assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity
+
+
+@pytest.mark.parametrize("config_name", DET3D_CONFIGS)
+def test_det3d_head_exports_fused_bf16_attention(config_name: str) -> None:
+    # The fused TransHead path needs the head flag and the fp16 module precision
+    # together; export refuses a mismatch, so every shipped config must pair them.
+    cfg = compose_task(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
+    assert cfg.model.bbox_head.use_bf16_cross_attention is True
+    assert module_cfg.precision == "fp16"
+
+
+@pytest.mark.parametrize("config_name", PTV3_CONFIGS)
+def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None:
+    # `patch_order` is built from the per-level attention window on both sides of the
+    # deployment boundary (exporter and runtime), so the artifact records the windows it
+    # was exported with: one per level, straight from the encoder config, never retyped.
+    cfg = compose_task(config_name)
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
+    assert patch_sizes == list(cfg.model.encoder.enc_patch_size)
+    assert len(patch_sizes) == len(cfg.model.encoder.stride) + 1
+    assert all(isinstance(size, int) and size > 0 for size in patch_sizes)

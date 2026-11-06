@@ -7,7 +7,30 @@ defaults:
   - /metrics/nuscenes/segmentation3d@metrics: default_segmentation3d_metric_suites
   - /metrics/nuscenes/segmentation3d@metric_ranges: default_segmentation3d_50m_metric_ranges
   - /datamodule@datamodule: nuscenes/default_segmentation3d_datamodule
+  - /database/nuscenes/taxonomy/segmentation3d@taxonomy.segmentation3d: default_coarse
   - _self_
+
+taxonomy:
+  segmentation3d:
+    class_names:
+      - car
+      - truck
+      - bus
+      - bicycle
+      - pedestrian
+      - traffic_cone
+      - barrier
+      - debris
+      - drivable_surface
+      - other_flat_surface
+      - vegetation
+      - manmade
+      - vertical_thin
+      - other_stuff
+      - noise
+
+instance_classes:
+  [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier, debris, drivable_surface, other_flat_surface]
 
 fov_up: 10.0
 fov_down: -30.0

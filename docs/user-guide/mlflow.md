@@ -22,7 +22,7 @@ Open [http://localhost:5000](http://localhost:5000) in your browser.
 By default, the UI opens the shared tracking DB directly. To isolate a single experiment for sharing or inspection, export it first:
 
 ```bash
-autoware-ml mlflow export --config-name segmentation3d/ptv3/nuscenes/voxel005_base_b16_50e_nuscenes_51m --export-dir /tmp/ptv3_mlflow
+autoware-ml mlflow export --config-name segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m --export-dir /tmp/ptv3_mlflow
 autoware-ml mlflow ui --db-path /tmp/ptv3_mlflow/mlflow.db
 ```
 
@@ -82,7 +82,7 @@ Select multiple runs and click **Compare** to view:
 
 Experiments are named by the `experiment_group_name` and `experiment_name` keys of the task
 config, not by its path. Leaves that should sit side by side in the UI share one
-`experiment_group_name`, for example `bevfusion/${database.version}/j6gen2_base` for every
+`experiment_group_name`, for example `bevfusion/${database.version}/t4dataset` for every
 BEVFusion variant trained on that database, and differ in `experiment_name`.
 
 Add custom tags for organization:

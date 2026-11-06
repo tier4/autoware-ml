@@ -119,11 +119,11 @@ repository moves to NumPy 2.x or a Rerun release that fixes the conversion.
 ### Class name resolution
 
 Legends and per-instance labels read as class names rather than integer ids
-because the preview takes them from the taxonomy of the database the split
-reads: `taxonomy.segmentation3d.class_names` for point labels, with its
+because the preview takes them from the taxonomies of the tasks the split
+serves: `taxonomy.segmentation3d.class_names` for point labels, with its
 `ignore_index` drawn as unlabelled, and `taxonomy.detection3d.class_names` for
-boxes. Every source of a split shares one taxonomy, so one lookup covers the
-whole split. `visualization.segmentation3d_class_names`,
+boxes. Every source of a split reads with the taxonomies of the run, so one
+lookup covers the whole split. `visualization.segmentation3d_class_names`,
 `visualization.detection3d_class_names` and `visualization.class_names`
 override it.
 

@@ -7,12 +7,14 @@ defaults:
   - /metrics/nuscenes/detection3d@metrics: default_detection3d_metric_suites
   - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
   - /datamodule@datamodule: nuscenes/default_detection3d_datamodule
+  - /database/nuscenes/taxonomy/detection3d@taxonomy.detection3d: default_coarse
   - _self_
 
-point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
+taxonomy:
+  detection3d:
+    class_names: [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier]
 
-# Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${database.taxonomy.detection3d.eval_range}
+point_cloud_range: [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
 
 # nuScenes boxes carry no attributes the pipelines filter on.
 filter_attributes: []
@@ -88,11 +90,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
@@ -150,11 +151,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
 # The datamodule binds the datasets above to the splits of its sources. Validation and predict
 # read the test dataset.

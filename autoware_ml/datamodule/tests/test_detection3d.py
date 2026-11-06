@@ -24,10 +24,19 @@ import polars as pl
 import pytest
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
+_LABELS = ("a", "b", "c", "d", "car", "pedestrian", "bicycle")
+# Taxonomy that trains every label of the test boxes as its own class
+_TAXONOMY = LabelTaxonomy(
+    LabelVocabulary({name: name for name in _LABELS}),
+    _LABELS,
+    {name: name for name in _LABELS},
+    -1,
+)
 
 
 def box(
@@ -59,7 +68,6 @@ def box(
         "box3d_instance_id": instance,
         "box3d_dataset_label_name": label_name,
         "box3d_label_name": label_name,
-        "box3d_label_index": 0,
         "box3d_num_lidar_points": 8,
         "box3d_num_radar_points": 0,
         "box3d_valid": valid,
@@ -197,7 +205,9 @@ def build_task_with_status(boxes: list[dict], status: bool | None) -> Detection3
         {columns[0]: [boxes], columns[1]: [status]},
         schema={column: schema[column] for column in columns},
     )
-    return Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+    return Detection3DTask(
+        database_root_path=_ROOT, dataset_records_dataframe=records, taxonomy=_TAXONOMY
+    )
 
 
 def test_records_without_the_cone_and_barrier_flag_column_are_rejected() -> None:
@@ -212,7 +222,9 @@ def test_records_without_the_cone_and_barrier_flag_column_are_rejected() -> None
     )
 
     with pytest.raises(ValueError, match=DatasetTableSchema.TRAFFIC_CONE_BARRIER_BBOX_STATUS.name):
-        Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+        Detection3DTask(
+            database_root_path=_ROOT, dataset_records_dataframe=records, taxonomy=_TAXONOMY
+        )
 
 
 def test_select_columns_keeps_the_boxes_and_the_flag_only() -> None:
@@ -274,7 +286,9 @@ def test_log_dataset_info_counts_across_records_and_skips_the_empty_ones(
         {columns[0]: [[box("a", "car")], [], [box("b", "car")]], columns[1]: [True, None, False]},
         schema={column: schema[column] for column in columns},
     )
-    task = Detection3DTask(database_root_path=_ROOT, dataset_records_dataframe=records)
+    task = Detection3DTask(
+        database_root_path=_ROOT, dataset_records_dataframe=records, taxonomy=_TAXONOMY
+    )
 
     with caplog.at_level(logging.INFO, logger="autoware_ml.datamodule.common.detection3d"):
         task.log_dataset_info()

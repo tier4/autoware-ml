@@ -8,7 +8,7 @@ Autoware-ML uses [Hydra](https://hydra.cc/) for configuration management. This g
 
 ## Config Structure
 
-All configs live in `autoware_ml/configs/`:
+Bundled configs live in `autoware_ml/configs/`:
 
 ```text
 configs/
@@ -71,8 +71,8 @@ select a datamodule config from `configs/datamodule/` and override what they nee
 
 ```yaml
 defaults:
-  - /database@database: t4dataset/t4dataset_j6gen2_semaseg
-  - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
+  - /database@database: nuscenes/nuscenes_base
+  - /datamodule@datamodule: nuscenes/default_segmentation3d_datamodule
   - _self_
 
 # Datasets of the training and test splits, the validation and predict splits read the test one
@@ -358,6 +358,77 @@ Run with your config:
 ```bash
 autoware-ml train --config-name my_task/my_model/my_experiment
 ```
+
+## External Configs and Scenario Lists
+
+Configs that do not ship with the package and the scenario lists of the databases live outside
+the repository. Point two settings of `.env` at them, see
+[Settings](../getting-started/installation.md#settings):
+
+```bash
+# External configs, laid out like autoware_ml/configs/.
+AUTOWARE_ML_CONFIGS_PATH=/path/to/configs
+
+# Root of the scenario lists of custom databases.
+AUTOWARE_ML_SCENARIOS_PATH=/path/to/scenarios
+```
+
+The external configs only add configs. They use the bundled ones by the same names, relative
+defaults included, and run by name like a bundled config. A config path that exists in both is an
+error.
+
+The bundled configs ship the T4Dataset model bases and the generic database config
+`t4dataset/t4dataset_common`. A T4Dataset experiment lives in the external configs together with
+its database, scenario config, vocabulary, taxonomy and ego. The database extends
+`t4dataset/t4dataset_common`, which requires the vocabulary of the raw box labels, and adds its
+scenarios:
+
+```yaml title="/path/to/configs/database/t4dataset/my_database.yaml"
+defaults:
+  - t4dataset/t4dataset_common@_here_
+  - t4dataset/scenarios@scenarios.my_scenarios: detection3d_segmentation3d/my_scenarios
+  - override t4dataset/taxonomy/vocabulary@vocabulary: my_vocabulary
+  - _self_
+
+version: T4Dataset-my-database-v1.0.0
+cache_path: ${cache_root_path}/t4dataset/
+```
+
+The scenario config `database/t4dataset/scenarios/detection3d_segmentation3d/my_scenarios.yaml`
+reads its scenario list below `AUTOWARE_ML_SCENARIOS_PATH` and the scenes under
+`t4dataset/<dataset_name>/` of the data directory. Every T4Dataset base declares the classes the
+model trains under `taxonomy` and requires the taxonomy that folds the labels of the database onto
+those classes, and a base that evaluates collisions or crops the ego body requires the ego of
+the platform. The experiment binds a base, selects its database and overrides the taxonomy and the
+ego:
+
+```yaml title="/path/to/configs/tasks/segmentation3d/ptv3/t4dataset/my_experiment.yaml"
+# @package _global_
+defaults:
+  - base_voxel012_122m
+  - /database@database: t4dataset/my_database
+  - override /database/t4dataset/taxonomy/segmentation3d@taxonomy.segmentation3d: my_taxonomy
+  - override /ego@ego: my_ego
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: ptv3_seg3d/${database.version}/t4dataset
+experiment_name: my_experiment
+
+trainer:
+  max_epochs: 50
+
+callbacks:
+  dynamic_validation:
+    epoch_intervals: [[0, 5], [40, 1]]
+```
+
+```bash
+autoware-ml train --config-name segmentation3d/ptv3/t4dataset/my_experiment
+```
+
+A config file path given to `--config-name` must lie inside the bundled or the external configs.
 
 ## Debugging Configs
 
