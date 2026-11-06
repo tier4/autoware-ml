@@ -16,15 +16,16 @@
 
 from __future__ import annotations
 
-import pytest
+import importlib.util
+import unittest
+
 import torch
 
 from autoware_ml.models.segmentation3d.encoders.ptv3 import SerializedAttention
 from autoware_ml.utils.point_cloud.structures import Point
 
-requires_cuda_flash = pytest.mark.skipif(
-    not torch.cuda.is_available() or pytest.importorskip("flash_attn") is None,
-    reason="CUDA and flash attention required",
+_CUDA_AND_FLASH_AVAILABLE = (
+    torch.cuda.is_available() and importlib.util.find_spec("flash_attn") is not None
 )
 
 
@@ -58,24 +59,32 @@ def _point(num_points: int = 64) -> Point:
     )
 
 
-@requires_cuda_flash
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_fp32_projections_keep_the_output_in_fp32_under_autocast(dtype: torch.dtype) -> None:
-    torch.manual_seed(0)
-    with torch.autocast("cuda", dtype=dtype):
-        low = _attention(fp32_projections=False)(_point()).feat
-        high = _attention(fp32_projections=True)(_point()).feat
-    assert low.dtype == dtype
-    assert high.dtype == torch.float32
-    assert torch.isfinite(high).all()
+@unittest.skipUnless(_CUDA_AND_FLASH_AVAILABLE, "CUDA and flash attention required")
+class TestSerializedAttentionFp32Projections(unittest.TestCase):
+    """Unit tests for the fp32 attention projections."""
+
+    def test_fp32_projections_keep_the_output_in_fp32_under_autocast(self) -> None:
+        """Test that the output stays in fp32 under autocast while the plain path does not."""
+        for dtype in (torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                torch.manual_seed(0)
+                with torch.autocast("cuda", dtype=dtype):
+                    low = _attention(fp32_projections=False)(_point()).feat
+                    high = _attention(fp32_projections=True)(_point()).feat
+                self.assertEqual(low.dtype, dtype)
+                self.assertEqual(high.dtype, torch.float32)
+                self.assertTrue(torch.isfinite(high).all())
+
+    def test_attention_without_autocast_is_unchanged_by_the_flag(self) -> None:
+        """Test that the flag does not change the output outside autocast."""
+        torch.manual_seed(1)
+        plain, guarded = _attention(False), _attention(True)
+        guarded.load_state_dict(plain.state_dict())
+        point = _point()
+        out_plain = plain(Point(dict(point))).feat
+        out_guarded = guarded(Point(dict(point))).feat
+        torch.testing.assert_close(out_plain, out_guarded)
 
 
-@requires_cuda_flash
-def test_attention_without_autocast_is_unchanged_by_the_flag() -> None:
-    torch.manual_seed(1)
-    plain, guarded = _attention(False), _attention(True)
-    guarded.load_state_dict(plain.state_dict())
-    point = _point()
-    out_plain = plain(Point(dict(point))).feat
-    out_guarded = guarded(Point(dict(point))).feat
-    torch.testing.assert_close(out_plain, out_guarded)
+if __name__ == "__main__":
+    unittest.main()
