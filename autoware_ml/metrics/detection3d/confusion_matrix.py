@@ -27,16 +27,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from autoware_ml.metrics.base import EvalStage, Metric, MetricFilter
+from autoware_ml.metrics.base import EvalStage, MetricFilter
 from autoware_ml.metrics.confusion_report import confusion_cells
 from autoware_ml.metrics.detection3d.criticality import greedy_match
-from autoware_ml.metrics.detection3d.matching import Detection3DState
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 from autoware_ml.metrics.report import MetricReport
 from autoware_ml.types.metrics import MatchCost
 
 
-class ConfusionMatrix(Metric[Detection3DState]):
+class ConfusionMatrix(Detection3DMetric):
     """True vs. predicted class counts over class-agnostically matched detections."""
 
     def __init__(
@@ -59,6 +59,11 @@ class ConfusionMatrix(Metric[Detection3DState]):
         self.min_score = float(min_score)
         if not 0.0 <= self.min_score <= 1.0:
             raise ValueError("min_score must be in [0, 1].")
+
+    @property
+    def match_distance(self) -> float:
+        """The threshold the metric matches at."""
+        return self.match_threshold
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Accumulate matched (true, predicted) label pairs into a confusion matrix.

@@ -1044,6 +1044,10 @@ and one keeping everything, differ exactly by the occlusion effect on recall.
 </svg>
 </div>
 
+### Boxes below the point filter
+
+A suite with `min_num_points` drops the ground truth boxes with fewer points. A temporal model keeps an occluded object it saw before, so with `ignore_below_min_points: true` a prediction that claims such a box leaves the evaluation together with it instead of counting as a false positive. The kept boxes of a class, or of a group in a grouped suite, take their predictions first, in score order, by the match cost of the suite up to the largest match distance of its metrics. Only the predictions left over claim the dropped boxes in the same cost, up to `ignore_claim_distance`, one prediction per box, so a duplicate on an occluded box stays a false positive and a prediction a kept box could match is never left out.
+
 ## Segmentation metrics
 
 ### IoU, accuracy, precision / recall / F1

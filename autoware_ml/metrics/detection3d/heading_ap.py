@@ -16,14 +16,14 @@
 
 from __future__ import annotations
 
-from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
+from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name, threshold_token
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
 from autoware_ml.metrics.report import MetricReport
 
 
-class HeadingAP(Metric[Detection3DState]):
+class HeadingAP(Detection3DMetric):
     """Class-mean APH plus per-class and per-threshold APH. APH weights each true
     positive by its heading score, so it needs the orientation errors the match
     curve carries. Averaged over ``thresholds``.
@@ -46,6 +46,11 @@ class HeadingAP(Metric[Detection3DState]):
         self.thresholds = tuple(float(threshold) for threshold in thresholds)
         if not self.thresholds:
             raise ValueError("thresholds must not be empty.")
+
+    @property
+    def match_distance(self) -> float:
+        """The largest threshold the metric matches at."""
+        return max(self.thresholds)
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Compute heading-aware AP metrics for the accumulated detection state.

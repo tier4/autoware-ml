@@ -24,15 +24,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
+from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState, mean_valid
 from autoware_ml.metrics.base import number_token
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 from autoware_ml.metrics.report import MetricReport
 
 
-class CornerError(Metric[Detection3DState]):
+class CornerError(Detection3DMetric):
     """Mean / p95 / max true-positive corner displacement, per class (meters)."""
 
     def __init__(
@@ -56,6 +56,11 @@ class CornerError(Metric[Detection3DState]):
         for p in self.percentiles:
             if not 0.0 <= p <= 100.0:
                 raise ValueError(f"percentile {p} outside [0, 100].")
+
+    @property
+    def match_distance(self) -> float:
+        """The threshold the metric reads its matches at."""
+        return self.tp_threshold
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report per-class corner-displacement statistics at the TP threshold.

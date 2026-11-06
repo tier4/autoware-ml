@@ -25,14 +25,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
+from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 from autoware_ml.metrics.report import MetricReport
 
 
-class NearestSurfaceError(Metric[Detection3DState]):
+class NearestSurfaceError(Detection3DMetric):
     """Signed near-face error tails per class (meters).
 
     Reports the low/high signed percentiles (the over-caution and late-braking
@@ -62,6 +62,11 @@ class NearestSurfaceError(Metric[Detection3DState]):
         self.high_percentile = float(high_percentile)
         if not 0.0 <= self.low_percentile < self.high_percentile <= 100.0:
             raise ValueError("expected 0 <= low_percentile < high_percentile <= 100.")
+
+    @property
+    def match_distance(self) -> float:
+        """The threshold the metric reads its matches at."""
+        return self.tp_threshold
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report per-class signed nearest-surface error tails at the TP threshold.
