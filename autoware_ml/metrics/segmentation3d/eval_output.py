@@ -102,6 +102,10 @@ def segmentation3d_frames_eval_output(
     target_split = torch.split(target_labels, counts)
     scores_split = torch.split(scores, counts)
 
+    # A sample padding a streaming lane or lying between key frames keeps its frame, the suites
+    # leave it out.
+    padding = gt_batch.padding_mask.tolist()
+    key_frames = gt_batch.key_frame_mask().tolist()
     return Segmentation3DEvalOutput(
         frames=tuple(
             Segmentation3DEvalFrame(
@@ -109,6 +113,8 @@ def segmentation3d_frames_eval_output(
                 pred=pred_split[index],
                 target=target_split[index],
                 scores=scores_split[index],
+                is_padding=bool(padding[index]),
+                key_frame=bool(key_frames[index]),
                 frame_meta=None if frame_meta_batch is None else frame_meta_batch.sample(index),
                 gt_boxes=None if gt_boxes is None else gt_boxes[index],
                 gt_box_labels=None if gt_box_labels is None else gt_box_labels[index],

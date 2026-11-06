@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 
 import polars as pl
+import torch
 
 from autoware_ml.databases.argoverse2.av2_motion_database import AV2MotionDatabase
 from autoware_ml.databases.argoverse2.av2_motion_scenarios import AV2MotionScenarios
@@ -173,6 +174,8 @@ class TestMotionDataset(MotionDatasetTestCase):
         self.assertAlmostEqual(source.step_seconds, 0.1)
         self.assertEqual(sample.frame_meta.scene_token, "a0")
         self.assertAlmostEqual(sample.frame_meta.timestamp, 1.0 + 4.9)
+        self.assertEqual(sample.frame_meta.ego2global.dtype, torch.float64)
+        self.assertTrue(sample.frame_meta.key_frame)
         self.assertEqual(sample.frame_meta.ego2global.diag().tolist(), [1.0, 1.0, 1.0, 1.0])
         self.assertIsNone(sample.frame_meta.lanelet_map_path)
         self.assertIsNone(sample.motion_gt_sample)

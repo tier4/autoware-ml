@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 
@@ -27,6 +28,7 @@ import polars as pl
 from torch.utils.data import DataLoader
 
 from autoware_ml.databases.base_database import BaseDatabase
+from autoware_ml.databases.scenarios import DatasetParams
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
@@ -49,6 +51,8 @@ from autoware_ml.datamodule.tests.corpus import (
     build_transforms,
     write_corpus,
 )
+from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.camera.loading import LoadImagesFromFile
 from autoware_ml.types.dataset import SplitType
 
 
@@ -1043,6 +1047,142 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         """
         with self.assertRaisesRegex(ValueError, "frame sampling"):
             self.build_streaming_data_module(train_frame_sampling=FRAME_SAMPLING)
+
+
+class _NonKeyFrameDatabase(FakeDatabase):
+    """A fake database whose dataset serves the frames between its key frames."""
+
+    @property
+    def scenarios(self) -> Mapping[str, object]:
+        """One scenario group serving its non-key frames."""
+        params = DatasetParams(dataset_name="streamed", sample_steps=1, non_key_frames=True)
+        return {"group": SimpleNamespace(dataset_params=[params])}
+
+
+class TestNonKeyFrames(unittest.TestCase):
+    """The frames between key frames feed a stream and carry no annotations."""
+
+    def setUp(self) -> None:
+        """Write a corpus whose second record lies between two key frames."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.records = write_corpus(self.root, num_records=3, non_key_records=frozenset({1}))
+        self.database = _NonKeyFrameDatabase(self.root, self.records, "streamed")
+
+    def test_a_non_key_frame_serves_no_labels(self) -> None:
+        """
+        Input: a segmentation and detection supervised corpus with a non-key frame.
+        Expected: the non-key frame loads with no box and every point ignored, flagged in its
+          frame metadata, the key frames keep their labels.
+        Check: the flags, the box count and the semantic labels.
+        """
+        dataset = build_dataset(self.database).bind(self.records)
+
+        key, non_key = dataset[0], dataset[1]
+
+        self.assertTrue(key.frame_meta.key_frame)
+        self.assertFalse(non_key.frame_meta.key_frame)
+        self.assertEqual(len(non_key.detection3d_gt_bboxes_3d), 0)
+        mask = non_key.segmentation3d_gt_sample.gt_semantic_mask
+        self.assertTrue(bool((mask == SEGMENTATION3D_TAXONOMY.ignore_index).all()))
+        self.assertTrue(bool((key.segmentation3d_gt_sample.gt_semantic_mask >= 0).any()))
+
+    def test_only_the_streaming_datamodule_serves_them(self) -> None:
+        """
+        Input: a database serving its non-key frames, in a datamodule and a streaming one.
+        Expected: the datamodule refuses it, shuffled frames without labels would teach empty
+          scenes, the streaming datamodule takes it.
+        Check: ValueError naming the streaming datamodule, and a built streaming datamodule.
+        """
+        sources = {"streamed": build_source(self.database)}
+        loaders = dict(
+            train_dataloader=None,
+            validation_dataloader=None,
+            test_dataloader=None,
+            predict_dataloader=None,
+            train_frame_sampling=None,
+        )
+
+        with self.assertRaisesRegex(ValueError, "streaming datamodule"):
+            DataModule(splitter=SingleSplitSplitter(), sources=sources, **loaders)
+        StreamingDataModule(splitter=SingleSplitSplitter(), sources=sources, seed=0, **loaders)
+
+    def test_only_the_test_and_predict_splits_read_them(self) -> None:
+        """
+        Input: a database serving its non-key frames to every split of a streaming datamodule,
+          and the same database serving the test split only.
+        Expected: training and validation read annotated frames only, so fitting and validating
+          on it is refused, the test split is built.
+        Check: ValueError naming the split, and the test dataset holding every record.
+        """
+        loaders = dict(
+            train_dataloader=None,
+            validation_dataloader=None,
+            test_dataloader=None,
+            predict_dataloader=None,
+            train_frame_sampling=None,
+        )
+        every_split = StreamingDataModule(
+            splitter=SingleSplitSplitter(),
+            sources={"streamed": build_source(self.database)},
+            seed=0,
+            **loaders,
+        )
+        for stage, split in (("fit", "train"), ("validate", "val")):
+            with self.subTest(stage=stage):
+                with self.assertRaisesRegex(ValueError, f"to split .*{split}"):
+                    every_split.setup(stage)
+
+        test_only = StreamingDataModule(
+            splitter=SingleSplitSplitter(),
+            sources={
+                "streamed": DatasetSource(
+                    database=self.database, test_dataset=build_dataset(self.database)
+                )
+            },
+            seed=0,
+            **loaders,
+        )
+        test_only.setup("test")
+
+        self.assertEqual(len(test_only.datasets[SplitType.TEST]), len(self.records))
+
+    def test_no_source_serves_cameras_from_them(self) -> None:
+        """
+        Input: a database serving its non-key frames, read by a dataset naming a camera, and by
+          a dataset naming none whose transforms load the images.
+        Expected: the frames between key frames hold no camera frames, so the datamodule refuses
+          both sources before any record is read.
+        Check: ValueError naming the source.
+        """
+        for camera_names, transforms in (
+            (["CAM_FRONT"], None),
+            (None, TransformsCompose([LoadImagesFromFile()])),
+        ):
+            camera_dataset = T4Dataset(
+                database_root_path=str(self.database.root_path),
+                transforms=transforms,
+                dataset_tasks={},
+                lidar_intensity_scale=self.database.lidar_intensity_scale,
+                camera_names=camera_names,
+            )
+            sources = {
+                "streamed": DatasetSource(database=self.database, test_dataset=camera_dataset)
+            }
+
+            with self.subTest(camera_names=camera_names):
+                with self.assertRaisesRegex(ValueError, "Source streamed serves cameras"):
+                    StreamingDataModule(
+                        splitter=SingleSplitSplitter(),
+                        sources=sources,
+                        seed=0,
+                        train_dataloader=None,
+                        validation_dataloader=None,
+                        test_dataloader=None,
+                        predict_dataloader=None,
+                        train_frame_sampling=None,
+                    )
 
 
 if __name__ == "__main__":

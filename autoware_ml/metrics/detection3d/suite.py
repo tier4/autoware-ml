@@ -149,6 +149,10 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         )
         # A config typo must fail at build, not after the epoch.
         self.match_cost = MatchCost(match_cost)
+        if collision is None and any(component.needs_ttc for component in self.components):
+            raise ValueError(
+                "A metric of the suite reads per-box TTC, give it a collision provider."
+            )
         self.collision = collision
         # When class_groups is set, GT/pred labels are folded onto the behaviour
         # taxonomy at state build (after the per-class GT filters), so matching
@@ -170,9 +174,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         self.add_state("pred_labels", default=[], dist_reduce_fx=None)
         self.add_state("gt_boxes", default=[], dist_reduce_fx=None)
         self.add_state("gt_labels", default=[], dist_reduce_fx=None)
-        # Per-frame flag: does the frame only pad a streaming lane? It is gathered like every
-        # other frame, so the ranks hold as many entries, and left out of every metric.
-        self.add_state("padding", default=[], dist_reduce_fx=None)
+        # Per-frame flag of the frames the metrics skip, gathered like every other frame so the
+        # ranks hold as many entries
+        self.add_state("unscored", default=[], dist_reduce_fx=None)
         if self.collision is not None:
             self.add_state("gt_ttc", default=[], dist_reduce_fx=None)
             self.add_state("pred_ttc", default=[], dist_reduce_fx=None)
@@ -331,6 +335,10 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             prediction = frame.predictions
             frame_boxes = frame.gt_boxes.detach().to(dtype=torch.float32)
             frame_labels = frame.gt_labels.detach().to(dtype=torch.long)
+            self.unscored.append(torch.tensor([not frame.scored], device=frame_boxes.device))
+            if not frame.scored:
+                self._append_unscored_frame(frame_boxes, prediction.bboxes_3d)
+                continue
             if self.class_names and bool(
                 ((frame_labels < 0) | (frame_labels >= len(self.class_names))).any()
             ):
@@ -374,15 +382,13 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             self.pred_labels.append(pred_labels)
             self.gt_boxes.append(frame_boxes[keep])
             self.gt_labels.append(frame_labels[keep])
-            self.padding.append(torch.tensor([frame.is_padding], device=frame_boxes.device))
 
             if self.collision is not None:
                 frame_meta = self._collision_frame_meta(frame.frame_meta)
                 covered = self.collision.available(frame_meta.lanelet_map_path)
                 self.ttc_covered.append(torch.tensor([covered], device=frame_boxes.device))
-                if not frame.is_padding:
-                    self.ttc_frames_seen += 1
-                    self.ttc_frames_covered += int(covered)
+                self.ttc_frames_seen += 1
+                self.ttc_frames_covered += int(covered)
                 self.gt_ttc.append(
                     self._frame_ttc(frame_boxes[keep], frame_labels[keep], frame_meta, covered)
                 )
@@ -407,6 +413,37 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.pred_region_masks.append(
                     self._region_columns(pred_boxes, frame.frame_meta, available)
                 )
+
+    def _append_unscored_frame(
+        self,
+        frame_boxes: Float[torch.Tensor, "num_gts box_dim"],
+        pred_boxes: Float[torch.Tensor, "num_preds box_dim"],
+    ) -> None:
+        """Give an unscored frame empty entries in every per-frame list, so the ranks gather alike.
+
+        Args:
+            frame_boxes: Ground truth boxes of the frame, for their layout and device.
+            pred_boxes: Predicted boxes of the frame, for their layout and device.
+        """
+        device = frame_boxes.device
+        self.pred_boxes.append(pred_boxes.detach().to(dtype=torch.float32)[:0])
+        self.pred_scores.append(torch.zeros(0, device=pred_boxes.device))
+        self.pred_labels.append(torch.zeros(0, dtype=torch.long, device=pred_boxes.device))
+        self.gt_boxes.append(frame_boxes[:0])
+        self.gt_labels.append(torch.zeros(0, dtype=torch.long, device=device))
+        if self.collision is not None:
+            self.ttc_covered.append(torch.tensor([False], device=device))
+            self.gt_ttc.append(torch.zeros(0, device=device))
+            self.pred_ttc.append(torch.zeros(0, device=pred_boxes.device))
+        if self._component_filters and self._stage_filter_keys():
+            num_filters = len(self._component_filters)
+            self.region_available.append(torch.zeros(num_filters, dtype=torch.bool, device=device))
+            self.gt_region_masks.append(
+                torch.zeros((0, num_filters), dtype=torch.bool, device=device)
+            )
+            self.pred_region_masks.append(
+                torch.zeros((0, num_filters), dtype=torch.bool, device=pred_boxes.device)
+            )
 
     def bind_stage(self, stage: Any) -> None:
         """Drop the collision provider on stages where no metric reads TTC.
@@ -553,7 +590,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
 
         samples = []
         for index in range(len(self.gt_boxes)):
-            if bool(self.padding[index].item()):
+            if bool(self.unscored[index].item()):
                 continue
             if column is not None and not bool(self.region_available[index][column]):
                 continue

@@ -91,7 +91,7 @@ Each list entry is a `LidarFrameDataModel` covering one keyframe or sweep:
 | `lidar_pointcloud_source_relative_path`        | `String`              | Per-point source index path, relative to the root (or null)  |
 | `lidar_pointcloud_num_features`                | `Int32`               | Number of features per point (configured on the database)    |
 | `lidar_sensor_to_ego_pose_matrix`              | `Array(Float32, 4x4)` | Sensor-to-ego transform                                      |
-| `lidar_frame_ego_pose_to_global_matrix`        | `Array(Float32, 4x4)` | Ego-to-global transform for this frame                       |
+| `lidar_frame_ego_pose_to_global_matrix`        | `Array(Float64, 4x4)` | Ego-to-global transform for this frame                       |
 | `lidar_sensor_to_lidar_sweep_matrices`         | `Array(Float32, 4x4)` | Sensor-to-sweep transform                                    |
 | `lidar_pointcloud_semantic_mask_relative_path` | `String`              | LiDAR segmentation mask path, relative to the root (or null) |
 | `lidar_pointcloud_t4pack_frame`                | `Struct`              | Location in its t4pack file (or null), see below             |

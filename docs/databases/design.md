@@ -140,6 +140,7 @@ The `scenarios` module models scenario metadata as immutable Pydantic objects. `
 class DatasetParams(BaseModel):
     dataset_name: str
     sample_steps: int
+    non_key_frames: bool = False  # also serve the frames between key frames, unannotated
 
 class ScenarioData(BaseModel):
     dataset_params: DatasetParams

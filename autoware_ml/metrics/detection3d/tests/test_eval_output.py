@@ -166,9 +166,10 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
 
     def test_frame_meta_is_attached_per_frame(self) -> None:
         """
-        Input: the two-sample batch with frame metadata, the second frame without a map.
-        Expected: every frame carries its own pose, scene token and map path.
-        Check: the metadata of both frames.
+        Input: the two-sample batch with frame metadata, the second frame without a map and
+        between key frames.
+        Expected: every frame carries its own pose, scene token, map path and key frame flag.
+        Check: the metadata of both frames and the frames the metrics score.
         """
         ego2globals = torch.eye(4, device=self.device).repeat(2, 1, 1)
         ego2globals[1, 0, 3] = 7.0
@@ -178,6 +179,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
                 scene_tokens=["db/scene_a/0", "db/scene_b/1"],
                 timestamps=torch.tensor([0.0, 0.1], dtype=torch.float64, device=self.device),
                 lanelet_map_paths=["/maps/scene_a.osm", None],
+                key_frames=[True, False],
             )
         )
 
@@ -193,6 +195,8 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
         self.assertEqual(second.frame_meta.scene_token, "db/scene_b/1")
         self.assertEqual(first.frame_meta.lanelet_map_path, "/maps/scene_a.osm")
         self.assertIsNone(second.frame_meta.lanelet_map_path)
+        self.assertEqual([frame.key_frame for frame in output.frames], [True, False])
+        self.assertEqual([frame.scored for frame in output.frames], [True, False])
 
     def test_flags_the_padding_samples(self) -> None:
         """

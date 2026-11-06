@@ -251,7 +251,7 @@ class LiDARPointCloudSampleTestCase(unittest.TestCase):
             num_features=5,
             intensity_scale=255.0,
             sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
-            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32) * 2.0,
+            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float64) * 2.0,
             lidar_sensor_to_lidar_sweep_matrix=torch.eye(4, dtype=torch.float32) * 3.0,
         )
 

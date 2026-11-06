@@ -53,6 +53,8 @@ and test, while the heavier reporting runs only in test, so validation epochs st
 is cloned only for the stages where at least one of its components reports, so a heavy test-only
 suite does not exist at validation time at all.
 
+The frames between the key frames of a stream (a dataset with `non_key_frames: true`) carry no annotations: the model runs on them and every metric skips them, like the padding slots. Their eval frames carry `key_frame: false`, and `scored` combines both flags.
+
 ## Lifecycle
 
 A suite runs the standard `torchmetrics` contract across an epoch.

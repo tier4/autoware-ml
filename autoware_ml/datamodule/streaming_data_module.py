@@ -41,6 +41,8 @@ class StreamingDataModule(DataModule):
     one.
     """
 
+    streams_scenes = True
+
     def __init__(
         self,
         splitter: SplitterInterface,
