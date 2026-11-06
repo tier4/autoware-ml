@@ -264,8 +264,6 @@ ONNX and TensorRT export settings:
 deploy:
   onnx:
     opset_version: 21
-    dynamic_shapes:
-      input: { 2: height, 3: width }
     modify_graph: null  # Optional graph modifier
 
   tensorrt:

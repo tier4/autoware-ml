@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
@@ -109,7 +109,7 @@ def _deploy_cfg(tmp_path: Path, logger_enabled: bool = True) -> DictConfig:
             "experiment_uid": "2026.10.15.12.00.00",
             "experiment_run_dir": str(tmp_path / "work" / "base"),
             "seed": 0,
-            "deploy": {"onnx": {"modules": {}}},
+            "deploy": {"onnx": {"modules": {"head": {}}}},
             "logger": (
                 {
                     "_target_": "lightning.pytorch.loggers.MLFlowLogger",
@@ -140,6 +140,11 @@ def _only_run_id(cfg: DictConfig) -> str:
     runs = client.search_runs([experiment.experiment_id])
     assert len(runs) == 1
     return runs[0].info.run_id
+
+
+def _built(module_names: tuple[str, ...] = ("head",)) -> tuple[MagicMock, MagicMock, dict]:
+    """What ``_build`` returns, with the model exporting the named modules."""
+    return MagicMock(), MagicMock(), {name: MagicMock() for name in module_names}
 
 
 def test_record_deploy_run_writes_config_overrides_metadata_and_params(
@@ -218,6 +223,36 @@ def test_run_deploy_refuses_configured_tensor_names_before_the_run_exists(
     assert not (tmp_path / "mlruns" / "mlflow.db").exists()
 
 
+def test_run_deploy_refuses_a_module_without_an_entry_before_the_run_exists(
+    tmp_path: Path, hydra_runtime: HydraRuntime
+) -> None:
+    """
+    Input: MLflow enabled, a model exporting ``head`` and a config whose ``modules`` has an
+        entry of ``misspelled_head`` only.
+    Expected: the deploy fails naming the missing entry after the model is built but before
+        the MLflow run is created, so no FAILED run is left behind.
+    Check: the raised error, the export not running and the absence of the SQLite store.
+    """
+    cfg = _deploy_cfg(tmp_path)
+    cfg.deploy.onnx.modules = {"misspelled_head": {}}
+    checkpoint_path = _checkpoint(tmp_path)
+
+    with (
+        patch.object(
+            deploy_script,
+            "build_weight_checkpoint_paths",
+            return_value=([checkpoint_path], checkpoint_path),
+        ),
+        patch.object(deploy_script, "_build", return_value=_built(("head",))),
+        patch.object(deploy_script, "_export") as export_mock,
+        pytest.raises(ValueError, match=r"\['head'\].*entries are \['misspelled_head'\]"),
+    ):
+        deploy_script.run_deploy(cfg)
+
+    export_mock.assert_not_called()
+    assert not (tmp_path / "mlruns" / "mlflow.db").exists()
+
+
 def test_run_deploy_marks_the_run_failed_when_the_export_raises(
     tmp_path: Path, hydra_runtime: HydraRuntime
 ) -> None:
@@ -236,6 +271,7 @@ def test_run_deploy_marks_the_run_failed_when_the_export_raises(
             "build_weight_checkpoint_paths",
             return_value=([checkpoint_path], checkpoint_path),
         ),
+        patch.object(deploy_script, "_build", return_value=_built()),
         patch.object(deploy_script, "_export", side_effect=RuntimeError("onnx export broke")),
         pytest.raises(RuntimeError, match="onnx export broke"),
     ):
@@ -267,6 +303,7 @@ def test_run_deploy_marks_the_run_finished_and_exports_into_the_run(
             "build_weight_checkpoint_paths",
             return_value=([checkpoint_path], checkpoint_path),
         ),
+        patch.object(deploy_script, "_build", return_value=_built()),
         patch.object(deploy_script, "_export") as export_mock,
     ):
         deploy_script.run_deploy(cfg)
@@ -281,9 +318,9 @@ def test_run_deploy_without_logger_exports_into_the_experiment_run_dir(
     tmp_path: Path, hydra_runtime: HydraRuntime
 ) -> None:
     """
-    Input: MLflow disabled, with the heavy build and export steps stubbed.
-    Expected: no store is touched and the export writes to the config's ``experiment_run_dir``
-        without a tracker or run id.
+    Input: MLflow disabled, with the model build and the export stubbed.
+    Expected: no store is touched and the export writes the built model to the config's
+        ``experiment_run_dir`` without a tracker or run id.
     Check: the ``deploy`` call and the absence of the SQLite file.
     """
     cfg = _deploy_cfg(tmp_path, logger_enabled=False)
@@ -295,20 +332,16 @@ def test_run_deploy_without_logger_exports_into_the_experiment_run_dir(
             "build_weight_checkpoint_paths",
             return_value=([checkpoint_path], checkpoint_path),
         ),
-        patch.object(deploy_script, "validate_cuda_available"),
-        # It switches the whole process to TF32 matmuls; the CUDA tests that run later in the
-        # same session would then miss their float32 tolerances.
-        patch.object(deploy_script, "configure_torch_runtime"),
-        patch.object(deploy_script.torch.cuda, "get_device_name", return_value="stub"),
-        patch.object(deploy_script, "build_datamodule"),
-        patch.object(deploy_script, "build_data_preprocessor"),
-        patch.object(deploy_script, "build_model"),
+        patch.object(deploy_script, "_build", return_value=_built()) as build_mock,
         patch.object(deploy_script, "deploy") as deploy_mock,
     ):
         deploy_script.run_deploy(cfg)
 
+    _, model, export_specs = build_mock.return_value
     kwargs = deploy_mock.call_args.kwargs
     assert kwargs["output_dir"] == Path(cfg.experiment_run_dir)
+    assert kwargs["model"] is model
+    assert kwargs["export_specs"] is export_specs
     assert kwargs["tracker"] is None
     assert kwargs["run_id"] is None
     assert not (tmp_path / "mlruns" / "mlflow.db").exists()

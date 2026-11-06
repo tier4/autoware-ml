@@ -21,6 +21,8 @@ mapping from module names to :class:`ExportSpec` objects.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from dataclasses import dataclass
 import inspect
 import logging
@@ -45,11 +47,13 @@ class ExportSpec:
     Attributes:
         module: Module instance exported to ONNX.
         args: Example positional inputs supplied during export.
-        input_names: ONNX input names, one per entry of ``args`` in order; the keys the
-            config's ``dynamic_shapes`` / ``dynamic_axes`` tables and the runtime use.
+        input_names: ONNX input names, one per entry of ``args`` in order; the keys of
+            ``deploy.tensorrt.input_shapes`` and the names the runtime binds.
         output_names: Names of the exported output tensors, in order.
-        dynamic_axes: Optional legacy ONNX dynamic-axis mapping generated with
-            the export arguments. Used only when exporting with ``dynamo=False``.
+        dynamic_axes: The axes that vary between runs, ``{tensor: {dim: name}}``, keyed by
+            the input and output names. The model declares them here, not in its config.
+            The TorchScript exporter (``dynamo=False``) takes them as its ``dynamic_axes``;
+            ``torch.export`` (``dynamo=True``) gets one ``Dim`` per name over the inputs.
         supported_stages: Export stages supported by this specification.
     """
 
@@ -61,13 +65,14 @@ class ExportSpec:
     supported_stages: frozenset[str] = frozenset({"onnx", "tensorrt"})
 
     def __post_init__(self) -> None:
-        """Refuse a spec that leaves an input or every output unnamed.
+        """Refuse a spec that leaves an input or every output unnamed, or an axis of no tensor.
 
         Checked when the spec is built, so a model fails before any of its modules exports.
 
         Raises:
             ValueError: If ``input_names`` is empty or not one name per entry of ``args``,
-                or ``output_names`` is empty.
+                ``output_names`` is empty, or ``dynamic_axes`` names a tensor that is neither
+                an input nor an output.
         """
         if not self.input_names or len(self.input_names) != len(self.args):
             raise ValueError(
@@ -75,6 +80,16 @@ class ExportSpec:
             )
         if not self.output_names:
             raise ValueError("The export spec names no outputs.")
+        # The TorchScript exporter only warns about an axis of an unknown tensor and exports
+        # it static.
+        unknown = sorted(
+            set(self.dynamic_axes or ()) - set(self.input_names) - set(self.output_names)
+        )
+        if unknown:
+            raise ValueError(
+                f"The export spec declares dynamic_axes for {unknown}, which are not among its "
+                f"inputs {self.input_names} or outputs {self.output_names}."
+            )
 
 
 def validate_cuda_available() -> None:
@@ -120,31 +135,58 @@ def resolve_export_specs(
 
 
 def merge_module_onnx_cfg(onnx_cfg: DictConfig, module_name: str) -> DictConfig:
-    """Merge shared ONNX settings with per-module settings.
+    """Return the ONNX settings of one exported module.
 
-    Module-level settings override shared settings. The ``modules`` key itself
-    is excluded from the merged result.
+    The shared ``deploy.onnx`` settings, overridden by the module's entry under
+    ``deploy.onnx.modules``. The ``modules`` key itself is left out.
 
     Args:
-        onnx_cfg: Top-level ONNX deploy config containing a ``modules`` mapping.
-        module_name: Key of the module to resolve within ``modules``.
-
-    Returns:
-        Merged config with shared settings and module-specific overrides.
+        onnx_cfg: ``deploy.onnx``, with one ``modules`` entry per exported module.
+        module_name: The exported module, as the export specs name it.
 
     Raises:
-        KeyError: If ``module_name`` is not found in ``onnx_cfg.modules``.
+        KeyError: When the module has no entry; an empty entry keeps the shared settings.
     """
-    if "modules" not in onnx_cfg or module_name not in onnx_cfg.modules:
+    modules_cfg = onnx_cfg.get("modules") or {}
+    if module_name not in modules_cfg:
         raise KeyError(
-            f"Module '{module_name}' not found in deploy.onnx.modules. "
-            f"Available: {list(onnx_cfg.get('modules', {}).keys())}"
+            f"deploy.onnx.modules has no entry for exported module '{module_name}'; "
+            f"its entries are {sorted(modules_cfg)}. Add '{module_name}: {{}}' to export it "
+            "with the shared deploy.onnx settings."
         )
     shared = {
         k: v for k, v in OmegaConf.to_container(onnx_cfg, resolve=True).items() if k != "modules"
     }
-    module_overrides = OmegaConf.to_container(onnx_cfg.modules[module_name], resolve=True)
+    module_cfg = modules_cfg[module_name]
+    module_overrides = OmegaConf.to_container(module_cfg, resolve=True) if module_cfg else {}
     return OmegaConf.create({**shared, **module_overrides})
+
+
+def validate_onnx_modules_exported(onnx_cfg: DictConfig, module_names: Iterable[str]) -> None:
+    """Refuse ``deploy.onnx.modules`` that lacks an entry of a module the model exports.
+
+    Every exported module needs an entry, ``{}`` when it keeps the shared settings, so a module
+    added to the model cannot silently export without its ``metainfo`` or ``modify_graph``, and a
+    misspelled entry shows up as the missing one. Entries of modules the model does not export
+    are left alone: a model whose exported modules depend on its config, as BEVFusion's on
+    ``camera_network``, lists the entries of every variant in one base config.
+
+    Args:
+        onnx_cfg: ``deploy.onnx``, with one ``modules`` entry per exported module.
+        module_names: The modules the export specs name.
+
+    Raises:
+        ValueError: Naming the modules without an entry and the entries there are.
+    """
+    module_names = list(module_names)
+    entries = sorted(onnx_cfg.get("modules") or {})
+    missing = sorted(set(module_names) - set(entries))
+    if missing:
+        raise ValueError(
+            f"deploy.onnx.modules has no entry for the exported modules {missing}; its entries "
+            f"are {entries} and the model exports {module_names}. An empty entry ({{}}) keeps "
+            "the shared deploy.onnx settings."
+        )
 
 
 def log_export_inputs(input_args: tuple[Any, ...], input_names: list[str]) -> None:
@@ -161,50 +203,30 @@ def log_export_inputs(input_args: tuple[Any, ...], input_names: list[str]) -> No
             logger.info("Input '%s': type=%s", input_name, type(input_value).__name__)
 
 
-def build_dynamic_shapes(
-    onnx_cfg: DictConfig,
-    forward_params: list[str],
-) -> tuple[dict[int, Dim] | None, ...] | None:
-    """Build the ONNX dynamic-shape mapping from config."""
-    if "dynamic_shapes" not in onnx_cfg or onnx_cfg.dynamic_shapes is None:
-        return None
+def dynamic_shapes_from_spec(spec: ExportSpec) -> tuple[dict[int, Dim] | None, ...] | None:
+    """Return the ``torch.export`` dynamic shapes of the spec's inputs, in ``args`` order.
 
-    raw_dynamic_shapes = onnx_cfg.dynamic_shapes
-    unknown_params = [
-        param_name for param_name in raw_dynamic_shapes if param_name not in forward_params
-    ]
-    if unknown_params:
-        raise ValueError(
-            f"Dynamic shape parameters {unknown_params} not found in export inputs. "
-            f"Available inputs: {forward_params}."
+    One ``Dim`` per axis name, shared by every axis that carries the name, so equal axes
+    stay equal in the exported graph. Output axes follow from the inputs and are left out.
+
+    Returns:
+        One mapping per input, ``None`` for a static input, or ``None`` when no input has a
+        dynamic axis.
+    """
+    if not spec.dynamic_axes:
+        return None
+    dims: dict[str, Dim] = {}
+    shapes = []
+    for input_name in spec.input_names:
+        axes = spec.dynamic_axes.get(input_name)
+        shapes.append(
+            {index: dims.setdefault(name, Dim(name)) for index, name in axes.items()}
+            if axes
+            else None
         )
-
-    dynamic_shapes: list[dict[int, Dim] | None] = []
-    for param_name in forward_params:
-        dim_mapping = raw_dynamic_shapes.get(param_name)
-        if dim_mapping is None:
-            dynamic_shapes.append(None)
-            continue
-
-        param_dynamic_shapes: dict[int, Dim] = {}
-        for dim_idx, dim_spec in dim_mapping.items():
-            if isinstance(dim_spec, str):
-                param_dynamic_shapes[int(dim_idx)] = Dim(dim_spec)
-                continue
-
-            dim_name = dim_spec.get("name")
-            if dim_name is None:
-                raise ValueError(
-                    f"Dynamic shape spec for '{param_name}[{dim_idx}]' must define 'name'."
-                )
-            dim_kwargs = {key: dim_spec[key] for key in ("min", "max") if key in dim_spec}
-            param_dynamic_shapes[int(dim_idx)] = Dim(dim_name, **dim_kwargs)
-
-        dynamic_shapes.append(param_dynamic_shapes or None)
-
-    if all(param_dynamic_shapes is None for param_dynamic_shapes in dynamic_shapes):
+    if all(shape is None for shape in shapes):
         return None
-    return tuple(dynamic_shapes)
+    return tuple(shapes)
 
 
 def normalize_dynamic_shapes_for_model(
@@ -228,39 +250,6 @@ def normalize_dynamic_shapes_for_model(
     return dynamic_shapes
 
 
-def build_dynamic_axes(onnx_cfg: DictConfig) -> dict[str, dict[int, str]] | None:
-    """Build legacy ONNX dynamic-axes mapping from config.
-
-    This path is used with ``torch.onnx.export(..., dynamo=False)`` to support
-    exports that still rely on the legacy exporter behavior.
-    """
-    dynamic_axes_cfg = onnx_cfg.get("dynamic_axes")
-    if dynamic_axes_cfg is None:
-        dynamic_axes_cfg = onnx_cfg.get("dynamic_shapes")
-    if dynamic_axes_cfg is None:
-        return None
-
-    dynamic_axes: dict[str, dict[int, str]] = {}
-    for tensor_name, dim_mapping in dynamic_axes_cfg.items():
-        tensor_dynamic_axes: dict[int, str] = {}
-        for dim_idx, dim_spec in dim_mapping.items():
-            if isinstance(dim_spec, str):
-                tensor_dynamic_axes[int(dim_idx)] = dim_spec
-                continue
-
-            dim_name = dim_spec.get("name")
-            if dim_name is None:
-                raise ValueError(
-                    f"Dynamic axis/shape spec for '{tensor_name}[{dim_idx}]' must define 'name'."
-                )
-            tensor_dynamic_axes[int(dim_idx)] = dim_name
-
-        if tensor_dynamic_axes:
-            dynamic_axes[tensor_name] = tensor_dynamic_axes
-
-    return dynamic_axes or None
-
-
 def merge_onnx_external_data(onnx_path: Path) -> None:
     """Merge ONNX external data shards back into a single file."""
     import onnx
@@ -272,7 +261,9 @@ def merge_onnx_external_data(onnx_path: Path) -> None:
 
 
 def validate_onnx_names_not_configured(onnx_cfg: DictConfig) -> None:
-    """Refuse ``input_names`` / ``output_names`` in ``deploy.onnx``: the export specs name the tensors.
+    """Refuse the tensor names and the dynamic axes or shapes in ``deploy.onnx``.
+
+    The export spec names the tensors and declares the dynamic axes, for both exporters.
 
     ``run_deploy`` checks it before the MLflow run is created or the model loads.
 
@@ -288,13 +279,13 @@ def validate_onnx_names_not_configured(onnx_cfg: DictConfig) -> None:
     configured = [
         f"{scope}.{key}"
         for scope, cfg in scopes.items()
-        for key in ("input_names", "output_names")
+        for key in ("input_names", "output_names", "dynamic_axes", "dynamic_shapes")
         if cfg is not None and key in cfg
     ]
     if configured:
         raise ValueError(
-            f"{configured} are not read: the export spec names the graph inputs and outputs. "
-            "Remove the entries."
+            f"{configured} are not read: the export spec names the graph inputs and outputs "
+            "and declares the dynamic axes. Remove the entries."
         )
 
 
@@ -309,13 +300,12 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
     logger.info("Exporting model to ONNX...")
 
     dynamo = onnx_cfg.get("dynamo", True)
-    dynamic_shapes = build_dynamic_shapes(onnx_cfg, spec.input_names) if dynamo else None
     dynamic_shapes = (
-        normalize_dynamic_shapes_for_model(spec.module, dynamic_shapes) if dynamo else None
+        normalize_dynamic_shapes_for_model(spec.module, dynamic_shapes_from_spec(spec))
+        if dynamo
+        else None
     )
-    dynamic_axes = None
-    if not dynamo:
-        dynamic_axes = spec.dynamic_axes or build_dynamic_axes(onnx_cfg)
+    dynamic_axes = None if dynamo else spec.dynamic_axes
 
     logger.info("Dynamic shapes: %s", dynamic_shapes)
     logger.info("Dynamic axes: %s", dynamic_axes)

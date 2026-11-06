@@ -46,25 +46,9 @@ deploy:
     opset_version: 17
     do_constant_folding: false
     modules:
-      bevfusion_lidar:
-        dynamic_axes:
-          voxels: { 0: voxels_num }
-          coors: { 0: voxels_num }
-          num_points_per_voxel: { 0: voxels_num }
-      bevfusion_image_backbone:
-        dynamic_axes:
-          imgs: { 0: num_imgs }
-      bevfusion_camera_lidar:
-        dynamic_axes:
-          voxels: { 0: voxels_num }
-          coors: { 0: voxels_num }
-          num_points_per_voxel: { 0: voxels_num }
-          image_feats: { 0: num_imgs }
-          depth_maps: { 0: num_imgs }
-          geom_feats: { 0: num_kept }
-          kept: { 0: num_frustum_points }
-          ranks: { 0: num_kept }
-          indices: { 0: num_kept }
+      bevfusion_lidar: {}
+      bevfusion_image_backbone: {}
+      bevfusion_camera_lidar: {}
   tensorrt:
     enabled: false
 

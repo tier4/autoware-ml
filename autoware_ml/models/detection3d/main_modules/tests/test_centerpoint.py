@@ -260,6 +260,13 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertIsInstance(voxel_spec.module, _CenterPointVoxelEncoderExportWrapper)
         self.assertEqual(voxel_spec.input_names, ["input_features"])
         self.assertEqual(voxel_spec.output_names, ["pillar_features"])
+        self.assertEqual(
+            voxel_spec.dynamic_axes,
+            {
+                "input_features": {0: "num_voxels", 1: "num_max_points"},
+                "pillar_features": {0: "num_voxels"},
+            },
+        )
         (input_features,) = voxel_spec.args
         self.assertEqual(
             input_features.shape, (num_pillars, max_num_points, num_decorated_channels)
@@ -273,6 +280,13 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertIsInstance(head_spec.module, _CenterPointBackboneNeckHeadExportWrapper)
         self.assertEqual(head_spec.input_names, ["spatial_features"])
         self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot", "vel"])
+        self.assertEqual(
+            head_spec.dynamic_axes,
+            {
+                name: {0: "batch_size", 2: "H", 3: "W"}
+                for name in ["spatial_features", "heatmap", "reg", "height", "dim", "rot", "vel"]
+            },
+        )
         (spatial_features,) = head_spec.args
         self.assertEqual(spatial_features.shape, (self.batch_size, 32, 16, 16))
         with torch.no_grad():
