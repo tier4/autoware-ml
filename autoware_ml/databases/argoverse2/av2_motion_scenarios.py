@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -139,6 +140,9 @@ class AV2MotionScenarios(Scenarios):
         """
         List the scenario directories of a split.
 
+        ``os.scandir`` takes the type of every entry from the directory listing, without a
+        ``stat`` per scenario directory.
+
         Args:
           split_path: The split directory.
 
@@ -146,7 +150,8 @@ class AV2MotionScenarios(Scenarios):
           list[str]: The scenario ids, which are the directory names, sorted.
         """
 
-        return sorted(entry.name for entry in split_path.iterdir() if entry.is_dir())
+        with os.scandir(split_path) as entries:
+            return sorted(entry.name for entry in entries if entry.is_dir())
 
     def __str__(self) -> str:
         """
