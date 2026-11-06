@@ -15,8 +15,8 @@
 """Synthetic-inputs entrypoint for Autoware-ML PTv3 models.
 
 This script writes the export inputs of every module at set voxel counts per encoder stage, for
-latency benchmarks with trtexec. The voxels are as clustered as ``neighbors`` asks per stage, since
-the sparse convolutions cost more the more neighbors a voxel has.
+latency benchmarks with trtexec. The voxels are as clustered as ``target_neighbors`` asks per
+stage, since the sparse convolutions cost more the more neighbors a voxel has.
 """
 
 from __future__ import annotations
@@ -51,18 +51,20 @@ from autoware_ml.utils.runtime import configure_torch_runtime, get_config_path, 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
 
-_AROUND = torch.tensor([d for d in itertools.product((-1, 0, 1), repeat=3) if any(d)])
+_NEIGHBOR_OFFSETS = torch.tensor([d for d in itertools.product((-1, 0, 1), repeat=3) if any(d)])
 
 Cells = Int64[torch.Tensor, "num_cells 3"]
 
 
 def mean_neighbors(coords: Int[torch.Tensor, "num_voxels 3"]) -> float:
     """Return how many of the 26 cells around a voxel are occupied, on average."""
-    span = int(coords.max()) + 3
-    weights = torch.tensor([span * span, span, 1], device=coords.device)
-    keys = ((coords.long() + 1) @ weights).sort().values
-    around = (coords.long()[:, None] + 1 + _AROUND.to(coords.device)) @ weights
-    found = keys[torch.searchsorted(keys, around).clamp(max=len(keys) - 1)] == around
+    cells = coords.long() + 1
+    neighbor_cells = cells[:, None] + _NEIGHBOR_OFFSETS.to(cells.device)
+    span = int(neighbor_cells.max()) + 1
+    weights = torch.tensor([span * span, span, 1], device=cells.device)
+    keys = (cells @ weights).sort().values
+    neighbor_keys = neighbor_cells @ weights
+    found = keys[torch.searchsorted(keys, neighbor_keys).clamp(max=len(keys) - 1)] == neighbor_keys
     return float(found.sum()) / len(coords)
 
 
@@ -92,86 +94,88 @@ def _fit_neighbors(
     cells: Cells,
     grid_shape: Int64[torch.Tensor, "3"],
     scale: int,
-    neighbors: float,
+    target_neighbors: float,
     generator: torch.Generator,
     keep: Callable[[Float32[torch.Tensor, " num_cells"]], Cells],
 ) -> Cells:
     """Return the cells ``keep`` picks by distance to the grid floor center plus noise.
 
-    The noise weight is bisected until the picked cells have ``neighbors`` on average.
+    The noise weight is bisected until the picked cells have ``target_neighbors`` on average.
     """
     center = torch.tensor([*(grid_shape[:2] / 2), 0.0]) / scale
     distance = (cells + 0.5 - center).norm(dim=1)
     noise = torch.rand(len(cells), generator=generator) * distance.max()
     distance[~(cells < _stage_shape(grid_shape, scale)).all(dim=1)] = math.inf
-    low, high = 0.0, 64.0
-    for _ in range(16):
-        mix = (low + high) / 2
-        denser = mean_neighbors(keep(distance + mix * noise)) > neighbors
-        low, high = (mix, high) if denser else (low, mix)
-    return keep(distance + low * noise)
+    low_weight, high_weight, tolerance = 0.0, 64.0, 1e-3
+    while high_weight - low_weight > tolerance:
+        noise_weight = (low_weight + high_weight) / 2
+        if mean_neighbors(keep(distance + noise_weight * noise)) > target_neighbors:
+            low_weight = noise_weight
+        else:
+            high_weight = noise_weight
+    return keep(distance + low_weight * noise)
 
 
 def voxel_layout(
-    counts: Sequence[int],
-    strides: Sequence[int],
+    voxel_counts: Sequence[int],
+    pooling_strides: Sequence[int],
     grid_shape: Int64[torch.Tensor, "3"],
-    neighbors: Sequence[float],
+    target_neighbors: Sequence[float],
     generator: torch.Generator,
 ) -> Int64[torch.Tensor, "num_voxels 3"]:
-    """Pick voxels whose pooling stages hold exactly ``counts`` voxels with ``neighbors`` each.
+    """Pick voxels whose stages hold ``voxel_counts`` voxels with ``target_neighbors`` each.
 
     Stage by stage, coarsest first, keeps the cells nearest the center of the grid floor, ranked
     with noise whose weight is bisected until the stage's mean neighbors reach the target. Every
     stage's grid is the finest one divided by its scale, rounded up as the model pools it.
 
     Args:
-        counts: Voxels per stage, finest first.
-        strides: Pooling stride of each stage.
+        voxel_counts: Voxels per stage, finest first.
+        pooling_strides: Pooling stride of each stage.
         grid_shape: Finest grid size per axis.
-        neighbors: Target mean of occupied cells around a voxel per stage, finest first.
+        target_neighbors: Target mean of occupied cells around a voxel per stage, finest first.
         generator: Source of the ranking noise.
 
     Returns:
-        ``[counts[0], 3]`` grid coordinates.
+        ``[voxel_counts[0], 3]`` grid coordinates.
 
     Raises:
         ValueError: If a stage cannot pool to the next.
     """
-    if not len(counts) == len(strides) + 1 == len(neighbors):
+    if not len(voxel_counts) == len(pooling_strides) + 1 == len(target_neighbors):
         raise ValueError(
-            f"{len(counts)} voxel counts and {len(neighbors)} neighbor targets for "
-            f"{len(strides)} pooling stages"
+            f"{len(voxel_counts)} voxel counts and {len(target_neighbors)} neighbor targets for "
+            f"{len(pooling_strides)} pooling stages"
         )
-    scale = math.prod(strides)
+    scale = math.prod(pooling_strides)
     cells = torch.cartesian_prod(*(torch.arange(int(n)) for n in _stage_shape(grid_shape, scale)))
-    if counts[-1] > len(cells):
-        raise ValueError(f"{counts[-1]} voxels cannot pool to a grid of {len(cells)} cells")
+    if voxel_counts[-1] > len(cells):
+        raise ValueError(f"{voxel_counts[-1]} voxels cannot pool to a grid of {len(cells)} cells")
     layout = _fit_neighbors(
         cells,
         grid_shape,
         scale,
-        neighbors[-1],
+        target_neighbors[-1],
         generator,
-        functools.partial(_best_cells, cells, counts[-1]),
+        functools.partial(_best_cells, cells, voxel_counts[-1]),
     )
-    for stage in reversed(range(len(counts) - 1)):
-        stride = strides[stage]
+    for stage in reversed(range(len(voxel_counts) - 1)):
+        stride = pooling_strides[stage]
         scale //= stride
         offsets = torch.tensor(list(itertools.product(range(stride), repeat=3)))
         cells = (layout[:, None] * stride + offsets[None]).reshape(-1, 3)
         inside = int((cells < _stage_shape(grid_shape, scale)).all(dim=1).sum())
-        if not len(layout) <= counts[stage] <= inside:
+        if not len(layout) <= voxel_counts[stage] <= inside:
             raise ValueError(
-                f"{counts[stage]} voxels cannot pool to {len(layout)} with stride {stride}"
+                f"{voxel_counts[stage]} voxels cannot pool to {len(layout)} with stride {stride}"
             )
         layout = _fit_neighbors(
             cells,
             grid_shape,
             scale,
-            neighbors[stage],
+            target_neighbors[stage],
             generator,
-            functools.partial(_best_children, cells, len(layout), counts[stage]),
+            functools.partial(_best_children, cells, len(layout), voxel_counts[stage]),
         )
     return layout
 
@@ -197,9 +201,9 @@ def write_export_inputs(specs: Mapping[str, ExportSpec], out: Path) -> None:
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
 def main(cfg: DictConfig) -> None:
-    """Write the export inputs at ``cfg.voxels`` voxels per stage to ``cfg.out``.
+    """Write the export inputs at ``cfg.voxel_counts`` voxels per stage to ``cfg.out``.
 
-    ``cfg.neighbors`` sets the mean occupied neighbors per stage, finest first.
+    ``cfg.target_neighbors`` sets the mean occupied neighbors per stage, finest first.
 
     Args:
         cfg: Hydra configuration.
@@ -221,11 +225,13 @@ def main(cfg: DictConfig) -> None:
             f"{Path(__file__).stem} supports only PTv3 models, got {type(model).__name__}."
         )
 
-    voxels = list(cfg.voxels)
-    neighbors = list(cfg.neighbors)
+    voxel_counts = list(cfg.voxel_counts)
+    target_neighbors = list(cfg.target_neighbors)
     grid_shape, _ = model.compute_export_geometry(torch.device("cpu"))
     generator = torch.Generator().manual_seed(cfg.seed)
-    coords = voxel_layout(voxels, model.encoder.stride, grid_shape, neighbors, generator)
+    coords = voxel_layout(
+        voxel_counts, model.encoder.stride, grid_shape, target_neighbors, generator
+    )
     point_cloud_range = torch.tensor(model.point_cloud_range, dtype=torch.float32)
     xyz = point_cloud_range[:3] + (coords + 0.5) * torch.tensor(model.grid_size)
     intensity = torch.rand(len(coords), 1, generator=generator)
@@ -254,9 +260,9 @@ def main(cfg: DictConfig) -> None:
     inputs = prepare_ptv3_export_inputs(model, batch_inputs)
     stages = [inputs.grid_coord.cpu(), *(meta.grid_coord.cpu() for meta in inputs.pooling_metadata)]
     counts = [len(stage) for stage in stages]
-    if counts != voxels:
-        raise RuntimeError(f"The stages hold {counts} voxels, not {voxels}.")
-    for index, (stage, target) in enumerate(zip(stages, neighbors)):
+    if counts != voxel_counts:
+        raise RuntimeError(f"The stages hold {counts} voxels, not {voxel_counts}.")
+    for index, (stage, target) in enumerate(zip(stages, target_neighbors)):
         logger.info(
             "stage %d: %d voxels, %.2f neighbors (target %.2f)",
             index,
