@@ -47,7 +47,7 @@ def _scenario_data(scenario_id: str, split: str = "train") -> ScenarioData:
 
 
 class TestAV2MotionRecordsGenerator(unittest.TestCase):
-    """The generator turns one scenario directory into one prediction record."""
+    """The generator turns one scenario directory into one motion record."""
 
     def setUp(self) -> None:
         self._tmp_dir = tempfile.TemporaryDirectory()
@@ -58,9 +58,9 @@ class TestAV2MotionRecordsGenerator(unittest.TestCase):
         """
         Input: the synthetic train scenario "abc" of 110 steps and three tracks.
         Expected: one record without sensor annotations, stamped at the last observed step,
-        whose prediction struct names the two files relative to the root, the focal track and
+        whose motion struct names the two files relative to the root, the focal track and
         the full window.
-        Check: every basic field of the record, its timestamp, and every prediction field.
+        Check: every basic field of the record, its timestamp, and every motion field.
         """
         write_scenario(self.root / "train", "abc")
 
@@ -84,18 +84,18 @@ class TestAV2MotionRecordsGenerator(unittest.TestCase):
         # The current step is the last observed one, at 1.0 s + 49 * 0.1 s
         self.assertAlmostEqual(record.timestamp_seconds, 1.0 + 0.1 * (OBSERVED_STEPS - 1))
 
-        prediction = record.prediction
-        self.assertIsNotNone(prediction)
-        self.assertEqual(prediction.tracks_relative_path, "train/abc/scenario_abc.parquet")
-        self.assertEqual(prediction.map_relative_path, "train/abc/log_map_archive_abc.json")
-        self.assertIs(prediction.dataset_format, DatasetFormat.AV2)
-        self.assertIsNone(prediction.scenario_key)
-        self.assertEqual(prediction.focal_track_id, FOCAL_TRACK_ID)
-        self.assertEqual(prediction.first_step_index, 0)
-        self.assertEqual(prediction.current_step_index, OBSERVED_STEPS - 1)
-        self.assertEqual(prediction.num_steps, 110)
-        self.assertAlmostEqual(prediction.step_seconds, 0.1)
-        self.assertEqual(prediction.num_tracks, 3)
+        motion = record.motion
+        self.assertIsNotNone(motion)
+        self.assertEqual(motion.tracks_relative_path, "train/abc/scenario_abc.parquet")
+        self.assertEqual(motion.map_relative_path, "train/abc/log_map_archive_abc.json")
+        self.assertIs(motion.dataset_format, DatasetFormat.AV2)
+        self.assertIsNone(motion.scenario_key)
+        self.assertEqual(motion.focal_track_id, FOCAL_TRACK_ID)
+        self.assertEqual(motion.first_step_index, 0)
+        self.assertEqual(motion.current_step_index, OBSERVED_STEPS - 1)
+        self.assertEqual(motion.num_steps, 110)
+        self.assertAlmostEqual(motion.step_seconds, 0.1)
+        self.assertEqual(motion.num_tracks, 3)
 
     def test_a_test_split_scenario_ends_at_the_current_step(self) -> None:
         """
@@ -109,9 +109,9 @@ class TestAV2MotionRecordsGenerator(unittest.TestCase):
             self.root, _scenario_data("t00", split="test")
         ).generate_dataset_records()
 
-        self.assertEqual(record.prediction.num_steps, OBSERVED_STEPS)
-        self.assertEqual(record.prediction.current_step_index, OBSERVED_STEPS - 1)
-        self.assertEqual(record.prediction.tracks_relative_path, "test/t00/scenario_t00.parquet")
+        self.assertEqual(record.motion.num_steps, OBSERVED_STEPS)
+        self.assertEqual(record.motion.current_step_index, OBSERVED_STEPS - 1)
+        self.assertEqual(record.motion.tracks_relative_path, "test/t00/scenario_t00.parquet")
 
     def test_a_window_shorter_than_the_observed_steps_is_rejected(self) -> None:
         """
