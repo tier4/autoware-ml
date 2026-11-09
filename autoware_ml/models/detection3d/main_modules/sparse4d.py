@@ -245,7 +245,8 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             The fused stages the head samples.
 
         Raises:
-            ValueError: If the batch carries no points or no voxels.
+            ValueError: If the batch carries no points or no voxels, or the points do not
+                follow the layout the voxel encoder reads.
             RuntimeError: If the voxelizer dropped occupied voxels, which the head would never
                 sample.
         """
@@ -255,6 +256,9 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         voxels_data = multi_task_batch_inputs.voxels_data
         if voxels_data is None:
             raise ValueError("Sparse4D needs the voxels of a voxelizer in the model inputs.")
+        self.lidar_network.pts_voxel_encoder.check_points(
+            voxels_data.voxels, point_batch.timestamp_difference_dim
+        )
         if int(voxels_data.num_dropped_voxels) > 0:
             raise RuntimeError(
                 f"The voxelizer dropped {int(voxels_data.num_dropped_voxels)} occupied voxels. "
@@ -268,7 +272,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             voxels=voxels_data.voxels,
             coords=voxels_data.batch_xyz_coords(),
             num_points=voxels_data.num_points,
-            time_lag_column=point_batch.timestamp_difference_dim,
+            batch_size=multi_task_batch_inputs.multi_task_gt_batch.batch_size,
         )
 
     def head_context(self, multi_task_batch_inputs: ModelBatchInputs) -> Any:

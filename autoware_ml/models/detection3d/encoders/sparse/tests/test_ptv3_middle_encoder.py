@@ -70,12 +70,15 @@ def test_encoder_inputs_read_the_position_and_the_batch_from_the_voxels() -> Non
     voxel_features = torch.arange(24, dtype=torch.float32).reshape(4, 6)
     coords = torch.tensor([[0, 1, 2, 3], [0, 4, 5, 6], [1, 7, 8, 9], [1, 1, 1, 1]])
 
-    inputs = PTv3MiddleEncoder.build_encoder_inputs(voxel_features, coords)
+    inputs = PTv3MiddleEncoder.build_encoder_inputs(voxel_features, coords, batch_size=2)
+    padded = PTv3MiddleEncoder.build_encoder_inputs(voxel_features, coords, batch_size=3)
 
     assert torch.equal(inputs["coord"], voxel_features[:, :3])
     assert torch.equal(inputs["feat"], voxel_features)
     assert torch.equal(inputs["grid_coord"], coords[:, 1:])
     assert inputs["offset"].tolist() == [2, 4]
+    # A sample without voxels keeps its offset, so the offsets stay aligned with the batch
+    assert padded["offset"].tolist() == [2, 4, 4]
 
 
 @requires_cuda_spconv
@@ -88,6 +91,7 @@ def test_forward_returns_the_deepest_stage_with_the_pooling_chain() -> None:
     point = middle_encoder(
         voxel_features=voxel_encoder(voxels_data.voxels, voxels_data.num_points),
         coords=voxels_data.batch_xyz_coords(),
+        batch_size=1,
     )
 
     stages = collect_encoder_stage_points(point)

@@ -44,8 +44,7 @@ class Sparse4DLidar(nn.Module):
         """Initialize the lidar branch.
 
         Args:
-            pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector
-                and checking the point layout with ``check_points``.
+            pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
             pts_middle_encoder: Sparse middle encoder encoding the voxel features and their
                 coordinates into a hierarchy of stages, grouping its parameters with
                 ``build_optimizer_groups``.
@@ -88,7 +87,7 @@ class Sparse4DLidar(nn.Module):
         voxels: Float32[torch.Tensor, "num_voxels max_num_points C"],
         coords: Int[torch.Tensor, "num_voxels 4"],
         num_points: Int[torch.Tensor, " num_voxels"],
-        time_lag_column: int,
+        batch_size: int,
     ) -> list[SparseStage]:
         """Encode lidar voxels into the sparse levels the head samples.
 
@@ -97,19 +96,16 @@ class Sparse4DLidar(nn.Module):
             coords: Voxel coordinates in ``(batch, x, y, z)`` order, as the sparse middle
                 encoder consumes them, with the voxels grouped by batch index.
             num_points: Number of points in each voxel.
-            time_lag_column: Point column holding the time lag, ``-1`` when the points have
-                none; the voxel encoder checks it against the layout it reads.
+            batch_size: Explicit batch size.
 
         Returns:
             Features, voxel coordinates and batch offsets of every level, from the finest to the
             coarsest.
-
-        Raises:
-            ValueError: If the points do not follow the layout the voxel encoder reads.
         """
-        self.pts_voxel_encoder.check_points(voxels, time_lag_column)
         voxel_features = self.pts_voxel_encoder(voxels, num_points)
-        point = self.pts_middle_encoder(voxel_features=voxel_features, coords=coords)
+        point = self.pts_middle_encoder(
+            voxel_features=voxel_features, coords=coords, batch_size=batch_size
+        )
         if self.pts_backbone is not None:
             point = self.pts_backbone(point)
         return self.pts_neck(point)

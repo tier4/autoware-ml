@@ -102,32 +102,17 @@ def test_optimizer_groups_place_the_backbone_with_the_neck() -> None:
     assert groups["pts_backbone_neck"][0] is branch.pts_backbone.scale
 
 
-def test_points_must_follow_the_layout_of_the_voxel_encoder() -> None:
-    branch = _build_branch()
-    voxels_data = build_inputs().voxels_data
-
-    with pytest.raises(ValueError, match="time lag"):
-        branch(
-            voxels=voxels_data.voxels,
-            coords=voxels_data.batch_xyz_coords(),
-            num_points=voxels_data.num_points,
-            time_lag_column=-1,
-        )
-
-
 @requires_cuda_spconv
 def test_forward_returns_one_stage_per_level_finest_first() -> None:
     device = torch.device("cuda")
     branch = _build_branch(keep_deepest=True).to(device)
-    batch = build_inputs(device=device)
-    voxels_data = batch.voxels_data
-    point_batch = batch.multi_task_gt_batch.point_cloud_gt_batch
+    voxels_data = build_inputs(device=device).voxels_data
 
     stages = branch(
         voxels=voxels_data.voxels,
         coords=voxels_data.batch_xyz_coords(),
         num_points=voxels_data.num_points,
-        time_lag_column=point_batch.timestamp_difference_dim,
+        batch_size=1,
     )
 
     assert len(stages) == 2
@@ -147,9 +132,7 @@ def test_backbone_refines_the_encoder_stages_before_the_neck() -> None:
     plain = _build_branch().to(device).eval()
     torch.manual_seed(0)
     refined = _build_branch(pts_backbone=_ScalingBackbone()).to(device).eval()
-    batch = build_inputs(device=device)
-    voxels_data = batch.voxels_data
-    time_lag_column = batch.multi_task_gt_batch.point_cloud_gt_batch.timestamp_difference_dim
+    voxels_data = build_inputs(device=device).voxels_data
 
     with torch.no_grad():
         outputs = [
@@ -157,7 +140,7 @@ def test_backbone_refines_the_encoder_stages_before_the_neck() -> None:
                 voxels=voxels_data.voxels,
                 coords=voxels_data.batch_xyz_coords(),
                 num_points=voxels_data.num_points,
-                time_lag_column=time_lag_column,
+                batch_size=1,
             )[0]
             for branch in (plain, refined)
         ]

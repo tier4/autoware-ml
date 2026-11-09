@@ -33,7 +33,6 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     split_block_parameters,
     validate_serialization_geometry,
 )
-from autoware_ml.utils.point_cloud.batching import batch_to_offset
 from autoware_ml.utils.point_cloud.structures import Point, bit_length_tensor
 
 
@@ -107,6 +106,7 @@ class PTv3MiddleEncoder(nn.Module):
         self,
         voxel_features: Float32[torch.Tensor, "num_voxels channels"],
         coords: Int[torch.Tensor, "num_voxels 4"],
+        batch_size: int,
     ) -> Point:
         """Run the PTv3 encoder on the voxel features of a batch.
 
@@ -114,16 +114,18 @@ class PTv3MiddleEncoder(nn.Module):
             voxel_features: One feature vector per voxel, its first three features the position.
             coords: Voxel coordinates ``(num_voxels, 4)`` laid out as ``(batch, x, y, z)`` with
                 the voxels grouped by batch index.
+            batch_size: Explicit batch size, which sizes the batch offsets.
 
         Returns:
             Deepest encoder point with the full pooling chain attached.
         """
-        return self.encoder(self.build_encoder_inputs(voxel_features, coords))
+        return self.encoder(self.build_encoder_inputs(voxel_features, coords, batch_size))
 
     @staticmethod
     def build_encoder_inputs(
         voxel_features: Float32[torch.Tensor, "num_voxels channels"],
         coords: Int[torch.Tensor, "num_voxels 4"],
+        batch_size: int,
     ) -> dict[str, torch.Tensor]:
         """Turn the voxel features into the PTv3 encoder input dictionary.
 
@@ -131,15 +133,17 @@ class PTv3MiddleEncoder(nn.Module):
             voxel_features: One feature vector per voxel, its first three features the position.
             coords: Voxel coordinates ``(num_voxels, 4)`` laid out as ``(batch, x, y, z)`` with
                 the voxels grouped by batch index.
+            batch_size: Explicit batch size, one offset per sample even without voxels.
 
         Returns:
             Dictionary with ``coord``, ``feat``, ``grid_coord`` and ``offset``.
         """
+        voxel_counts = torch.bincount(coords[:, 0].long(), minlength=batch_size)
         return {
             "coord": voxel_features[:, :3],
             "feat": voxel_features,
             "grid_coord": coords[:, 1:],
-            "offset": batch_to_offset(coords[:, 0].long()),
+            "offset": torch.cumsum(voxel_counts, dim=0),
         }
 
     def build_export_context(
@@ -167,6 +171,7 @@ class PTv3MiddleEncoder(nn.Module):
             self.build_encoder_inputs(
                 voxel_encoder(voxels_data.voxels, voxels_data.num_points),
                 voxels_data.batch_xyz_coords(),
+                batch_inputs.multi_task_gt_batch.batch_size,
             ),
             export_order=self.EXPORT_ORDER,
             sparse_shape=sparse_shape,

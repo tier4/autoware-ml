@@ -123,6 +123,18 @@ def test_optimizer_groups_cover_the_encoder_and_the_detection_branch(tmp_path: P
     assert len(groups["det3d_branch"]) == head_count + neck_count
 
 
+def test_points_must_follow_the_layout_of_the_voxel_encoder(tmp_path: Path) -> None:
+    model = _build_model(tmp_path)
+    batch = frame_inputs(torch.device("cpu"), 100.0)
+    gt_batch = batch.multi_task_gt_batch
+    point_batch = gt_batch.point_cloud_gt_batch._replace(timestamp_difference_dim=-1)
+
+    with pytest.raises(ValueError, match="time lag"):
+        model(
+            batch.replace(multi_task_gt_batch=gt_batch._replace(point_cloud_gt_batch=point_batch))
+        )
+
+
 def test_dropped_voxels_are_refused(tmp_path: Path) -> None:
     model = _build_model(tmp_path)
     batch = frame_inputs(torch.device("cpu"), 100.0)
