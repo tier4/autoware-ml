@@ -22,7 +22,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.necks.fpn import FPN
+from autoware_ml.models.common.necks.fpn import FPN, BaseFPN
 
 IN_CHANNELS = [8, 16, 32, 64]
 OUT_CHANNELS = 4
@@ -52,6 +52,17 @@ def _set_identity_pyramid(neck: FPN) -> None:
             conv.bias.zero_()
             for channel in range(OUT_CHANNELS):
                 conv.weight[channel, channel, 1, 1] = 1.0
+
+
+class TestBaseFPN(unittest.TestCase):
+    def test_cannot_be_instantiated(self) -> None:
+        """
+        Input: the shared base of the necks, constructed directly.
+        Expected: it is abstract, its forward belongs to the subclasses.
+        Check: the TypeError of the abstract base class.
+        """
+        with self.assertRaises(TypeError):
+            BaseFPN(IN_CHANNELS, OUT_CHANNELS)  # type: ignore[abstract]
 
 
 class TestFPN(unittest.TestCase):
