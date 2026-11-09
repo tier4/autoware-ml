@@ -40,7 +40,7 @@ class TestMetricKey(unittest.TestCase):
         )
         self.assertEqual(str(key), "det3d/grouped/region_road/mAP_0m_50m")
 
-    def test_scoped_sets_a_level_once(self) -> None:
+    def test_update_keys_sets_a_level_once(self) -> None:
         """
         Input: a bare key placed in the region_road filter slice, then in the det3d prefix, then
         in the corridor filter slice again.
@@ -48,11 +48,11 @@ class TestMetricKey(unittest.TestCase):
         bug and is refused.
         Check: the filter name and prefix of the copies, ValueError on the second filter name.
         """
-        key = MetricKey(name="mAP").scoped(filter_name="region_road")
+        key = MetricKey(name="mAP").update_keys(filter_name="region_road")
         self.assertEqual(key.filter_name, "region_road")
-        self.assertEqual(key.scoped(prefix="det3d").prefix, "det3d")
+        self.assertEqual(key.update_keys(prefix="det3d").prefix, "det3d")
         with self.assertRaisesRegex(ValueError, "already carries"):
-            key.scoped(filter_name="corridor")
+            key.update_keys(filter_name="corridor")
 
 
 class TestMetricReport(unittest.TestCase):

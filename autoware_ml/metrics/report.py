@@ -48,7 +48,7 @@ class MetricKey(BaseModel):
             level for level in (self.prefix, self.view, self.filter_name, base) if level
         )
 
-    def scoped(
+    def update_keys(
         self,
         range_suffix: str = "",
         filter_name: str = "",
@@ -56,10 +56,10 @@ class MetricKey(BaseModel):
         prefix: str = "",
     ) -> MetricKey:
         """
-        Place the key one level further out.
+        Return a new :class:`MetricKey` with the given level keys.
 
-        A level is set once, on the way out from the metric to the log, so a key that
-        already carries a level is a layering bug and raises.
+        Empty arguments leave their level unchanged. Setting a level the key already
+        carries raises, since each layer sets its own level once.
 
         Args:
           range_suffix: Radial window to place the key in.
@@ -147,7 +147,7 @@ class MetricReport:
         """
         for key in other.metric_names():
             self.add(
-                key.scoped(
+                key.update_keys(
                     range_suffix=range_suffix, filter_name=filter_name, view=view, prefix=prefix
                 ),
                 other.metric_value(key),
