@@ -41,7 +41,6 @@ from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.detection3d.heads.sparse4d import (
     Sparse4DHead,
-    Sparse4DTargets,
     SparseStage,
 )
 from autoware_ml.models.detection3d.main_modules.sparse4ds.export_wrappers import (
@@ -249,9 +248,11 @@ class Sparse4DDetectionModel(ModuleBaseModel):
     def compute_metrics(
         self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
     ) -> dict[str, torch.Tensor]:
-        """Compute the detection losses of one step.
+        """Compute the detection losses of one step over the frames with boxes.
 
-        Frames without ground-truth boxes and samples padding a streaming lane skip the loss.
+        Frames without ground-truth boxes and samples that only pad a streaming lane take no
+        part in the loss. Without any such frame the loss is zero with gradients, which keeps
+        the detection branch visible to DDP.
 
         Args:
             multi_task_batch_inputs: Model inputs with the ground truth.
@@ -260,29 +261,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         Returns:
             The losses of the head, ``loss`` the total.
         """
-        metrics, _, _ = self.detection_loss(
-            multi_task_outputs.detection3d().sparse4d_head(), multi_task_batch_inputs
-        )
-        self._log_step_metrics(metrics, multi_task_batch_inputs)
-        return metrics
-
-    def detection_loss(
-        self, det3d_outputs: Sparse4DHeadOutputs, multi_task_batch_inputs: ModelBatchInputs
-    ) -> tuple[dict[str, torch.Tensor], list[Sparse4DTargets] | None, torch.Tensor]:
-        """Compute the detection losses over the frames with boxes.
-
-        Frames without ground-truth boxes and samples that only pad a streaming lane take no
-        part in the loss. Without any such frame the loss is zero with gradients, which keeps
-        the detection branch visible to DDP.
-
-        Args:
-            det3d_outputs: Head outputs of the batch.
-            multi_task_batch_inputs: Model inputs with the ground truth.
-
-        Returns:
-            The losses of the head, the targets of every decoder layer over the supervised
-            frames (None when no frame has boxes) and the mask of those frames.
-        """
+        det3d_outputs = multi_task_outputs.detection3d().sparse4d_head()
         gt_detections = detection3d_gt_batch(multi_task_batch_inputs)
         padding_mask = multi_task_batch_inputs.multi_task_gt_batch.padding_mask
         det3d_mask = detection3d_frame_mask(gt_detections) & ~padding_mask.to(
@@ -294,21 +273,21 @@ class Sparse4DDetectionModel(ModuleBaseModel):
                 det3d_outputs.prediction,
                 det3d_outputs.quality,
             ]
-            zero = sum(tensor.float().sum() for tensor in graph_tensors) * 0.0
-            return {"loss": zero}, None, det3d_mask
-
-        supervised = det3d_mask.tolist()
-        lanes = det3d_mask.nonzero().flatten().tolist()
-        supervised_outputs = det3d_outputs.select_samples(det3d_mask)
-        det3d_targets = self.bbox_head.assign(
-            supervised_outputs,
-            _flagged(gt_detections.valid_bboxes_3d(), supervised),
-            _flagged(gt_detections.valid_labels_3d(), supervised),
-            _flagged(gt_detections.valid_bboxes_instance_ids(), supervised),
-            lanes,
-        )
-        det3d_metrics = self.bbox_head.loss_from_targets(supervised_outputs, det3d_targets, lanes)
-        return det3d_metrics, det3d_targets, det3d_mask
+            metrics = {"loss": sum(tensor.float().sum() for tensor in graph_tensors) * 0.0}
+        else:
+            supervised = det3d_mask.tolist()
+            lanes = det3d_mask.nonzero().flatten().tolist()
+            supervised_outputs = det3d_outputs.select_samples(det3d_mask)
+            det3d_targets = self.bbox_head.assign(
+                supervised_outputs,
+                _flagged(gt_detections.valid_bboxes_3d(), supervised),
+                _flagged(gt_detections.valid_labels_3d(), supervised),
+                _flagged(gt_detections.valid_bboxes_instance_ids(), supervised),
+                lanes,
+            )
+            metrics = self.bbox_head.loss_from_targets(supervised_outputs, det3d_targets, lanes)
+        self._log_step_metrics(metrics, multi_task_batch_inputs)
+        return metrics
 
     def _log_step_metrics(
         self, metrics: Mapping[str, torch.Tensor], multi_task_batch_inputs: ModelBatchInputs
