@@ -36,6 +36,7 @@ from autoware_ml.metrics.detection3d.structures import (
 )
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
+from autoware_ml.metrics.report import MetricKey
 from autoware_ml.types.metrics import MatchCost
 
 
@@ -176,11 +177,11 @@ class TestTpErrorsMetric(unittest.TestCase):
             tp_threshold=2.0,
         )
         out = metric.evaluate(_perfect_state(), EvalStage.TEST)
-        self.assertAlmostEqual(out["mATE_low"], 0.0)
-        self.assertAlmostEqual(out["mATE_optimal"], 0.0)
-        self.assertAlmostEqual(out["tp_error_num_match_car_low_2m"], 1.0)
-        self.assertAlmostEqual(out["tp_error_num_match_car_optimal_2m"], 10.0)
-        self.assertNotIn("mATE_default", out)
+        self.assertAlmostEqual(out.value(MetricKey(name="mATE_low")), 0.0)
+        self.assertAlmostEqual(out.value(MetricKey(name="mATE_optimal")), 0.0)
+        self.assertAlmostEqual(out.value(MetricKey(name="tp_error_num_match_car_low_2m")), 1.0)
+        self.assertAlmostEqual(out.value(MetricKey(name="tp_error_num_match_car_optimal_2m")), 10.0)
+        self.assertNotIn(MetricKey(name="mATE_default"), out.metric_names())
 
     def test_rejects_duplicate_recall_target_names(self) -> None:
         """
