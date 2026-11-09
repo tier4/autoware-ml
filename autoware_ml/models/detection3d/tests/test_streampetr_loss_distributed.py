@@ -21,7 +21,7 @@ collective.
 
 Scope: the head's loss. The gradient test wraps one linear layer in DDP and feeds the head's
 loss fixed features, so it checks the loss normalization, not distributed training of the
-model. ``reduce_mean_count`` itself is tested in ``task_modules/tests``.
+model. ``reduce_mean_count`` itself is tested in ``utils/tests``.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
-from autoware_ml.models.detection3d.tests.distributed_fixtures import (
+from autoware_ml.utils.tests.distributed_fixtures import (
     GLOO_AVAILABLE,
     gloo_process_group,
     spawn_gloo_workers,

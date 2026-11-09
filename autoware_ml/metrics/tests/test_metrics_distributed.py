@@ -13,13 +13,8 @@ collectives and cannot deadlock the group.
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import pytest
 import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
 
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
@@ -31,6 +26,11 @@ from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
+from autoware_ml.utils.tests.distributed_fixtures import (
+    GLOO_AVAILABLE,
+    gloo_process_group,
+    spawn_gloo_workers,
+)
 
 
 def _det3d_suite(thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
@@ -51,10 +51,7 @@ def _seg3d_suite(**kwargs):
     )
 
 
-pytestmark = pytest.mark.skipif(
-    not (dist.is_available() and dist.is_gloo_available()),
-    reason="gloo backend unavailable",
-)
+pytestmark = pytest.mark.skipif(not GLOO_AVAILABLE, reason="gloo backend unavailable")
 
 _WORLD_SIZES = [2, 8]
 _SEG3D_RANGES = (MetricRange("0-50m", 0.0, 50.0), MetricRange("50-90m", 50.0, 90.0))
@@ -100,10 +97,7 @@ def _assert_reports_equal(actual: dict[str, float], expected: dict[str, float]) 
 
 
 def _seg3d_worker(rank: int, world_size: int, init_file: str) -> None:
-    dist.init_process_group(
-        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
-    )
-    try:
+    with gloo_process_group(rank, world_size, init_file):
         metric = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES)
         metric.update(_seg3d_shard(rank))
         report = metric.result(EvalStage.TEST)  # all_reduce inside compute, then build report
@@ -113,15 +107,10 @@ def _seg3d_worker(rank: int, world_size: int, init_file: str) -> None:
             for other in range(world_size):
                 reference.update(_seg3d_shard(other))
             _assert_reports_equal(report, reference.result(EvalStage.TEST))
-    finally:
-        dist.destroy_process_group()
 
 
 def _det3d_worker(rank: int, world_size: int, init_file: str) -> None:
-    dist.init_process_group(
-        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
-    )
-    try:
+    with gloo_process_group(rank, world_size, init_file):
         metric = _det3d_suite(thresholds=(0.5,))
         metric.update(_det3d_shard(rank))
         report = metric.result(EvalStage.VAL)  # list-state gather inside compute, then build report
@@ -131,26 +120,13 @@ def _det3d_worker(rank: int, world_size: int, init_file: str) -> None:
             for other in range(world_size):
                 reference.update(_det3d_shard(other))
             _assert_reports_equal(report, reference.result(EvalStage.VAL))
-    finally:
-        dist.destroy_process_group()
-
-
-def _spawn(worker, world_size: int) -> None:
-    with tempfile.TemporaryDirectory() as directory:
-        # mp.spawn re-raises any child assertion in the parent, failing the test.
-        mp.spawn(
-            worker,
-            args=(world_size, os.path.join(directory, "store")),
-            nprocs=world_size,
-            join=True,
-        )
 
 
 @pytest.mark.parametrize("world_size", _WORLD_SIZES)
 def test_seg3d_metric_sync_matches_single_process(world_size: int) -> None:
-    _spawn(_seg3d_worker, world_size)
+    spawn_gloo_workers(_seg3d_worker, world_size=world_size)
 
 
 @pytest.mark.parametrize("world_size", _WORLD_SIZES)
 def test_det3d_metric_sync_matches_single_process(world_size: int) -> None:
-    _spawn(_det3d_worker, world_size)
+    spawn_gloo_workers(_det3d_worker, world_size=world_size)

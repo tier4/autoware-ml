@@ -62,18 +62,24 @@ def spawn_gloo_workers(
         deadline = time.monotonic() + timeout
         while not context.join(timeout=5.0):
             if time.monotonic() > deadline:
+                # Join the terminated workers before the store directory goes, so none is left
+                # a zombie or logs a store error over the message below.
                 for process in context.processes:
                     process.terminate()
+                for process in context.processes:
+                    process.join(timeout=5.0)
                 raise AssertionError(f"distributed workers did not finish within {timeout}s")
 
 
 @contextmanager
 def gloo_process_group(rank: int, world_size: int, init_file: str) -> Iterator[None]:
-    """Join the gloo process group of a spawned worker for the duration of the block."""
+    """Join the gloo process group of a spawned worker for the duration of the block.
+
+    A worker that raises ends its process, which releases the group, so the block needs no
+    ``finally``.
+    """
     dist.init_process_group(
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
-    try:
-        yield
-    finally:
-        dist.destroy_process_group()
+    yield
+    dist.destroy_process_group()

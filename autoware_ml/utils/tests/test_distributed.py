@@ -23,8 +23,8 @@ import unittest
 
 import torch
 
-from autoware_ml.models.detection3d.task_modules.streaming import reduce_mean_count
-from autoware_ml.models.detection3d.tests.distributed_fixtures import (
+from autoware_ml.utils.distributed import reduce_mean_count
+from autoware_ml.utils.tests.distributed_fixtures import (
     GLOO_AVAILABLE,
     gloo_process_group,
     spawn_gloo_workers,

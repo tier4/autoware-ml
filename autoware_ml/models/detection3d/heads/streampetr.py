@@ -38,10 +38,10 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     nerf_positional_encoding,
     pos2posemb1d,
     pos2posemb3d,
-    reduce_mean_count,
     topk_gather,
     transform_reference_points,
 )
+from autoware_ml.utils.distributed import reduce_mean_count
 
 
 # Reference recipe constants the configs never vary: two hidden layers in the

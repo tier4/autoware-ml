@@ -10,41 +10,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 import math
 
-from jaxtyping import Float, Int, Num
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
-
-
-def reduce_mean_count(
-    value: Num[torch.Tensor, "*counts"], min_total: float = 1.0
-) -> Float[torch.Tensor, "*counts"]:
-    """Average a count over the DDP ranks, flooring the sum before the division.
-
-    A loss summed over the objects of a rank is divided by this so that its gradient matches
-    single-device training. DDP averages the gradients of the ranks in the backward pass,
-    which is one more division by the world size: dividing the loss by the count summed over
-    the ranks would leave a gradient of ``1 / (N * world_size)`` instead of ``1 / N`` for the
-    ``N`` objects of the step, so the summed count is divided by the world size first.
-
-    The floor applies to the sum, as it would on one device. (The mmdetection heads floor the
-    mean of ``reduce_mean`` instead, which halves the only positive of a two-rank step.) The
-    ``all_reduce`` is a collective, so every rank has to call it the same number of times per
-    step.
-
-    Args:
-        value: Count or counts of this rank, reduced element by element.
-        min_total: Floor of the count summed over the ranks.
-
-    Returns:
-        The floored mean count as float; without a process group, the floored count of this
-        rank.
-    """
-    total = value.float()
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        total = total.clone()
-        torch.distributed.all_reduce(total)
-        return total.clamp_(min=min_total).div_(torch.distributed.get_world_size())
-    return total.clamp(min=min_total)
 
 
 class StreamContinuity:
