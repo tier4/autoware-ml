@@ -237,7 +237,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             raise ValueError(
                 "The detection suite needs the detection3d frames, the eval output carries none."
             )
-        if self.min_num_points > 0 and not output.carries_gt_num_points:
+        if self.min_num_points > 0 and not output.check_all_gt_num_points:
             raise ValueError(
                 f"min_num_points={self.min_num_points} is configured but the eval output "
                 "carries no gt_num_points, the GT filter cannot be applied."

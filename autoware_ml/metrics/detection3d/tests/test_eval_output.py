@@ -161,8 +161,8 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
             self.assertIs(
                 frame.predictions, self.multi_task_predictions.detection3d_predictions[index]
             )
-        self.assertTrue(output.carries_gt_num_points)
-        self.assertFalse(output.carries_frame_meta)
+        self.assertTrue(output.check_all_gt_num_points)
+        self.assertFalse(output.check_all_frame_meta)
 
     def test_frame_meta_is_attached_per_frame(self) -> None:
         """
@@ -185,7 +185,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
             batch_inputs=self._with_gt_batch(gt_batch), predictions=self.multi_task_predictions
         )
 
-        self.assertTrue(output.carries_frame_meta)
+        self.assertTrue(output.check_all_frame_meta)
         first, second = output.frames
         assert first.frame_meta is not None and second.frame_meta is not None
         self.assertTrue(torch.equal(second.frame_meta.ego2global, ego2globals[1]))
