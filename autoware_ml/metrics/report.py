@@ -72,17 +72,21 @@ class MetricKey(BaseModel):
         Returns:
           MetricKey: The key with the given levels set.
         """
-        requested = {
-            "range_suffix": range_suffix,
-            "filter_name": filter_name,
-            "view": view,
-            "prefix": prefix,
-        }
-        updates = {level: value for level, value in requested.items() if value}
-        taken = [level for level in updates if getattr(self, level)]
-        if taken:
-            raise ValueError(f"{self} already carries {taken}, a level is set once.")
-        return self.model_copy(update=updates)
+        if range_suffix and self.range_suffix:
+            raise ValueError(f"{self} already carries a range suffix, a level is set once.")
+        if filter_name and self.filter_name:
+            raise ValueError(f"{self} already carries a filter name, a level is set once.")
+        if view and self.view:
+            raise ValueError(f"{self} already carries a view, a level is set once.")
+        if prefix and self.prefix:
+            raise ValueError(f"{self} already carries a prefix, a level is set once.")
+        return MetricKey(
+            name=self.name,
+            range_suffix=range_suffix or self.range_suffix,
+            filter_name=filter_name or self.filter_name,
+            view=view or self.view,
+            prefix=prefix or self.prefix,
+        )
 
 
 class MetricReport:
