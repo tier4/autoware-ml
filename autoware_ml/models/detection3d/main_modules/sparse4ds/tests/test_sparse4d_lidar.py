@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import pytest
 import torch
+import torch.nn as nn
 
+from autoware_ml.models.detection3d.backbones.ptv3 import PTv3SparseBackbone
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
 from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
@@ -38,55 +40,83 @@ requires_cuda_spconv = pytest.mark.skipif(
 )
 
 
-def _build_branch(freeze_encoder: bool = False, keep_deepest: bool = False) -> Sparse4DLidar:
-    """Build a small branch over the two stage test encoder."""
-    return Sparse4DLidar(
-        encoder=build_ptv3_encoder(),
-        voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        det_fusion=PTv3Det3DFeaturePyramid(
-            stage_channels=(8, 16), out_channels=32, keep_deepest=keep_deepest
-        ),
-        grid_size=1.0,
-        point_cloud_range=POINT_CLOUD_RANGE,
-        freeze_encoder=freeze_encoder,
+def _build_backbone() -> PTv3SparseBackbone:
+    """Build the two stage test backbone."""
+    return PTv3SparseBackbone(
+        encoder=build_ptv3_encoder(), grid_size=1.0, point_cloud_range=POINT_CLOUD_RANGE
     )
 
 
-def test_voxel_encoder_must_describe_the_point_features_the_encoder_reads() -> None:
-    with pytest.raises(ValueError, match="point features"):
+def _build_neck(keep_deepest: bool = False) -> PTv3Det3DFeaturePyramid:
+    """Build the pyramid fusing the two test stages."""
+    return PTv3Det3DFeaturePyramid(
+        stage_channels=(8, 16), out_channels=32, keep_deepest=keep_deepest
+    )
+
+
+def _build_branch(keep_deepest: bool = False) -> Sparse4DLidar:
+    """Build a small branch over the two stage test backbone."""
+    return Sparse4DLidar(
+        pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
+        pts_backbone=_build_backbone(),
+        pts_neck=_build_neck(keep_deepest=keep_deepest),
+    )
+
+
+def test_backbone_must_be_a_sparse_backbone() -> None:
+    with pytest.raises(TypeError, match="SparseBackbone"):
         Sparse4DLidar(
-            encoder=build_ptv3_encoder(),
-            voxel_encoder=MeanVoxelFeatureEncoder(),
-            det_fusion=PTv3Det3DFeaturePyramid(stage_channels=(8, 16), out_channels=32),
-            grid_size=1.0,
-            point_cloud_range=POINT_CLOUD_RANGE,
+            pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
+            pts_backbone=nn.Identity(),
+            pts_neck=_build_neck(),
         )
 
 
-def test_num_levels_follows_the_pyramid() -> None:
+def test_neck_must_be_a_sparse_neck() -> None:
+    with pytest.raises(TypeError, match="SparseNeck"):
+        Sparse4DLidar(
+            pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
+            pts_backbone=_build_backbone(),
+            pts_neck=nn.Identity(),
+        )
+
+
+def test_voxel_encoder_must_describe_the_features_the_backbone_reads() -> None:
+    with pytest.raises(ValueError, match="features per voxel"):
+        Sparse4DLidar(
+            pts_voxel_encoder=MeanVoxelFeatureEncoder(),
+            pts_backbone=_build_backbone(),
+            pts_neck=_build_neck(),
+        )
+
+
+def test_num_levels_follows_the_neck() -> None:
     assert _build_branch().num_levels == 1
     assert _build_branch(keep_deepest=True).num_levels == 2
 
 
-def test_frozen_encoder_stays_in_eval_mode_without_gradients() -> None:
-    branch = _build_branch(freeze_encoder=True)
-
-    branch.train()
-
-    assert not branch.encoder.training
-    assert branch.det_fusion.training
-    assert all(not parameter.requires_grad for parameter in branch.encoder.parameters())
-
-
-def test_optimizer_groups_split_the_encoder_from_the_pyramid() -> None:
+def test_optimizer_groups_split_the_backbone_from_the_neck() -> None:
     branch = _build_branch()
 
     groups = branch.build_optimizer_groups()
 
-    assert set(groups) == {"encoder_default", "encoder_block", "det_fusion"}
+    assert set(groups) == {"encoder_default", "encoder_block", "pts_neck"}
     grouped = sum(len(parameters) for parameters in groups.values())
     assert grouped == sum(1 for parameter in branch.parameters() if parameter.requires_grad)
-    assert len(groups["det_fusion"]) == sum(1 for _ in branch.det_fusion.parameters())
+    assert len(groups["pts_neck"]) == sum(1 for _ in branch.pts_neck.parameters())
+
+
+def test_points_must_follow_the_layout_of_the_voxel_encoder() -> None:
+    branch = _build_branch()
+    voxels_data = build_inputs().voxels_data
+
+    with pytest.raises(ValueError, match="time lag"):
+        branch(
+            voxels=voxels_data.voxels,
+            coords=voxels_data.batch_xyz_coords(),
+            num_points=voxels_data.num_points,
+            time_lag_column=-1,
+        )
 
 
 @requires_cuda_spconv
@@ -99,9 +129,8 @@ def test_forward_returns_one_stage_per_level_finest_first() -> None:
 
     stages = branch(
         voxels=voxels_data.voxels,
+        coords=voxels_data.batch_xyz_coords(),
         num_points=voxels_data.num_points,
-        voxel_coords=voxels_data.batch_xyz_coords(),
-        num_dropped_voxels=voxels_data.num_dropped_voxels,
         time_lag_column=point_batch.timestamp_difference_dim,
     )
 
@@ -113,32 +142,3 @@ def test_forward_returns_one_stage_per_level_finest_first() -> None:
     assert deepest_feat.shape[0] == deepest_grid_coord.shape[0] <= fused_feat.shape[0]
     assert fused_offset.tolist() == [fused_feat.shape[0]]
     assert deepest_offset.tolist() == [deepest_feat.shape[0]]
-
-
-@requires_cuda_spconv
-def test_dropped_voxels_are_refused() -> None:
-    device = torch.device("cuda")
-    branch = _build_branch().to(device)
-    batch = build_inputs(device=device)
-    voxels_data = batch.voxels_data
-
-    with pytest.raises(RuntimeError, match="dropped"):
-        branch(
-            voxels=voxels_data.voxels,
-            num_points=voxels_data.num_points,
-            voxel_coords=voxels_data.batch_xyz_coords(),
-            num_dropped_voxels=torch.tensor(3, device=device),
-            time_lag_column=4,
-        )
-
-
-@requires_cuda_spconv
-def test_export_context_runs_the_encoder_over_every_stage() -> None:
-    device = torch.device("cuda")
-    branch = _build_branch().to(device).eval()
-
-    context = branch.build_export_context(build_inputs(device=device))
-
-    assert context.stage_count == 2
-    assert context.strides == (2,)
-    assert context.encoder_input_names[:3] == ["voxels", "num_points_per_voxel", "grid_coord"]

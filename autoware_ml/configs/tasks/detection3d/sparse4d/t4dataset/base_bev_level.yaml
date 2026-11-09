@@ -11,7 +11,7 @@ model:
       grid_size: ${grid_size}
       stage_strides: ${det_feature_strides}
       projected_strides: [8]
-      in_channels: ${model.lidar_network.det_fusion.out_channels}
+      in_channels: ${model.lidar_network.pts_neck.out_channels}
       channels: ${model.bbox_head.bev_channels}
       bev_encoder:
         _target_: autoware_ml.models.detection3d.ptv3.PTv3BEVEncoder

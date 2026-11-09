@@ -14,8 +14,9 @@
 
 """Export wrappers of the Sparse4D detection graph.
 
-The detection graph takes the encoder stages the pyramid fuses and the instance bank state of
-the last frame, and returns the frame outputs with the bank state of the next frame.
+The lidar branch exports as two graphs: the PTv3 backbone returning the stage features, and
+the detection graph, which takes the stages the neck fuses and the instance bank state of the
+last frame, and returns the frame outputs with the bank state of the next frame.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.detection3d.backbones.ptv3 import PTv3SparseBackbone
 from autoware_ml.models.detection3d.heads.sparse4d import (
     TEMPORAL_QUERY_INDEX_OUTPUT_NAME,
     TEMPORAL_STATE_INPUT_NAMES,
@@ -34,6 +37,7 @@ from autoware_ml.models.detection3d.heads.sparse4d import (
     SparseQueryHead,
     SparseStage,
 )
+from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
 from autoware_ml.models.detection3d.ptv3 import (
     PTv3Det3DFeaturePyramid,
     det3d_head_export_args,
@@ -53,13 +57,37 @@ SPARSE4D_EXPORT_OUTPUT_NAMES = (
 )
 
 
+def build_lidar_export_context(
+    lidar_network: Sparse4DLidar, batch_inputs: ModelBatchInputs
+) -> PTv3ExportContext:
+    """Serialize an example batch and run the export-ready backbone of the lidar branch once.
+
+    Args:
+        lidar_network: Lidar branch of the detector.
+        batch_inputs: Example preprocessed batch with the voxels of one sample.
+
+    Returns:
+        The shared front half of the split exports: the backbone graph and its stage features.
+
+    Raises:
+        NotImplementedError: If the backbone of the branch is not the PTv3 encoder, the only
+            one with a split export.
+    """
+    backbone = lidar_network.pts_backbone
+    if not isinstance(backbone, PTv3SparseBackbone):
+        raise NotImplementedError(
+            f"The Sparse4D export reads a PTv3SparseBackbone, got {type(backbone).__name__}."
+        )
+    return backbone.build_export_context(lidar_network.pts_voxel_encoder, batch_inputs)
+
+
 def fuse_export_stages(
-    det_fusion: PTv3Det3DFeaturePyramid, inputs: Sequence[torch.Tensor]
+    pts_neck: PTv3Det3DFeaturePyramid, inputs: Sequence[torch.Tensor]
 ) -> tuple[list[SparseStage], tuple[torch.Tensor, ...]]:
     """Fuse the encoder stages a head graph takes ahead of its other inputs.
 
     Args:
-        det_fusion: Detection feature pyramid.
+        pts_neck: Detection feature pyramid.
         inputs: Stage features from the finest to the deepest stage, the pooling clusters of every
             stage but the deepest, the voxel coordinates of every stage the head reads (the
             deepest one too when the pyramid keeps it), then the other graph inputs.
@@ -67,12 +95,12 @@ def fuse_export_stages(
     Returns:
         The fused stages and the other graph inputs.
     """
-    num_stages = det_fusion.num_stages
-    grid_end = 3 * num_stages - 2 + int(det_fusion.keep_deepest)
+    num_stages = pts_neck.num_stages
+    grid_end = 3 * num_stages - 2 + int(pts_neck.keep_deepest)
     feats = inputs[:num_stages]
     clusters = inputs[num_stages : 2 * num_stages - 1]
     grid_coords = inputs[2 * num_stages - 1 : grid_end]
-    return det_fusion(rebuild_point_chain(feats, clusters, grid_coords)), tuple(inputs[grid_end:])
+    return pts_neck(rebuild_point_chain(feats, clusters, grid_coords)), tuple(inputs[grid_end:])
 
 
 class Sparse4DHeadExportWrapper(nn.Module):
@@ -86,19 +114,19 @@ class Sparse4DHeadExportWrapper(nn.Module):
 
     def __init__(
         self,
-        det_fusion: PTv3Det3DFeaturePyramid,
+        pts_neck: PTv3Det3DFeaturePyramid,
         bbox_head: SparseQueryHead,
         output_names: Sequence[str] = SPARSE4D_EXPORT_OUTPUT_NAMES,
     ) -> None:
         """Initialize the export-only head module.
 
         Args:
-            det_fusion: Detection feature pyramid (copied internally).
+            pts_neck: Detection feature pyramid (copied internally).
             bbox_head: Export-ready temporal query head.
             output_names: Frame outputs the graph returns, in order.
         """
         super().__init__()
-        self.det_fusion = deepcopy(det_fusion).eval()
+        self.pts_neck = deepcopy(pts_neck).eval()
         self.bbox_head = bbox_head
         self.output_names = tuple(output_names)
 
@@ -117,7 +145,7 @@ class Sparse4DHeadExportWrapper(nn.Module):
         Returns:
             The outputs of :meth:`Sparse4DHead.forward_temporal_export`.
         """
-        stages, rest = fuse_export_stages(self.det_fusion, inputs)
+        stages, rest = fuse_export_stages(self.pts_neck, inputs)
         state_end = len(TEMPORAL_STATE_INPUT_NAMES)
         return self.bbox_head.forward_temporal_export(
             stages, *rest[:state_end], context=self.head_context(rest[state_end:])
@@ -153,9 +181,9 @@ def build_sparse4d_head_export_spec(
         Export spec whose graph takes the bank state of the last frame and returns the next one
         with the query every state slot was selected from.
     """
-    det_fusion = module.det_fusion
-    finest_stage = context.stage_count - det_fusion.num_stages
-    deepest_grid_coord = det_fusion.keep_deepest
+    pts_neck = module.pts_neck
+    finest_stage = context.stage_count - pts_neck.num_stages
+    deepest_grid_coord = pts_neck.keep_deepest
     stage_args = det3d_head_export_args(context, finest_stage, deepest_grid_coord)
     return ExportSpec(
         module=module.eval(),

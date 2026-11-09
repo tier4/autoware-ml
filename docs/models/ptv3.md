@@ -14,14 +14,16 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
   (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
 - Temporal detection (experimental): `Sparse4DDetectionModel` runs the lidar
-  branch `Sparse4DLidar`, the PTv3 encoder with a feature pyramid that fuses the
-  deepest stage top-down into finer ones (`PTv3Det3DFeaturePyramid`), and feeds
-  a `Sparse4DHead`, whose queries sample the sparse voxels at keypoints around
-  their anchors with no BEV canvas, and carry the most confident instances from
-  one frame of a scenario to the next. The keypoints sample the sparse voxels,
-  dense BEV maps, or both. The detector is laid out like BEVFusion with a
-  camera branch slot that is not supported yet. `PTv3Det3DSeg3DSparse4DModel`
-  adds the segmentation head on the shared encoder.
+  branch `Sparse4DLidar`, laid out like the BEVFusion one: a voxel encoder, the
+  PTv3 encoder as the sparse backbone (`PTv3SparseBackbone`) and a feature
+  pyramid neck that fuses the deepest stage top-down into finer ones
+  (`PTv3Det3DFeaturePyramid`). It feeds a `Sparse4DHead`, whose queries sample
+  the sparse voxels at keypoints around their anchors with no BEV canvas, and
+  carry the most confident instances from one frame of a scenario to the next.
+  The keypoints sample the sparse voxels, dense BEV maps, or both. The detector
+  has a camera branch slot that is not supported yet.
+  `PTv3Det3DSeg3DSparse4DModel` adds the segmentation head on the shared
+  encoder.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -312,6 +314,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
 | `autoware_ml/models/detection3d/main_modules/sparse4d.py`               | Sparse4D detector wrapper                          |
 | `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch and export wrappers          |
+| `autoware_ml/models/detection3d/backbones/ptv3.py`                      | PTv3 encoder as the sparse backbone of a branch    |
 | `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
 | `autoware_ml/scripts/generate_anchors.py`                               | Sparse4D anchors from the training boxes           |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |

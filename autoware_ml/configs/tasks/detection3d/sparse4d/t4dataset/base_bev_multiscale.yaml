@@ -10,10 +10,10 @@ det_feature_strides: [4, 8]
 
 model:
   lidar_network:
-    det_fusion:
+    pts_neck:
       stage_channels:
-        - ${model.lidar_network.encoder.enc_channels[2]}
-        - ${model.lidar_network.encoder.enc_channels[3]}
-        - ${model.lidar_network.encoder.enc_channels[4]}
+        - ${model.lidar_network.pts_backbone.encoder.enc_channels[2]}
+        - ${model.lidar_network.pts_backbone.encoder.enc_channels[3]}
+        - ${model.lidar_network.pts_backbone.encoder.enc_channels[4]}
   bbox_head:
     lidar_sampling: bev

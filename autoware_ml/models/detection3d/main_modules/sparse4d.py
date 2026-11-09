@@ -46,6 +46,7 @@ from autoware_ml.models.detection3d.heads.sparse4d import (
 )
 from autoware_ml.models.detection3d.main_modules.sparse4ds.export_wrappers import (
     Sparse4DHeadExportWrapper,
+    build_lidar_export_context,
     build_sparse4d_head_export_spec,
 )
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
@@ -121,27 +122,28 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         """Validate that the lidar branch returns the levels the head samples.
 
         Raises:
-            ValueError: If the pyramid of the lidar branch and the head disagree on the levels.
+            ValueError: If the neck of the lidar branch and the head disagree on the levels.
         """
-        num_levels = self.lidar_network.det_fusion.num_levels
+        num_levels = self.lidar_network.num_levels
         if num_levels != len(self.bbox_head.level_grids):
             raise ValueError(
-                f"The pyramid returns {num_levels} levels but the head samples "
+                f"The lidar branch returns {num_levels} levels but the head samples "
                 f"{len(self.bbox_head.level_grids)}."
             )
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the pretrained encoder parameters apart from the newly initialized branch.
+        """Group the pretrained backbone parameters apart from the newly initialized branch.
 
         Returns:
-            The encoder groups of the lidar branch and ``det3d_branch``, the pyramid and the head.
+            The backbone groups of the lidar branch and ``det3d_branch``, the neck and the head.
         """
-        lidar_groups = dict(self.lidar_network.build_optimizer_groups())
-        det_fusion_params = lidar_groups.pop("det_fusion")
+        groups = dict(self.lidar_network.build_optimizer_groups())
+        neck_params = groups.pop("pts_neck")
         head_params = [
             parameter for parameter in self.bbox_head.parameters() if parameter.requires_grad
         ]
-        return {**lidar_groups, "det3d_branch": [*det_fusion_params, *head_params]}
+        groups["det3d_branch"] = [*neck_params, *head_params]
+        return groups
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the lidar branch and the Sparse4D head on one batch of frames.
@@ -243,6 +245,8 @@ class Sparse4DDetectionModel(ModuleBaseModel):
 
         Raises:
             ValueError: If the batch carries no points or no voxels.
+            RuntimeError: If the voxelizer dropped occupied voxels, which the head would never
+                sample.
         """
         point_batch = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
         if point_batch is None:
@@ -250,13 +254,19 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         voxels_data = multi_task_batch_inputs.voxels_data
         if voxels_data is None:
             raise ValueError("Sparse4D needs the voxels of a voxelizer in the model inputs.")
+        if int(voxels_data.num_dropped_voxels) > 0:
+            raise RuntimeError(
+                f"The voxelizer dropped {int(voxels_data.num_dropped_voxels)} occupied voxels. "
+                "Increase 'max_voxels' and 'eval_max_voxels' of the data preprocessing so every "
+                "voxel is kept."
+            )
         # Call the module rather than its forward so module hooks (model summary sizes and
-        # FLOP counting) see the branch.
+        # FLOP counting) see the branch. The sparse backbone consumes ``(batch, x, y, z)``
+        # coordinates.
         return self.lidar_network(
             voxels=voxels_data.voxels,
+            coords=voxels_data.batch_xyz_coords(),
             num_points=voxels_data.num_points,
-            voxel_coords=voxels_data.batch_xyz_coords(),
-            num_dropped_voxels=voxels_data.num_dropped_voxels,
             time_lag_column=point_batch.timestamp_difference_dim,
         )
 
@@ -396,11 +406,12 @@ class Sparse4DDetectionModel(ModuleBaseModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        """Build the split ONNX export specs of the encoder and the detection graph.
+        """Build the split ONNX export specs of the backbone and the detection graph.
 
-        The lidar branch exports the ``ptv3_lidar_encoder`` graph returning the stage features.
-        The ``ptv3_det3d_head`` graph fuses the stages, takes the instance bank state of the last
-        frame and returns the outputs of the frame with the state of the next one.
+        The backbone of the lidar branch exports the ``ptv3_lidar_encoder`` graph returning the
+        stage features. The ``ptv3_det3d_head`` graph fuses the stages with the neck, takes the
+        instance bank state of the last frame and returns the outputs of the frame with the
+        state of the next one.
 
         Args:
             multi_task_batch_inputs: Example preprocessed batch with the voxels.
@@ -408,13 +419,13 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         Returns:
             Ordered mapping of module name to export specification.
         """
-        context = self.lidar_network.build_export_context(multi_task_batch_inputs)
+        context = build_lidar_export_context(self.lidar_network, multi_task_batch_inputs)
         return {
             "ptv3_lidar_encoder": build_encoder_export_spec(context),
             "ptv3_det3d_head": build_sparse4d_head_export_spec(
                 context,
                 Sparse4DHeadExportWrapper(
-                    self.lidar_network.det_fusion, self.bbox_head.prepare_for_export()
+                    self.lidar_network.pts_neck, self.bbox_head.prepare_for_export()
                 ),
             ),
         }

@@ -668,14 +668,48 @@ def prepare_ptv3_export_inputs(
         voxels_data.num_points,
         voxels_data.batch_xyz_coords(),
     )
+    return serialize_ptv3_export_inputs(
+        voxels_data,
+        encoder_inputs,
+        export_order=model.EXPORT_ORDER,
+        sparse_shape=sparse_shape,
+        serialization_depth=serialization_depth,
+        strides=model.encoder.stride,
+        patch_sizes=export_patch_sizes(model),
+    )
+
+
+def serialize_ptv3_export_inputs(
+    voxels_data: VoxelsData,
+    encoder_inputs: Mapping[str, torch.Tensor],
+    export_order: Sequence[str],
+    sparse_shape: torch.Tensor,
+    serialization_depth: torch.Tensor,
+    strides: Sequence[int],
+    patch_sizes: Sequence[int],
+) -> PTv3ExportInputs:
+    """Serialize the voxels of an example batch and precompute the pooling metadata of every stage.
+
+    Args:
+        voxels_data: Voxels of the example batch, a single sample.
+        encoder_inputs: Encoder inputs built from those voxels, see
+            :meth:`PTv3BaseModel.build_encoder_inputs`.
+        export_order: Serialization orders baked into the exports.
+        sparse_shape: Static sparse shape baked into the exports.
+        serialization_depth: Serialization depth baked into the exports.
+        strides: Pooling strides of the encoder.
+        patch_sizes: Attention window of every level, the input level first.
+
+    Returns:
+        The serialized batch with the pooling metadata of every stage.
+    """
     require_single_sample_export_batch(encoder_inputs)
-    point, _ = serialize_point_cloud_batch(encoder_inputs, model.EXPORT_ORDER, serialization_depth)
-    patch_sizes = export_patch_sizes(model)
+    point, _ = serialize_point_cloud_batch(encoder_inputs, export_order, serialization_depth)
     pooling_metadata = build_serialized_pooling_metadata(
         point["grid_coord"],
         point["serialized_code"],
         point["serialized_order"],
-        model.encoder.stride,
+        strides,
         patch_sizes,
     )
     return PTv3ExportInputs(
@@ -714,10 +748,34 @@ def build_ptv3_export_context(
     model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> PTv3ExportContext:
     """Serialize the batch, precompute pooling metadata, and run the encoder once."""
-    inputs = prepare_ptv3_export_inputs(model, batch_inputs)
-    encoder_module = _PTv3EncoderExportModule(
+    return run_ptv3_export_encoder(
+        prepare_ptv3_export_inputs(model, batch_inputs),
         encoder=model._prepare_encoder_export(),
         voxel_encoder=model.voxel_encoder,
+        strides=model.encoder.stride,
+    )
+
+
+def run_ptv3_export_encoder(
+    inputs: PTv3ExportInputs,
+    encoder: PointTransformerV3Encoder,
+    voxel_encoder: VoxelFeatureEncoder,
+    strides: Sequence[int],
+) -> PTv3ExportContext:
+    """Build the export-only encoder graph and run it once over the serialized batch.
+
+    Args:
+        inputs: Serialized example batch, see :func:`serialize_ptv3_export_inputs`.
+        encoder: Export-ready copy of the encoder.
+        voxel_encoder: Voxel feature encoder feeding the embedding stem.
+        strides: Pooling strides of the encoder.
+
+    Returns:
+        The shared front half of the split exports: the encoder graph and its stage features.
+    """
+    encoder_module = _PTv3EncoderExportModule(
+        encoder=encoder,
+        voxel_encoder=voxel_encoder,
         sparse_shape=inputs.sparse_shape,
         serialized_depth=inputs.serialization_depth,
     ).eval()
@@ -726,7 +784,7 @@ def build_ptv3_export_context(
         stage_feats = encoder_module(*args)
     return PTv3ExportContext(
         inputs=inputs,
-        strides=tuple(model.encoder.stride),
+        strides=tuple(strides),
         encoder_input_args=args,
         encoder_input_names=input_names,
         encoder_module=encoder_module,

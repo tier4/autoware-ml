@@ -18,224 +18,101 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from jaxtyping import Float32, Int
 import torch
 import torch.nn as nn
 
-from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.models.detection3d.backbones.sparse_backbone import SparseBackbone
 from autoware_ml.models.detection3d.heads.sparse4d import SparseStage
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
-from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
+from autoware_ml.models.detection3d.necks.sparse_neck import SparseNeck
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
-from autoware_ml.models.segmentation3d.ptv3_base import (
-    PTv3BaseModel,
-    PTv3ExportContext,
-    build_ptv3_export_context,
-    split_block_parameters,
-    validate_serialization_geometry,
-)
-from autoware_ml.utils.point_cloud.batching import batch_to_offset
-from autoware_ml.utils.point_cloud.structures import Point, bit_length_tensor
 
 
 class Sparse4DLidar(nn.Module):
     """Encode voxelized lidar points into the sparse stages the Sparse4D head samples.
 
-    The branch owns the whole lidar path: the voxel encoder, the PTv3 encoder and the feature
-    pyramid that fuses the deepest encoder stage top-down into the finer stages. That leaves the
-    detector to run the head, so a camera branch can join with its own path.
-
-    The branch fulfils the encoder owner interface of the PTv3 export helpers: the encoder, the
-    voxel encoder, the export order, the encoder inputs and the export geometry, see
-    :func:`autoware_ml.models.segmentation3d.ptv3_base.build_ptv3_export_context`.
+    The branch owns the whole lidar path: the voxel encoder, the sparse backbone and the neck
+    that turns the backbone stages into the levels the head samples. That mirrors the BEVFusion
+    lidar branch, so the detector only runs the head and a camera branch can join with its own
+    path.
     """
-
-    EXPORT_ORDER = PTv3BaseModel.EXPORT_ORDER
 
     def __init__(
         self,
-        encoder: PointTransformerV3Encoder,
-        voxel_encoder: VoxelFeatureEncoder,
-        det_fusion: PTv3Det3DFeaturePyramid,
-        grid_size: float,
-        point_cloud_range: Sequence[float],
-        freeze_encoder: bool = False,
+        pts_voxel_encoder: VoxelFeatureEncoder,
+        pts_backbone: SparseBackbone,
+        pts_neck: SparseNeck,
     ) -> None:
         """Initialize the lidar branch.
 
         Args:
-            encoder: PTv3 encoder module.
-            voxel_encoder: Voxel feature encoder feeding the embedding stem.
-            det_fusion: Top-down fusion of the deepest encoder stage into the finer stages,
-                whose sparse voxels the head samples.
-            grid_size: Edge of the cubic voxels the encoder serializes, in meters.
-            point_cloud_range: Range ``[x_min, y_min, z_min, x_max, y_max, z_max]`` of the
-                voxel grid.
-            freeze_encoder: When ``True``, the encoder is kept in eval mode with its parameters
-                frozen.
+            pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
+            pts_backbone: Sparse backbone encoding the voxel features into a hierarchy of stages.
+            pts_neck: Neck turning the backbone stages into the levels the head samples.
 
         Raises:
-            ValueError: If the voxel encoder and the encoder disagree on the point features, or
-                the geometry cannot cover the pooling hierarchy of the encoder.
+            TypeError: If the backbone does not implement :class:`SparseBackbone` or the neck
+                :class:`SparseNeck`.
+            ValueError: If the voxel encoder and the backbone disagree on the voxel features.
         """
         super().__init__()
-        if encoder.in_channels != voxel_encoder.out_channels:
-            raise ValueError(
-                f"The encoder reads {encoder.in_channels} point features but the voxel encoder "
-                f"describes a voxel with {voxel_encoder.out_channels}."
+        if not isinstance(pts_backbone, SparseBackbone):
+            raise TypeError(
+                f"The lidar backbone must be a SparseBackbone, got {type(pts_backbone).__name__}."
             )
-        self.encoder = encoder
-        self.voxel_encoder = voxel_encoder
-        self.det_fusion = det_fusion
-        self.grid_size = float(grid_size)
-        self.point_cloud_range = tuple(float(value) for value in point_cloud_range)
-        validate_serialization_geometry(encoder, self.grid_size, self.point_cloud_range)
-        self.freeze_encoder = bool(freeze_encoder)
-        if self.freeze_encoder:
-            self.encoder.requires_grad_(False)
-            self.encoder.eval()
-
-    def train(self, mode: bool = True) -> Sparse4DLidar:
-        """Keep the frozen encoder in eval mode during training.
-
-        Args:
-            mode: When ``True``, set the branch to training mode; otherwise to evaluation mode.
-
-        Returns:
-            This branch.
-        """
-        super().train(mode)
-        if self.freeze_encoder:
-            self.encoder.eval()
-        return self
+        if not isinstance(pts_neck, SparseNeck):
+            raise TypeError(f"The lidar neck must be a SparseNeck, got {type(pts_neck).__name__}.")
+        if pts_backbone.in_channels != pts_voxel_encoder.out_channels:
+            raise ValueError(
+                f"The backbone reads {pts_backbone.in_channels} features per voxel but the voxel "
+                f"encoder describes a voxel with {pts_voxel_encoder.out_channels}."
+            )
+        self.pts_voxel_encoder = pts_voxel_encoder
+        self.pts_backbone = pts_backbone
+        self.pts_neck = pts_neck
 
     @property
     def num_levels(self) -> int:
-        """Number of stages the branch returns, which the head samples."""
-        return self.det_fusion.num_levels
+        """Return the number of levels the branch returns, which the head samples."""
+        return self.pts_neck.num_levels
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the pretrained encoder parameters apart from the newly initialized pyramid.
+        """Group the backbone parameters apart from the newly initialized neck.
 
         Returns:
-            The default and the block parameters of the encoder, and the pyramid parameters.
+            The optimizer groups of the backbone and ``pts_neck``, the trainable neck parameters.
         """
-        encoder_default_params, encoder_block_params = split_block_parameters(self.encoder)
-        return {
-            "encoder_default": encoder_default_params,
-            "encoder_block": encoder_block_params,
-            "det_fusion": [
-                parameter for parameter in self.det_fusion.parameters() if parameter.requires_grad
-            ],
-        }
+        groups = dict(self.pts_backbone.build_optimizer_groups())
+        groups["pts_neck"] = [
+            parameter for parameter in self.pts_neck.parameters() if parameter.requires_grad
+        ]
+        return groups
 
     def forward(
         self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-        num_dropped_voxels: torch.Tensor,
+        voxels: Float32[torch.Tensor, "num_voxels max_num_points C"],
+        coords: Int[torch.Tensor, "num_voxels 4"],
+        num_points: Int[torch.Tensor, " num_voxels"],
         time_lag_column: int,
     ) -> list[SparseStage]:
-        """Encode the voxels of a batch and fuse the stages the head samples.
+        """Encode lidar voxels into the sparse levels the head samples.
 
         Args:
-            voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
-            num_points: Valid point count per voxel ``(num_voxels,)``.
-            voxel_coords: Voxel coordinates ``(num_voxels, 4)`` laid out as ``(batch, x, y, z)``
-                with the voxels grouped by batch index.
-            num_dropped_voxels: Occupied voxels the voxelizer discarded.
-            time_lag_column: Point column holding the time lag.
+            voxels: Lidar voxel features, the padded points of every voxel.
+            coords: Voxel coordinates in ``(batch, x, y, z)`` order, as the sparse backbone
+                consumes them, with the voxels grouped by batch index.
+            num_points: Number of points in each voxel.
+            time_lag_column: Point column holding the time lag, ``-1`` when the points have
+                none; the voxel encoder checks it against the layout it reads.
 
         Returns:
             Features, voxel coordinates and batch offsets of every level, from the finest to the
             coarsest.
-        """
-        return self.det_fusion(
-            self.encode(voxels, num_points, voxel_coords, num_dropped_voxels, time_lag_column)
-        )
-
-    def encode(
-        self,
-        voxels: torch.Tensor,
-        num_points: torch.Tensor,
-        voxel_coords: torch.Tensor,
-        num_dropped_voxels: torch.Tensor,
-        time_lag_column: int,
-    ) -> Point:
-        """Run the voxel encoder and the PTv3 encoder on preprocessed voxels.
-
-        Args:
-            voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
-            num_points: Valid point count per voxel ``(num_voxels,)``.
-            voxel_coords: Voxel coordinates ``(num_voxels, 4)`` with a leading batch column.
-            num_dropped_voxels: Occupied voxels the voxelizer discarded.
-            time_lag_column: Point column holding the time lag.
-
-        Returns:
-            Deepest encoder point with the full pooling chain attached.
 
         Raises:
             ValueError: If the points do not follow the layout the voxel encoder reads.
-            RuntimeError: If the voxelizer dropped occupied voxels.
         """
-        self.voxel_encoder.check_points(voxels, time_lag_column)
-        if int(num_dropped_voxels) > 0:
-            raise RuntimeError(
-                f"The voxelizer dropped {int(num_dropped_voxels)} occupied voxels. Increase "
-                "'max_voxels' and 'eval_max_voxels' of the data preprocessing so every voxel "
-                "is kept."
-            )
-        return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
-
-    def build_encoder_inputs(
-        self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
-    ) -> dict[str, torch.Tensor]:
-        """Turn preprocessed voxels into the PTv3 encoder input dictionary.
-
-        Args:
-            voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
-            num_points: Valid point count per voxel ``(num_voxels,)``.
-            voxel_coords: Voxel coordinates ``(num_voxels, 4)`` laid out as ``(batch, x, y, z)``
-                with the voxels grouped by batch index.
-
-        Returns:
-            Dictionary with ``coord``, ``feat``, ``grid_coord`` and ``offset``.
-        """
-        feat = self.voxel_encoder(voxels, num_points)
-        return {
-            "coord": feat[:, :3],
-            "feat": feat,
-            "grid_coord": voxel_coords[:, 1:],
-            "offset": batch_to_offset(voxel_coords[:, 0].long()),
-        }
-
-    def build_export_context(self, batch_inputs: ModelBatchInputs) -> PTv3ExportContext:
-        """Serialize an example batch and run the export-ready encoder once.
-
-        Args:
-            batch_inputs: Example preprocessed batch with the voxels of one sample.
-
-        Returns:
-            The shared front half of the split exports: the encoder graph and its stage
-            features.
-        """
-        return build_ptv3_export_context(self, batch_inputs)
-
-    def _compute_export_geometry(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute the sparse shape and the serialization depth baked into the exports.
-
-        Args:
-            device: Device of the voxels of the example batch.
-
-        Returns:
-            ``(sparse_shape, serialization_depth)`` as long tensors on ``device``.
-        """
-        point_cloud_range = torch.tensor(self.point_cloud_range, dtype=torch.float32, device=device)
-        axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / self.grid_size
-        serialization_depth = bit_length_tensor(torch.max(axis_extents))
-        sparse_shape = torch.round(axis_extents).to(dtype=torch.long)
-        return sparse_shape, serialization_depth
-
-    def _prepare_encoder_export(self) -> PointTransformerV3Encoder:
-        """Return an export-ready copy of the encoder with the export order."""
-        return self.encoder.prepare_for_export(self.EXPORT_ORDER)
+        self.pts_voxel_encoder.check_points(voxels, time_lag_column)
+        voxel_features = self.pts_voxel_encoder(voxels, num_points)
+        point = self.pts_backbone(voxel_features=voxel_features, coords=coords)
+        return self.pts_neck(point)
