@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the loading transforms of the prediction task."""
+"""Tests for the loading transforms of the motion task."""
 
 from __future__ import annotations
 
@@ -21,15 +21,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from autoware_ml.dataclasses.batch.prediction import PredictionSourceSample
+from autoware_ml.dataclasses.batch.motion import MotionSourceSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.databases.argoverse2.tests.av2_fixtures import (
     FOCAL_TRACK_ID,
-    av2_prediction_taxonomy,
+    av2_motion_taxonomy,
     write_scenario,
 )
 from autoware_ml.transforms.base import TransformsCompose
-from autoware_ml.transforms.prediction.loading import LoadAgentTracks, LoadVectorMap
+from autoware_ml.transforms.motion.loading import LoadAgentTracks, LoadVectorMap
 from autoware_ml.types.dataset import DatasetFormat
 from autoware_ml.types.motion import PolylineType
 
@@ -37,10 +37,10 @@ from autoware_ml.types.motion import PolylineType
 _AV2_AVAILABLE = importlib.util.find_spec("av2") is not None
 
 
-def _source(scenario_path: Path, with_map: bool = True) -> PredictionSourceSample:
+def _source(scenario_path: Path, with_map: bool = True) -> MotionSourceSample:
     """Source sample of the scenario directory, with or without its map file."""
     scenario_id = scenario_path.name
-    return PredictionSourceSample(
+    return MotionSourceSample(
         dataset_format=DatasetFormat.AV2,
         tracks_path=str(scenario_path / f"scenario_{scenario_id}.parquet"),
         map_path=str(scenario_path / f"log_map_archive_{scenario_id}.json") if with_map else None,
@@ -54,7 +54,7 @@ def _source(scenario_path: Path, with_map: bool = True) -> PredictionSourceSampl
     )
 
 
-def _sample(source: PredictionSourceSample | None) -> ModelGTSample:
+def _sample(source: MotionSourceSample | None) -> ModelGTSample:
     """GT sample that carries the source sample and nothing else."""
     return ModelGTSample(
         lidar_point_cloud_samples=None,
@@ -63,21 +63,21 @@ def _sample(source: PredictionSourceSample | None) -> ModelGTSample:
         camera_image_data=None,
         detection3d_gt_bboxes_3d=None,
         segmentation3d_gt_sample=None,
-        prediction_source_sample=source,
+        motion_source_sample=source,
     )
 
 
-class TestPredictionLoadingArguments(unittest.TestCase):
+class TestMotionLoadingArguments(unittest.TestCase):
     """The transforms check their arguments and inputs before any file is read."""
 
     def test_load_agent_tracks_requires_the_source_sample(self) -> None:
         """
-        Input: a GT sample without a prediction source sample.
+        Input: a GT sample without a motion source sample.
         Expected: the transform has nothing to load from and says which field is missing.
-        Check: KeyError naming prediction_source_sample.
+        Check: KeyError naming motion_source_sample.
         """
-        with self.assertRaisesRegex(KeyError, "prediction_source_sample"):
-            LoadAgentTracks(av2_prediction_taxonomy())(_sample(None))
+        with self.assertRaisesRegex(KeyError, "motion_source_sample"):
+            LoadAgentTracks(av2_motion_taxonomy())(_sample(None))
 
     def test_load_agent_tracks_requires_a_label_taxonomy(self) -> None:
         """
@@ -87,7 +87,7 @@ class TestPredictionLoadingArguments(unittest.TestCase):
         Check: TypeError naming LabelTaxonomy.
         """
         with self.assertRaisesRegex(TypeError, "must be a LabelTaxonomy"):
-            LoadAgentTracks(av2_prediction_taxonomy().vocabulary)
+            LoadAgentTracks(av2_motion_taxonomy().vocabulary)
 
     def test_load_vector_map_rejects_too_few_points_and_unknown_types(self) -> None:
         """
@@ -103,7 +103,7 @@ class TestPredictionLoadingArguments(unittest.TestCase):
 
 
 @unittest.skipUnless(_AV2_AVAILABLE, "the av2 devkit is not installed")
-class TestPredictionLoading(unittest.TestCase):
+class TestMotionLoading(unittest.TestCase):
     """The transforms load the tracks and the map of a synthetic Argoverse 2 scenario."""
 
     def setUp(self) -> None:
@@ -114,28 +114,28 @@ class TestPredictionLoading(unittest.TestCase):
     def test_load_agent_tracks_fills_the_gt_sample(self) -> None:
         """
         Input: a GT sample whose source names the synthetic scenario.
-        Expected: the tracks land in the prediction GT sample without a map, with the focal
+        Expected: the tracks land in the motion GT sample without a map, with the focal
         track first and the current step of the source, and the source sample is kept.
         Check: the GT sample, its map, the positions shape, the first track id, the current
         step and the source sample.
         """
-        loaded = LoadAgentTracks(av2_prediction_taxonomy())(_sample(_source(self.scenario_path)))
+        loaded = LoadAgentTracks(av2_motion_taxonomy())(_sample(_source(self.scenario_path)))
 
-        gt_sample = loaded.prediction_gt_sample
+        gt_sample = loaded.motion_gt_sample
         self.assertIsNotNone(gt_sample)
         self.assertIsNone(gt_sample.map_polylines)
         self.assertEqual(gt_sample.agents.positions.shape, (3, 110, 3))
         self.assertEqual(gt_sample.agents.track_ids[0], FOCAL_TRACK_ID)
         self.assertEqual(gt_sample.agents.current_step_index, 49)
-        self.assertIsNotNone(loaded.prediction_source_sample)
+        self.assertIsNotNone(loaded.motion_source_sample)
 
     def test_load_vector_map_requires_the_tracks_first(self) -> None:
         """
         Input: the map transform applied to a sample whose tracks are not loaded yet.
         Expected: the map joins the GT sample the tracks create, so it is refused without it.
-        Check: KeyError naming prediction_gt_sample.
+        Check: KeyError naming motion_gt_sample.
         """
-        with self.assertRaisesRegex(KeyError, "prediction_gt_sample"):
+        with self.assertRaisesRegex(KeyError, "motion_gt_sample"):
             LoadVectorMap()(_sample(_source(self.scenario_path)))
 
     def test_load_vector_map_rejects_a_scenario_without_a_map(self) -> None:
@@ -144,7 +144,7 @@ class TestPredictionLoading(unittest.TestCase):
         Expected: the map transform cannot serve a scenario that names no map.
         Check: ValueError saying the scenario has no map.
         """
-        loaded = LoadAgentTracks(av2_prediction_taxonomy())(
+        loaded = LoadAgentTracks(av2_motion_taxonomy())(
             _sample(_source(self.scenario_path, with_map=False))
         )
 
@@ -161,14 +161,14 @@ class TestPredictionLoading(unittest.TestCase):
         """
         pipeline = TransformsCompose(
             [
-                LoadAgentTracks(av2_prediction_taxonomy()),
+                LoadAgentTracks(av2_motion_taxonomy()),
                 LoadVectorMap(num_points_per_polyline=5, polyline_types=["lane_centerline", 3]),
             ]
         )
 
         loaded = pipeline(_sample(_source(self.scenario_path)))
 
-        gt_sample = loaded.prediction_gt_sample
+        gt_sample = loaded.motion_gt_sample
         self.assertEqual(gt_sample.agents.num_agents, 3)
         self.assertIsNotNone(gt_sample.map_polylines)
         self.assertEqual(gt_sample.map_polylines.points.shape, (3, 5, 3))
@@ -188,11 +188,11 @@ class TestPredictionLoading(unittest.TestCase):
         Expected: reloading the tracks replaces the agents only and keeps the map object.
         Check: the map of the reloaded sample is the same object as before.
         """
-        load_tracks = LoadAgentTracks(av2_prediction_taxonomy())
+        load_tracks = LoadAgentTracks(av2_motion_taxonomy())
         loaded = LoadVectorMap()(load_tracks(_sample(_source(self.scenario_path))))
 
         reloaded = load_tracks(loaded)
 
         self.assertIs(
-            reloaded.prediction_gt_sample.map_polylines, loaded.prediction_gt_sample.map_polylines
+            reloaded.motion_gt_sample.map_polylines, loaded.motion_gt_sample.map_polylines
         )

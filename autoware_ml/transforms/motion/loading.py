@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Loading transforms of the prediction task.
+"""Loading transforms of the motion task.
 
-A record of the prediction task names the source of its scenario; these transforms read it
+A record of the motion task names the source of its scenario; these transforms read it
 into the dataset agnostic samples, the way LoadPointsFromFile reads the point cloud a record
 names. The reader of every dataset format lives under ``databases/`` and is imported when a
 sample of that format is loaded, so a format's devkit is only needed by the users of the format.
@@ -26,11 +26,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from autoware_ml.databases.taxonomy import LabelTaxonomy
-from autoware_ml.dataclasses.batch.prediction import (
+from autoware_ml.dataclasses.batch.motion import (
     AgentTracksSample,
     MapPolylinesSample,
-    PredictionGTSample,
-    PredictionSourceSample,
+    MotionGTSample,
+    MotionSourceSample,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.transforms.base import BaseTransform
@@ -39,16 +39,16 @@ from autoware_ml.types.motion import PolylineType
 
 
 class LoadAgentTracks(BaseTransform):
-    """Load the agent tracks of the scenario a sample names into its prediction ground truth."""
+    """Load the agent tracks of the scenario a sample names into its motion ground truth."""
 
-    _required_keys = ["prediction_source_sample"]
+    _required_keys = ["motion_source_sample"]
 
     def __init__(self, taxonomy: LabelTaxonomy) -> None:
         """
         Initialize the loader.
 
         Args:
-          taxonomy: Taxonomy the agent types are resolved with, the prediction taxonomy of the
+          taxonomy: Taxonomy the agent types are resolved with, the motion taxonomy of the
             experiment over the vocabulary of the database.
         """
 
@@ -68,17 +68,17 @@ class LoadAgentTracks(BaseTransform):
           ModelGTSample: The sample with its agent tracks set, keeping a map loaded before.
         """
 
-        source = model_gt_sample.prediction_source_sample
+        source = model_gt_sample.motion_source_sample
 
         agents = self._read(source)
-        previous = model_gt_sample.prediction_gt_sample
-        prediction_gt_sample = PredictionGTSample(
+        previous = model_gt_sample.motion_gt_sample
+        motion_gt_sample = MotionGTSample(
             agents=agents,
             map_polylines=previous.map_polylines if previous is not None else None,
         )
-        return model_gt_sample._replace(prediction_gt_sample=prediction_gt_sample)
+        return model_gt_sample._replace(motion_gt_sample=motion_gt_sample)
 
-    def _read(self, source: PredictionSourceSample) -> AgentTracksSample:
+    def _read(self, source: MotionSourceSample) -> AgentTracksSample:
         """
         Read the tracks of a scenario with the reader of its dataset format.
 
@@ -127,9 +127,9 @@ def _polyline_type(value: PolylineType | int | str) -> PolylineType:
 
 
 class LoadVectorMap(BaseTransform):
-    """Load the vector map of the scenario a sample names into its prediction ground truth."""
+    """Load the vector map of the scenario a sample names into its motion ground truth."""
 
-    _required_keys = ["prediction_source_sample", "prediction_gt_sample"]
+    _required_keys = ["motion_source_sample", "motion_gt_sample"]
 
     def __init__(
         self,
@@ -167,16 +167,14 @@ class LoadVectorMap(BaseTransform):
           ValueError: If the scenario has no map.
         """
 
-        source = model_gt_sample.prediction_source_sample
+        source = model_gt_sample.motion_source_sample
         if source.map_path is None:
             raise ValueError(
                 f"{self.__class__.__name__}: the scenario of {source.tracks_path} has no map."
             )
         map_polylines = self._read(source.dataset_format, source.map_path)
-        prediction_gt_sample = model_gt_sample.prediction_gt_sample._replace(
-            map_polylines=map_polylines
-        )
-        return model_gt_sample._replace(prediction_gt_sample=prediction_gt_sample)
+        motion_gt_sample = model_gt_sample.motion_gt_sample._replace(map_polylines=map_polylines)
+        return model_gt_sample._replace(motion_gt_sample=motion_gt_sample)
 
     def _read(self, dataset_format: DatasetFormat, map_path: str) -> MapPolylinesSample:
         """
