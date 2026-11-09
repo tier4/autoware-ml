@@ -177,10 +177,14 @@ class TestTpErrorsMetric(unittest.TestCase):
             tp_threshold=2.0,
         )
         out = metric.evaluate(_perfect_state(), EvalStage.TEST)
-        self.assertAlmostEqual(out.value(MetricKey(name="mATE_low")), 0.0)
-        self.assertAlmostEqual(out.value(MetricKey(name="mATE_optimal")), 0.0)
-        self.assertAlmostEqual(out.value(MetricKey(name="tp_error_num_match_car_low_2m")), 1.0)
-        self.assertAlmostEqual(out.value(MetricKey(name="tp_error_num_match_car_optimal_2m")), 10.0)
+        self.assertAlmostEqual(out.metric_value(MetricKey(name="mATE_low")), 0.0)
+        self.assertAlmostEqual(out.metric_value(MetricKey(name="mATE_optimal")), 0.0)
+        self.assertAlmostEqual(
+            out.metric_value(MetricKey(name="tp_error_num_match_car_low_2m")), 1.0
+        )
+        self.assertAlmostEqual(
+            out.metric_value(MetricKey(name="tp_error_num_match_car_optimal_2m")), 10.0
+        )
         self.assertNotIn(MetricKey(name="mATE_default"), out.metric_names())
 
     def test_rejects_duplicate_recall_target_names(self) -> None:
