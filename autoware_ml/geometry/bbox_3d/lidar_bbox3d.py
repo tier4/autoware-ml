@@ -8,14 +8,13 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d
 
 from typing import Sequence
 from torch import Tensor
-from jaxtyping import Float32, Int32
+from jaxtyping import Bool, Float32, Int32
 import torch
 
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.utils import (
     create_axis_rotation_matrices,
     rotate_points_3d,
-    points_in_convex_polygon_3d,
 )
 from autoware_ml.types.spatial import BEVDirection, RotationAxis
 from autoware_ml.types.geometry import Box3DFieldIndex, Box3DCenterCoordinateType
@@ -122,57 +121,54 @@ class LidarBBoxes3D(BaseBBoxes3D):
         corners += self.bbox_params[:, :3].view(-1, 1, 3)
         return corners
 
-    def corners_to_surfaces_3d(self) -> Float32[Tensor, "num_bboxes 6 4 3"]:
-        """
-        Get the corners of the 3D bounding boxes in the form of surfaces.
-
-        Returns:
-            (num_bboxes, 6, 4, 3): The corners of the 3D bounding boxes as surfaces, where
-                6 is the number of surface, 4 is the number of corners for each surface,
-                and 3 is the (x, y, z) coordinates.
-        """
-        corners = self.corners
-        surfaces = torch.stack(
-            [
-                corners[:, [0, 1, 2, 3]],  # front surface
-                corners[:, [7, 6, 5, 4]],  # back surface
-                corners[:, [0, 3, 7, 4]],  # bottom surface
-                corners[:, [1, 5, 6, 2]],  # top surface
-                corners[:, [0, 4, 5, 1]],  # left surface
-                corners[:, [3, 2, 6, 7]],  # right surface
-            ],
-            dim=1,
-        )
-        return surfaces
-
     def compute_points_in_bboxes(
         self, points: Float32[Tensor, "num_points 3"]
-    ) -> Float32[Tensor, "num_bboxes num_points"]:
+    ) -> Bool[Tensor, "num_bboxes num_points"]:
         """
-        Compute the number of points inside each 3D bounding box.
+        Mark the points inside every 3D bounding box, the surface included.
+
+        The boxes are visited in a Python loop over slices of the sorted points, which suits
+        the CPU callers (the dataloader filters and the database build). A CUDA caller would
+        pay a host sync and a few kernel launches per box.
 
         Args:
             points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            Bool[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
             inside each bounding box.
         """
-        if self.bbox_params.numel() == 0 or points.numel() == 0:
-            return torch.zeros(
-                (self.bbox_params.shape[0], points.shape[0]), device=self.bbox_params.device
-            )
-
-        # Create a mask for each bounding box to check if points are inside
         in_bboxes_mask = torch.zeros(
             (self.bbox_params.shape[0], points.shape[0]),
             dtype=torch.bool,
             device=self.bbox_params.device,
         )
-
-        # Compute the surfaces of the bounding boxes
-        surfaces = self.corners_to_surfaces_3d()
-        in_bboxes_mask = points_in_convex_polygon_3d(points, surfaces)
+        centers = self.center
+        half_dims = self.dims / 2
+        # Only the points within the circumscribed BEV radius of a box are tested: the slice
+        # of the points sorted along x, found by binary search, narrowed along y by one
+        # comparison. The radius carries a rounding margin so that the candidates hold every
+        # point of the box surface.
+        bev_radius = torch.linalg.vector_norm(half_dims[:, :2], dim=1) * (1 + 1e-5)
+        sorted_x, order = torch.sort(points[:, 0])
+        sorted_points = points[order]
+        slice_begins = torch.searchsorted(sorted_x, centers[:, 0] - bev_radius)
+        slice_ends = torch.searchsorted(sorted_x, centers[:, 0] + bev_radius, right=True)
+        cos_yaw = torch.cos(self.yaw)
+        sin_yaw = torch.sin(self.yaw)
+        for index, (begin, end) in enumerate(zip(slice_begins.tolist(), slice_ends.tolist())):
+            slice_points = sorted_points[begin:end]
+            candidates = (slice_points[:, 1] - centers[index, 1]).abs() <= bev_radius[index]
+            offsets = slice_points[candidates] - centers[index]
+            # The BEV offsets rotated by -yaw lie in the box frame, z is unchanged
+            local_x = cos_yaw[index] * offsets[:, 0] + sin_yaw[index] * offsets[:, 1]
+            local_y = cos_yaw[index] * offsets[:, 1] - sin_yaw[index] * offsets[:, 0]
+            inside = (
+                (local_x.abs() <= half_dims[index, 0])
+                & (local_y.abs() <= half_dims[index, 1])
+                & (offsets[:, 2].abs() <= half_dims[index, 2])
+            )
+            in_bboxes_mask[index, order[begin:end][candidates][inside]] = True
         return in_bboxes_mask
 
     def rotate(
