@@ -12,8 +12,6 @@ overwrite each other.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 from pydantic import BaseModel, ConfigDict
 
 
@@ -91,21 +89,18 @@ class MetricKey(BaseModel):
 
 class MetricReport:
     """
-    Ordered metric values keyed by :class:`MetricKey`, one value per rendered name.
+    Metric values keyed by :class:`MetricKey`, in record order.
 
     A metric builds its own report with :meth:`record`. A suite merges the reports of
     its metrics with :meth:`merge`, placing their keys in a filter slice and a range
-    window, and the model merges the suites under their prefixes. Every level rejects
-    a duplicate rendered name, so a collision anywhere on the way to the log fails loud
-    instead of overwriting a value.
+    window, and the model merges the suites under their prefixes. A key is reported
+    once: a second value under the same key fails loud instead of overwriting the first,
+    and :meth:`to_log_dict` rejects two keys that render to one log name.
     """
 
     def __init__(self) -> None:
         """Start an empty report."""
-        # The duplicate check needs a lookup by rendered name, kept private: a report is
-        # read through its keys, never as a mapping.
-        self._keys: dict[str, MetricKey] = {}
-        self._values: dict[str, float] = {}
+        self._values: dict[MetricKey, float] = {}
 
     def record(self, name: str, value: float) -> None:
         """
@@ -125,14 +120,12 @@ class MetricReport:
           key: Where the value is reported.
           value: The value.
         """
-        rendered = str(key)
-        if rendered in self._values:
+        if key in self._values:
             raise ValueError(
-                f"Two metrics emit the same key {rendered!r}. Give one a distinct name, "
+                f"Two metrics emit the same key {str(key)!r}. Give one a distinct name, "
                 "filter name or suite prefix."
             )
-        self._keys[rendered] = key
-        self._values[rendered] = float(value)
+        self._values[key] = float(value)
 
     def merge(
         self,
@@ -152,54 +145,46 @@ class MetricReport:
           view: Taxonomy view to place the keys in.
           prefix: Suite namespace to place the keys in.
         """
-        for key, value in other.items():
+        for key in other.metric_names():
             self.add(
                 key.scoped(
                     range_suffix=range_suffix, filter_name=filter_name, view=view, prefix=prefix
                 ),
-                value,
+                other.value(key),
             )
 
-    def keys(self) -> tuple[MetricKey, ...]:
+    def metric_names(self) -> tuple[MetricKey, ...]:
         """
-        The keys in report order.
+        The keys in record order.
 
         Returns:
           tuple[MetricKey, ...]: The keys.
         """
-        return tuple(self._keys.values())
-
-    def names(self) -> tuple[str, ...]:
-        """
-        The rendered names in report order.
-
-        Returns:
-          tuple[str, ...]: The rendered names.
-        """
         return tuple(self._values)
 
-    def values(self) -> tuple[float, ...]:
+    def value(self, key: MetricKey) -> float:
         """
-        The values in report order.
+        The value reported under a key.
+
+        Args:
+          key: The key to read.
 
         Returns:
-          tuple[float, ...]: The values.
+          float: The value.
         """
-        return tuple(self._values.values())
-
-    def items(self) -> Iterator[tuple[MetricKey, float]]:
-        """
-        The keys and their values in report order.
-
-        Yields:
-          tuple[MetricKey, float]: One key and its value.
-        """
-        for rendered, key in self._keys.items():
-            yield key, self._values[rendered]
+        if key not in self._values:
+            raise KeyError(
+                f"{key} is not reported, the report holds {list(map(str, self._values))}."
+            )
+        return self._values[key]
 
     def to_log_dict(self, split: str) -> dict[str, float]:
         """
-        The payload Lightning's ``log_dict`` takes, every name under the split.
+        The payload Lightning's ``log_dict`` takes, every rendered name under the split.
+
+        Two keys that differ as objects but render to one name would silently share a log
+        entry, so that collision is rejected here, at the only place the rendered name is
+        what counts.
 
         Args:
           split: The split being logged, for example ``val``.
@@ -207,19 +192,16 @@ class MetricReport:
         Returns:
           dict[str, float]: Rendered ``{split}/{name}`` to value.
         """
-        return {f"{split}/{rendered}": value for rendered, value in self._values.items()}
-
-    def __getitem__(self, key: MetricKey | str) -> float:
-        """Look a value up by its key or its rendered name."""
-        return self._values[str(key)]
-
-    def __contains__(self, key: object) -> bool:
-        """Whether a key or a rendered name is reported."""
-        return str(key) in self._values
-
-    def __iter__(self) -> Iterator[MetricKey]:
-        """Iterate over the keys in report order."""
-        return iter(self._keys.values())
+        payload: dict[str, float] = {}
+        for key, value in self._values.items():
+            name = f"{split}/{key}"
+            if name in payload:
+                raise ValueError(
+                    f"Two metric keys render to the same log name {name!r}. Give one a "
+                    "distinct name."
+                )
+            payload[name] = value
+        return payload
 
     def __len__(self) -> int:
         """The number of reported values."""
@@ -227,4 +209,5 @@ class MetricReport:
 
     def __repr__(self) -> str:
         """Render the report as its names and values."""
-        return f"MetricReport({self._values!r})"
+        rendered = {str(key): value for key, value in self._values.items()}
+        return f"MetricReport({rendered!r})"

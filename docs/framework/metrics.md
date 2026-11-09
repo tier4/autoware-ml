@@ -122,10 +122,11 @@ value travels with a typed `MetricKey` that names the suite `prefix`, the taxono
 `{prefix}/{view}/{filter_name}/{name}_{range_suffix}` with the empty levels left out. The suite
 places each metric's keys in the filter slice and range window it evaluated, the model places each
 suite's keys under its prefix, and the key is logged as `{split}/{rendered key}`, for example
-`test/det3d/region_road/mAP_0m_50m`. A report rejects a duplicate rendered name at every level, so
-two metrics, two filters or two suites can never silently overwrite each other. Two suites of the
-same class run side by side under distinct configured prefixes, and the mixin rejects duplicate
-prefixes.
+`test/det3d/region_road/mAP_0m_50m`. A report rejects a duplicate key at every level and the log
+payload rejects two keys that render to one name, so two metrics, two filters or two suites can
+never silently overwrite each other. A value is read back by its key, `report.value(MetricKey(...))`,
+and `report.metric_names()` lists the keys. Two suites of the same class run side by side under
+distinct configured prefixes, and the mixin rejects duplicate prefixes.
 
 ## Class structure
 

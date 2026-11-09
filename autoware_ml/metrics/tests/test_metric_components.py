@@ -25,6 +25,7 @@ from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
+from autoware_ml.metrics.report import MetricKey
 
 
 def _det3d_state(class_names=("car",)) -> Detection3DState:
@@ -41,34 +42,41 @@ def _det3d_state(class_names=("car",)) -> Detection3DState:
 
 def test_mean_ap_validation_emits_only_map_keys() -> None:
     out = MeanAP().evaluate(_det3d_state(), EvalStage.VAL)
-    assert set(out.names()) == {"mAP", "mAP_car"}
-    assert out["mAP"] == pytest.approx(1.0)
+    assert set(out.metric_names()) == {MetricKey(name="mAP"), MetricKey(name="mAP_car")}
+    assert out.value(MetricKey(name="mAP")) == pytest.approx(1.0)
 
 
 def test_mean_ap_test_adds_curve_details() -> None:
     out = MeanAP().evaluate(_det3d_state(), EvalStage.TEST)
-    assert {"mAP", "mAP_car", "gt_count_car", "AP_car_0p5m", "num_match_car_0p5m"} <= set(
-        out.names()
-    )
-    assert out["num_match_car_0p5m"] == pytest.approx(1.0)
+    assert {
+        MetricKey(name="mAP"),
+        MetricKey(name="mAP_car"),
+        MetricKey(name="gt_count_car"),
+        MetricKey(name="AP_car_0p5m"),
+        MetricKey(name="num_match_car_0p5m"),
+    } <= set(out.metric_names())
+    assert out.value(MetricKey(name="num_match_car_0p5m")) == pytest.approx(1.0)
 
 
 def test_heading_ap_is_test_only() -> None:
     assert HeadingAP().stages == frozenset({EvalStage.TEST})
     out = HeadingAP().evaluate(_det3d_state(), EvalStage.TEST)
-    assert out["mAPH"] == pytest.approx(1.0)
+    assert out.value(MetricKey(name="mAPH")) == pytest.approx(1.0)
 
 
 def test_nds_is_test_only_and_combines_ap_with_errors() -> None:
     assert Nds().stages == frozenset({EvalStage.TEST})
     out = Nds().evaluate(_det3d_state(), EvalStage.TEST)
-    assert set(out.names()) == {"map_based_nds", "mapH_based_nds"}
+    assert set(out.metric_names()) == {
+        MetricKey(name="map_based_nds"),
+        MetricKey(name="mapH_based_nds"),
+    }
 
 
 def test_tp_errors_emits_mean_and_per_class() -> None:
     out = TpErrors().evaluate(_det3d_state(), EvalStage.TEST)
-    assert "mATE_default" in out
-    assert "ATE_car_default_0p5m" in out
+    assert MetricKey(name="mATE_default") in out.metric_names()
+    assert MetricKey(name="ATE_car_default_0p5m") in out.metric_names()
 
 
 def test_tp_error_means_ignore_classes_without_true_positives() -> None:
@@ -85,11 +93,13 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
     state = Detection3DState(samples=[sample], class_names=("car", "truck"))
 
     nds_out = Nds().evaluate(state, EvalStage.TEST)
-    assert nds_out["map_based_nds"] == pytest.approx(0.9)  # 0.7 if the absent truck leaked in
+    assert nds_out.value(MetricKey(name="map_based_nds")) == pytest.approx(
+        0.9
+    )  # 0.7 if the absent truck leaked in
 
     tp_out = TpErrors().evaluate(state, EvalStage.TEST)
-    assert tp_out["mATE_default"] == pytest.approx(0.0)
-    assert tp_out["mAAE_default"] == pytest.approx(1.0)
+    assert tp_out.value(MetricKey(name="mATE_default")) == pytest.approx(0.0)
+    assert tp_out.value(MetricKey(name="mAAE_default")) == pytest.approx(1.0)
 
 
 def _det3d_state_tp_fp() -> Detection3DState:
@@ -114,18 +124,20 @@ def _det3d_state_tp_fp() -> Detection3DState:
 
 def test_det3d_confident_error_flags_high_score_false_positive() -> None:
     out = ConfidentErrorRate(score_threshold=0.5).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
-    assert out["confident_error_rate"] == pytest.approx(1.0)  # the one FP (0.8) is confident
-    assert out["confident_error_count"] == pytest.approx(1.0)
+    assert out.value(MetricKey(name="confident_error_rate")) == pytest.approx(
+        1.0
+    )  # the one FP (0.8) is confident
+    assert out.value(MetricKey(name="confident_error_count")) == pytest.approx(1.0)
     lifted = ConfidentErrorRate(score_threshold=0.9).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
-    assert lifted["confident_error_rate"] == pytest.approx(0.0)  # 0.8 < 0.9
+    assert lifted.value(MetricKey(name="confident_error_rate")) == pytest.approx(0.0)  # 0.8 < 0.9
 
 
 def test_det3d_calibration_matches_hand_computed_ece() -> None:
     # TP score 0.9 (correct) -> bin 13, gap |1-0.9|=0.1. FP score 0.8 (wrong) -> bin 12,
     # gap |0-0.8|=0.8. Each bin weight 1/2 -> ECE = 0.5*0.1 + 0.5*0.8 = 0.45.
     out = CalibrationError(num_bins=15).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
-    assert out["ece"] == pytest.approx(0.45)
-    assert "ece_macro" in out
+    assert out.value(MetricKey(name="ece")) == pytest.approx(0.45)
+    assert MetricKey(name="ece_macro") in out.metric_names()
 
 
 def test_suite_prefix_override_for_side_by_side_suites() -> None:
@@ -156,31 +168,41 @@ def _conf_state(num_classes: int = 2) -> ConfusionState:
 
 def test_iou_validation_emits_only_miou() -> None:
     out = IoU().evaluate(_conf_state(), EvalStage.VAL)
-    assert set(out.names()) == {"mIoU"}
+    assert set(out.metric_names()) == {MetricKey(name="mIoU")}
 
 
 def test_iou_test_adds_fwiou_and_per_class() -> None:
     out = IoU().evaluate(_conf_state(), EvalStage.TEST)
-    assert {"mIoU", "fwIoU", "iou_car", "iou_road"} <= set(out.names())
-    assert out["iou_car"] == pytest.approx(0.5)
+    assert {
+        MetricKey(name="mIoU"),
+        MetricKey(name="fwIoU"),
+        MetricKey(name="iou_car"),
+        MetricKey(name="iou_road"),
+    } <= set(out.metric_names())
+    assert out.value(MetricKey(name="iou_car")) == pytest.approx(0.5)
 
 
 def test_accuracy_is_a_single_global_ratio() -> None:
     out = Accuracy().evaluate(_conf_state(), EvalStage.TEST)
-    assert set(out.names()) == {"acc"}
-    assert out["acc"] == pytest.approx(2.0 / 3.0)
+    assert set(out.metric_names()) == {MetricKey(name="acc")}
+    assert out.value(MetricKey(name="acc")) == pytest.approx(2.0 / 3.0)
 
 
 def test_precision_recall_f1_validation_emits_only_mrecall() -> None:
     out = PrecisionRecallF1().evaluate(_conf_state(), EvalStage.VAL)
-    assert set(out.names()) == {"mRecall"}
+    assert set(out.metric_names()) == {MetricKey(name="mRecall")}
 
 
 def test_precision_recall_f1_test_adds_macro_and_per_class() -> None:
     out = PrecisionRecallF1().evaluate(_conf_state(), EvalStage.TEST)
-    assert {"mRecall", "mPrecision", "mF1", "recall_car", "precision_car", "f1_car"} <= set(
-        out.names()
-    )
+    assert {
+        MetricKey(name="mRecall"),
+        MetricKey(name="mPrecision"),
+        MetricKey(name="mF1"),
+        MetricKey(name="recall_car"),
+        MetricKey(name="precision_car"),
+        MetricKey(name="f1_car"),
+    } <= set(out.metric_names())
 
 
 def test_suite_gates_metrics_by_configured_stages() -> None:
@@ -209,8 +231,8 @@ def test_suite_gates_metrics_by_configured_stages() -> None:
     )
 
     val = suite.result(EvalStage.VAL)
-    assert "mAP" in val
-    assert not any(key.startswith("mATE") for key in val.names())
+    assert MetricKey(name="mAP") in val.metric_names()
+    assert not any(key.name.startswith("mATE") for key in val.metric_names())
 
     suite.reset()
     suite.update(
@@ -227,5 +249,5 @@ def test_suite_gates_metrics_by_configured_stages() -> None:
         }
     )
     test = suite.result(EvalStage.TEST)
-    assert "mAP" in test
-    assert "mATE_default" in test
+    assert MetricKey(name="mAP") in test.metric_names()
+    assert MetricKey(name="mATE_default") in test.metric_names()

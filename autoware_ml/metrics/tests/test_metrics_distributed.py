@@ -91,9 +91,12 @@ def _det3d_shard(rank: int) -> dict[str, object]:
 
 
 def _assert_reports_equal(actual: MetricReport, expected: MetricReport) -> None:
-    assert set(actual.names()) == set(expected.names()), set(actual.names()) ^ set(expected.names())
-    for key, expected_value in expected.items():
-        actual_value = actual[key]
+    actual_keys = set(actual.metric_names())
+    expected_keys = set(expected.metric_names())
+    assert actual_keys == expected_keys, actual_keys ^ expected_keys
+    for key in expected.metric_names():
+        expected_value = expected.value(key)
+        actual_value = actual.value(key)
         if expected_value != expected_value:  # NaN
             assert actual_value != actual_value, (key, actual_value)
         else:

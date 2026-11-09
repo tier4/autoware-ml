@@ -18,6 +18,7 @@ from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.tests.conftest import collision_box
+from autoware_ml.metrics.report import MetricKey
 
 
 def _sample(preds, pred_scores, pred_labels, gts, gt_labels, pred_ttc=None, gt_ttc=None):
@@ -71,10 +72,10 @@ def test_critical_fp_fn_counts_phantoms_and_misses() -> None:
         class_names=("car",),
     )
     out = CriticalFPFN(confidences=(0.5,), match_threshold=2.0).evaluate(state, EvalStage.TEST)
-    assert out["critical_fp_conf0p5"] == pytest.approx(1 / 3)
-    assert out["critical_fn_conf0p5"] == pytest.approx(1 / 3)
-    assert out["critical_fp_car_conf0p5"] == pytest.approx(1 / 3)
-    assert out["critical_fn_car_conf0p5"] == pytest.approx(1 / 3)
+    assert out.value(MetricKey(name="critical_fp_conf0p5")) == pytest.approx(1 / 3)
+    assert out.value(MetricKey(name="critical_fn_conf0p5")) == pytest.approx(1 / 3)
+    assert out.value(MetricKey(name="critical_fp_car_conf0p5")) == pytest.approx(1 / 3)
+    assert out.value(MetricKey(name="critical_fn_car_conf0p5")) == pytest.approx(1 / 3)
 
 
 def test_critical_fp_fn_excludes_unreachable() -> None:
@@ -88,8 +89,8 @@ def test_critical_fp_fn_excludes_unreachable() -> None:
         class_names=("car",),
     )
     out = CriticalFPFN(confidences=(0.5,)).evaluate(state, EvalStage.TEST)
-    assert out["critical_fp_conf0p5"] == pytest.approx(0.0)
-    assert out["critical_fn_conf0p5"] == pytest.approx(0.0)
+    assert out.value(MetricKey(name="critical_fp_conf0p5")) == pytest.approx(0.0)
+    assert out.value(MetricKey(name="critical_fn_conf0p5")) == pytest.approx(0.0)
 
 
 def test_critical_fp_fn_excludes_uncovered_frames() -> None:
@@ -113,12 +114,12 @@ def test_critical_fp_fn_excludes_uncovered_frames() -> None:
     state = Detection3DState(samples=[covered_fp, uncovered], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,), match_threshold=2.0).evaluate(state, EvalStage.TEST)
     # Denominator is 1 (the covered frame), not 2.
-    assert out["critical_fp_conf0p5"] == pytest.approx(1.0)
+    assert out.value(MetricKey(name="critical_fp_conf0p5")) == pytest.approx(1.0)
 
     weighted = CollisionWeightedMeanAP(thresholds=(2.0,), decay=0.5).evaluate(state, EvalStage.TEST)
     # The uncovered frame's phantom prediction contributes nothing: the covered
     # frame's perfect match still scores, so cw_mAP stays finite and positive.
-    assert weighted["cw_mAP"] > 0.0
+    assert weighted.value(MetricKey(name="cw_mAP")) > 0.0
 
 
 def test_critical_fp_fn_no_coverage_is_nan() -> None:
@@ -127,7 +128,7 @@ def test_critical_fp_fn_no_coverage_is_nan() -> None:
     )
     state = Detection3DState(samples=[frame], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,)).evaluate(state, EvalStage.TEST)
-    assert isnan(out["critical_fp_conf0p5"])  # no basis, never a fake zero
+    assert isnan(out.value(MetricKey(name="critical_fp_conf0p5")))  # no basis, never a fake zero
 
 
 def test_critical_fp_fn_confidence_gate() -> None:
@@ -136,7 +137,7 @@ def test_critical_fp_fn_confidence_gate() -> None:
         class_names=("car",),
     )
     out = CriticalFPFN(confidences=(0.5,)).evaluate(state, EvalStage.TEST)
-    assert out["critical_fp_conf0p5"] == pytest.approx(0.0)
+    assert out.value(MetricKey(name="critical_fp_conf0p5")) == pytest.approx(0.0)
 
 
 def test_collision_weighted_map_perfect_detection3d() -> None:
@@ -145,8 +146,8 @@ def test_collision_weighted_map_perfect_detection3d() -> None:
         class_names=("car",),
     )
     out = CollisionWeightedMeanAP(thresholds=(2.0,), decay=0.5).evaluate(state, EvalStage.TEST)
-    assert out["cw_mAP"] == pytest.approx(1.0)
-    assert out["cw_mAP_car"] == pytest.approx(1.0)
+    assert out.value(MetricKey(name="cw_mAP")) == pytest.approx(1.0)
+    assert out.value(MetricKey(name="cw_mAP_car")) == pytest.approx(1.0)
 
 
 def test_collision_weighted_map_unreachable_gt_has_no_weight() -> None:
@@ -166,7 +167,7 @@ def test_collision_weighted_map_unreachable_gt_has_no_weight() -> None:
         class_names=("car",),
     )
     out = CollisionWeightedMeanAP(thresholds=(2.0,), decay=0.5).evaluate(state, EvalStage.TEST)
-    assert isnan(out["cw_mAP_car"])
+    assert isnan(out.value(MetricKey(name="cw_mAP_car")))
 
 
 @pytest.mark.parametrize(

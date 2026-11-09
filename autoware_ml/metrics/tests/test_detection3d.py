@@ -14,6 +14,7 @@ from autoware_ml.metrics.detection3d.nds import Nds
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
+from autoware_ml.metrics.report import MetricKey
 
 
 def _suite(recall_targets=None, thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
@@ -125,7 +126,7 @@ def test_center_distance_map_is_one_for_perfect_predictions() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert torch.isclose(torch.tensor(metrics["mAP"]), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP"))), torch.tensor(1.0))
 
 
 def test_center_distance_ap_penalizes_tight_threshold_misses() -> None:
@@ -137,7 +138,10 @@ def test_center_distance_ap_penalizes_tight_threshold_misses() -> None:
         gt_boxes=[_boxes([(0.0, 0.0)])],
         gt_labels=[torch.tensor([0], dtype=torch.long)],
     )
-    assert torch.isclose(torch.tensor(metric_tight.result(EvalStage.VAL)["mAP"]), torch.tensor(0.0))
+    assert torch.isclose(
+        torch.tensor(metric_tight.result(EvalStage.VAL).value(MetricKey(name="mAP"))),
+        torch.tensor(0.0),
+    )
 
     metric_loose = _suite(thresholds=(1.0,))
     _update(
@@ -146,7 +150,10 @@ def test_center_distance_ap_penalizes_tight_threshold_misses() -> None:
         gt_boxes=[_boxes([(0.0, 0.0)])],
         gt_labels=[torch.tensor([0], dtype=torch.long)],
     )
-    assert torch.isclose(torch.tensor(metric_loose.result(EvalStage.VAL)["mAP"]), torch.tensor(1.0))
+    assert torch.isclose(
+        torch.tensor(metric_loose.result(EvalStage.VAL).value(MetricKey(name="mAP"))),
+        torch.tensor(1.0),
+    )
 
 
 def test_center_distance_ap_ignores_classes_without_ground_truth() -> None:
@@ -160,7 +167,7 @@ def test_center_distance_ap_ignores_classes_without_ground_truth() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert torch.isclose(torch.tensor(metrics["mAP"]), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP"))), torch.tensor(1.0))
 
 
 def test_center_distance_map_reports_class_and_range_breakdowns() -> None:
@@ -176,11 +183,22 @@ def test_center_distance_map_reports_class_and_range_breakdowns() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert torch.isclose(torch.tensor(metrics["mAP_car"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["mAP_pedestrian"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["mAP_car_0m_50m"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["mAP_pedestrian_50m_90m"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["mAP_car_90m_121m"]), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP_car"))), torch.tensor(1.0))
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAP_pedestrian"))), torch.tensor(1.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAP_car", range_suffix="0m_50m"))),
+        torch.tensor(1.0),
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAP_pedestrian", range_suffix="50m_90m"))),
+        torch.tensor(1.0),
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAP_car", range_suffix="90m_121m"))),
+        torch.tensor(1.0),
+    )
 
 
 def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
@@ -201,8 +219,8 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
     # phantom prediction remains, so AP is 0, and the monitored key is always
     # present, never dropped.
     report = metric.result(EvalStage.VAL)
-    assert report["mAP"] == 0.0
-    assert report["mAP_car"] == 0.0
+    assert report.value(MetricKey(name="mAP")) == 0.0
+    assert report.value(MetricKey(name="mAP_car")) == 0.0
 
 
 def test_eval_class_range_requires_class_names() -> None:
@@ -222,7 +240,7 @@ def test_min_num_points_filters_gt_num_points() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert torch.isclose(torch.tensor(metrics["mAP"]), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP"))), torch.tensor(1.0))
 
 
 def test_accumulates_predictions_across_multiple_update_calls() -> None:
@@ -242,7 +260,7 @@ def test_accumulates_predictions_across_multiple_update_calls() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert torch.isclose(torch.tensor(metrics["mAP"]), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP"))), torch.tensor(1.0))
 
 
 def test_center_distance_ap_reports_imperfect_precision_recall_curve() -> None:
@@ -258,7 +276,7 @@ def test_center_distance_ap_reports_imperfect_precision_recall_curve() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert 0.0 < metrics["mAP"] < 1.0
+    assert 0.0 < metrics.value(MetricKey(name="mAP")) < 1.0
 
 
 def test_non_integer_detection3d_range_suffixes_do_not_collide() -> None:
@@ -278,8 +296,8 @@ def test_non_integer_detection3d_range_suffixes_do_not_collide() -> None:
 
     metrics = metric.result(EvalStage.VAL)
 
-    assert "mAP_0m_50m" in metrics
-    assert "mAP_0m_50p5m" in metrics
+    assert MetricKey(name="mAP", range_suffix="0m_50m") in metrics.metric_names()
+    assert MetricKey(name="mAP", range_suffix="0m_50p5m") in metrics.metric_names()
 
 
 def test_metric_eval_mixin_logs_test_map() -> None:
@@ -345,20 +363,45 @@ def test_detailed_center_distance_metrics_report_ap_aph_and_nds() -> None:
 
     metrics = metric.result(EvalStage.TEST)
 
-    assert torch.isclose(torch.tensor(metrics["mAP"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["mAPH"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["AP_car_0p5m"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["APH_car_0p5m"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["num_match_car_0p5m"]), torch.tensor(10.0))
-    assert torch.isclose(torch.tensor(metrics["max_f1_car_0p5m"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["optimal_conf_car_0p5m"]), torch.tensor(0.91))
-    assert torch.isclose(torch.tensor(metrics["mATE_default"]), torch.tensor(0.0))
-    assert torch.isclose(torch.tensor(metrics["mAOE_default"]), torch.tensor(0.0))
-    assert torch.isclose(torch.tensor(metrics["mASE_default"]), torch.tensor(0.0))
-    assert torch.isclose(torch.tensor(metrics["mAVE_default"]), torch.tensor(0.0))
-    assert torch.isclose(torch.tensor(metrics["mAAE_default"]), torch.tensor(1.0))
-    assert torch.isclose(torch.tensor(metrics["map_based_nds"]), torch.tensor(0.9))
-    assert torch.isclose(torch.tensor(metrics["mAP_car_0m_50m"]), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP"))), torch.tensor(1.0))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAPH"))), torch.tensor(1.0))
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="AP_car_0p5m"))), torch.tensor(1.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="APH_car_0p5m"))), torch.tensor(1.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="num_match_car_0p5m"))), torch.tensor(10.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="max_f1_car_0p5m"))), torch.tensor(1.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="optimal_conf_car_0p5m"))), torch.tensor(0.91)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mATE_default"))), torch.tensor(0.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAOE_default"))), torch.tensor(0.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mASE_default"))), torch.tensor(0.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAVE_default"))), torch.tensor(0.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAAE_default"))), torch.tensor(1.0)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="map_based_nds"))), torch.tensor(0.9)
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAP_car", range_suffix="0m_50m"))),
+        torch.tensor(1.0),
+    )
 
 
 def test_detailed_center_distance_metrics_penalize_heading_for_maph() -> None:
@@ -376,9 +419,11 @@ def test_detailed_center_distance_metrics_penalize_heading_for_maph() -> None:
 
     metrics = metric.result(EvalStage.TEST)
 
-    assert torch.isclose(torch.tensor(metrics["mAP"]), torch.tensor(1.0))
-    assert 0.0 < metrics["mAPH"] < metrics["mAP"]
-    assert torch.isclose(torch.tensor(metrics["mAOE_default"]), torch.tensor(torch.pi / 2))
+    assert torch.isclose(torch.tensor(metrics.value(MetricKey(name="mAP"))), torch.tensor(1.0))
+    assert 0.0 < metrics.value(MetricKey(name="mAPH")) < metrics.value(MetricKey(name="mAP"))
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="mAOE_default"))), torch.tensor(torch.pi / 2)
+    )
 
 
 def test_detailed_center_distance_metrics_report_optimal_error_subset() -> None:
@@ -414,11 +459,16 @@ def test_detailed_center_distance_metrics_report_optimal_error_subset() -> None:
 
     metrics = metric.result(EvalStage.TEST)
 
-    assert torch.isclose(torch.tensor(metrics["num_match_car_0p5m"]), torch.tensor(2.0))
     assert torch.isclose(
-        torch.tensor(metrics["tp_error_num_match_car_optimal_0p5m"]), torch.tensor(2.0)
+        torch.tensor(metrics.value(MetricKey(name="num_match_car_0p5m"))), torch.tensor(2.0)
     )
-    assert torch.isclose(torch.tensor(metrics["optimal_conf_car_0p5m"]), torch.tensor(0.7))
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="tp_error_num_match_car_optimal_0p5m"))),
+        torch.tensor(2.0),
+    )
+    assert torch.isclose(
+        torch.tensor(metrics.value(MetricKey(name="optimal_conf_car_0p5m"))), torch.tensor(0.7)
+    )
 
 
 def test_match_by_cost_equals_reference_global_greedy() -> None:

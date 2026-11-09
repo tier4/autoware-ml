@@ -56,28 +56,26 @@ class TestMetricKey(unittest.TestCase):
 
 
 class TestMetricReport(unittest.TestCase):
-    """A report keeps one value per rendered name and refuses a second."""
+    """A report keeps one value per key and refuses a second."""
 
-    def test_records_and_looks_up_by_key_or_name(self) -> None:
+    def test_records_and_reads_back_by_key(self) -> None:
         """
         Input: a report with mAP and mAP_car recorded in that order.
-        Expected: a value is read back by its rendered name or its key, membership follows the
-        rendered name, and the keys, names and values come back in record order.
-        Check: the lookups, the memberships, the keys, names, values and the length.
+        Expected: the keys come back in record order and each key reads its value, a key that
+        was never recorded is refused.
+        Check: the keys, the two values, the length and KeyError on the absent key.
         """
         report = MetricReport()
         report.record("mAP", 0.5)
         report.record("mAP_car", 0.25)
-        self.assertEqual(report["mAP"], 0.5)
-        self.assertEqual(report[MetricKey(name="mAP_car")], 0.25)
-        self.assertIn("mAP", report)
-        self.assertNotIn("mAPH", report)
-        self.assertEqual(report.names(), ("mAP", "mAP_car"))
-        self.assertEqual(report.keys(), (MetricKey(name="mAP"), MetricKey(name="mAP_car")))
-        self.assertEqual(report.values(), (0.5, 0.25))
+        self.assertEqual(report.metric_names(), (MetricKey(name="mAP"), MetricKey(name="mAP_car")))
+        self.assertEqual(report.value(MetricKey(name="mAP")), 0.5)
+        self.assertEqual(report.value(MetricKey(name="mAP_car")), 0.25)
         self.assertEqual(len(report), 2)
+        with self.assertRaisesRegex(KeyError, "mAPH is not reported"):
+            report.value(MetricKey(name="mAPH"))
 
-    def test_rejects_a_duplicate_name(self) -> None:
+    def test_rejects_a_duplicate_key(self) -> None:
         """
         Input: mAP recorded twice in one report.
         Expected: the second record is refused instead of overwriting the first.
@@ -88,17 +86,19 @@ class TestMetricReport(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "same key 'mAP'"):
             report.record("mAP", 0.6)
 
-    def test_rejects_keys_that_render_alike(self) -> None:
+    def test_log_dict_rejects_keys_that_render_alike(self) -> None:
         """
-        Input: a key named mAP_0m_50m, then a key named mAP in the 0m_50m range window.
-        Expected: the two keys differ as objects but log under one name, so the second is
-        refused.
-        Check: ValueError naming the rendered key.
+        Input: a key named mAP_0m_50m and a key named mAP in the 0m_50m range window.
+        Expected: the two keys differ as objects, so both are held, but they would log under one
+        name, so the log payload is refused.
+        Check: the report length and ValueError naming the log name.
         """
         report = MetricReport()
         report.add(MetricKey(name="mAP_0m_50m"), 0.5)
-        with self.assertRaisesRegex(ValueError, "same key 'mAP_0m_50m'"):
-            report.add(MetricKey(name="mAP", range_suffix="0m_50m"), 0.6)
+        report.add(MetricKey(name="mAP", range_suffix="0m_50m"), 0.6)
+        self.assertEqual(len(report), 2)
+        with self.assertRaisesRegex(ValueError, "same log name 'val/mAP_0m_50m'"):
+            report.to_log_dict("val")
 
     def test_merge_places_the_keys_one_level_out(self) -> None:
         """
@@ -107,16 +107,17 @@ class TestMetricReport(unittest.TestCase):
         under the det3d prefix.
         Expected: each merge places the keys one level further out, the merged report is left
         unchanged, and the log payload carries the split in front of every rendered name.
-        Check: the suite names and value, the untouched metric names, and the log payload.
+        Check: the suite keys and value, the untouched metric keys, and the log payload.
         """
         metric = MetricReport()
         metric.record("mAP", 0.5)
         suite = MetricReport()
         suite.merge(metric)
         suite.merge(metric, range_suffix="0m_50m", filter_name="region_road")
-        self.assertEqual(suite.names(), ("mAP", "region_road/mAP_0m_50m"))
-        self.assertEqual(suite["region_road/mAP_0m_50m"], 0.5)
-        self.assertEqual(metric.names(), ("mAP",))
+        placed = MetricKey(name="mAP", range_suffix="0m_50m", filter_name="region_road")
+        self.assertEqual(suite.metric_names(), (MetricKey(name="mAP"), placed))
+        self.assertEqual(suite.value(placed), 0.5)
+        self.assertEqual(metric.metric_names(), (MetricKey(name="mAP"),))
 
         model = MetricReport()
         model.merge(suite, prefix="det3d")
@@ -128,7 +129,7 @@ class TestMetricReport(unittest.TestCase):
     def test_merge_rejects_a_collision_across_reports(self) -> None:
         """
         Input: two metric reports that both hold num_frames, merged into one suite report.
-        Expected: the second merge is refused, two metrics must not log under one name.
+        Expected: the second merge is refused, two metrics must not report under one key.
         Check: ValueError naming the key.
         """
         first = MetricReport()
@@ -139,21 +140,6 @@ class TestMetricReport(unittest.TestCase):
         suite.merge(first)
         with self.assertRaisesRegex(ValueError, "same key 'num_frames'"):
             suite.merge(second)
-
-    def test_items_pair_each_key_with_its_value(self) -> None:
-        """
-        Input: a report with acc and mIoU recorded in that order.
-        Expected: items() yields the keys with their values in record order, and iterating the
-        report yields the keys.
-        Check: the item list and the iterated key names.
-        """
-        report = MetricReport()
-        report.record("acc", 1.0)
-        report.record("mIoU", 0.75)
-        self.assertEqual(
-            list(report.items()), [(MetricKey(name="acc"), 1.0), (MetricKey(name="mIoU"), 0.75)]
-        )
-        self.assertEqual([key.name for key in report], ["acc", "mIoU"])
 
 
 if __name__ == "__main__":
