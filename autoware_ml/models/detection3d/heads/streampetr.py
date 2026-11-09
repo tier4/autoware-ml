@@ -893,7 +893,8 @@ class StreamPETRHead(nn.Module):
             target_labels.append(one_hot)
         target_labels_tensor = torch.stack(target_labels, dim=0)
         # One collective per decoder layer, which every rank runs, so the ranks stay in step.
-        # The division is explicit because the focal loss floors ``avg_factor`` per rank.
+        # The count is floored at 1 inside ``reduce_mean_count``, so the divisions below need
+        # no ``max``; they are explicit because the focal loss floors ``avg_factor`` per rank.
         total_pos = reduce_mean_count(torch.stack(positive_counts).sum()).item()
         loss_cls = (
             self.loss_cls_weight
@@ -944,7 +945,8 @@ class StreamPETRHead(nn.Module):
         """Compute denoising-query supervision for one decoder layer.
 
         The average factors are the denoising target counts of the step, reduced once by
-        :meth:`loss`.
+        :meth:`loss`, which floors them at 1: through :func:`reduce_mean_count` over the
+        ranks when training, by a clamp otherwise.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes

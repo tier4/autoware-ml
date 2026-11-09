@@ -31,10 +31,25 @@ GLOO_AVAILABLE = dist.is_available() and dist.is_gloo_available()
 def spawn_gloo_workers(
     worker: Callable[..., None], *args: object, world_size: int = 2, timeout: float = 120.0
 ) -> None:
-    """Run ``worker(rank, world_size, init_file, *args)`` on ``world_size`` processes.
+    """Run ``worker(rank, world_size, init_file, *args)`` on ``world_size`` CPU processes.
 
-    An assertion in a worker fails the caller. A deadlocked collective fails it after
-    ``timeout`` seconds instead of hanging the test runner.
+    A collective such as ``all_reduce`` only runs inside a process group, so a test of one
+    needs more than one process. The processes are started with ``torch.multiprocessing.spawn``
+    and the worker joins the gloo group of the run through :func:`gloo_process_group`, which
+    reads ``init_file``. gloo runs on CPU, so the test needs no GPU; the semantics of the
+    collectives are those of every backend.
+
+    ``join=False`` hands back the context so the wait can carry a deadline.
+    ``ProcessContext.join(timeout)`` returns after one wait pass (it wakes whenever a worker
+    exits and returns ``False`` while the others still run), not after ``timeout`` seconds,
+    so the loop polls it until every worker is done or the deadline passes. A deadlocked
+    collective, for example one rank calling ``all_reduce`` once more than the others, never
+    exits on its own: at the deadline the workers are terminated and the caller fails with a
+    message instead of hanging the test runner.
+
+    An exception in a worker, a failed ``unittest.TestCase`` assertion included, is raised
+    again by ``join`` in the caller as ``ProcessRaisedException`` and the other workers are
+    terminated, so an assertion in a worker fails the caller.
     """
     with tempfile.TemporaryDirectory() as directory:
         context = mp.spawn(

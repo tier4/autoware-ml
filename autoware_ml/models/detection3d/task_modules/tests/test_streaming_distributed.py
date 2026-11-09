@@ -47,15 +47,25 @@ def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> Non
 
 class TestReduceMeanCount(unittest.TestCase):
     def test_is_identity_without_process_group(self) -> None:
-        """Test that without a process group the count comes back as float, floored at 1."""
+        """
+        Input: the counts 3.0, the integer 3 and 0.0, with no process group initialized.
+        Expected: the count comes back as float and floored at 1, otherwise unchanged.
+        Check: the returned values and the dtype.
+        """
         self.assertAlmostEqual(reduce_mean_count(torch.tensor(3.0)).item(), 3.0)
         self.assertEqual(reduce_mean_count(torch.tensor(3)).dtype, torch.float32)
         self.assertAlmostEqual(reduce_mean_count(torch.tensor(0.0)).item(), 1.0)
 
     @unittest.skipUnless(GLOO_AVAILABLE, "gloo backend unavailable")
     def test_averages_counts_across_ranks(self) -> None:
-        """Test that two ranks get the mean of their counts, floored over the sum, without
-        in-place changes."""
+        """
+        Input: two gloo ranks on CPU holding the counts 2 and 8, then 1 and 0, then 0 and 0,
+            then a pair of counts each.
+        Expected: both ranks get the mean of the counts; the floor applies to the sum over the
+            ranks, so one positive on one rank gives 0.5 and none gives 0.5; the inputs are
+            left as they were.
+        Check: the values every rank gets back, asserted by the worker's own TestCase.
+        """
         spawn_gloo_workers(_reduce_mean_count_worker)
 
 
