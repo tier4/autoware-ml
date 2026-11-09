@@ -51,8 +51,8 @@ class BaseImages(BaseModel):
         camera_names: Sequence for camera names to represent each image.
         lidar2images: Transformation matrix for lidar to each image.
         lidar2cams: Transformation matrix for lidar to each camera.
-        distortion_models: Distortion model name per camera following ROS convention
-        (e.g. ``"plumb_bob"``, ``"rational_polynomial"``). Empty string for
+        distortion_models: Distortion model name per camera, the ROS name where ROS has one
+        (e.g. ``"plumb_bob"``, ``"rational_polynomial"``, ``"tilted"``). Empty string for
         pre-undistorted images.
         distortion_coefficients: Distortion coefficients per camera following the OpenCV
         convention ``(k1, k2, p1, p2[, k3[, ...]])``. The length varies by distortion
