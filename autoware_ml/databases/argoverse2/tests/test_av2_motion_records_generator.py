@@ -16,11 +16,13 @@
 
 from __future__ import annotations
 
+import importlib.util
+import tempfile
+import unittest
 from pathlib import Path
 
-import pytest
-
-pytest.importorskip("av2")
+if importlib.util.find_spec("av2") is None:
+    raise unittest.SkipTest("the av2 devkit is not installed")
 
 from autoware_ml.databases.argoverse2.av2_motion_records_generator import (  # noqa: E402
     OBSERVED_STEPS,
@@ -36,6 +38,7 @@ from autoware_ml.types.dataset import DatasetFormat  # noqa: E402
 
 
 def _scenario_data(scenario_id: str, split: str = "train") -> ScenarioData:
+    """Scenario data of one scenario of the split, with the split as its version."""
     return ScenarioData(
         dataset_params=DatasetParams(dataset_name=split, sample_steps=1),
         scenario_id=scenario_id,
@@ -43,82 +46,112 @@ def _scenario_data(scenario_id: str, split: str = "train") -> ScenarioData:
     )
 
 
-def test_one_record_per_scenario_with_relative_paths(tmp_path: Path) -> None:
-    root = tmp_path / "av2"
-    write_scenario(root / "train", "abc")
+class TestAV2MotionRecordsGenerator(unittest.TestCase):
+    """The generator turns one scenario directory into one prediction record."""
 
-    records = AV2MotionRecordsGenerator(root, _scenario_data("abc")).generate_dataset_records()
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+        self.root = Path(self._tmp_dir.name) / "av2"
 
-    assert len(records) == 1
-    record = records[0]
-    assert record.scenario_id == "abc"
-    assert record.sample_id == "abc"
-    assert record.scenario_name == "abc"
-    assert record.sample_index == 0
-    assert record.location == CITY
-    assert record.vehicle_type is None
-    assert record.lidar_frames == []
-    assert record.lidar_sources is None
-    assert record.image_frames is None
-    assert record.category_mapping is None
-    assert record.boxes_3d is None
-    # The current step is the last observed one, at 1.0 s + 49 * 0.1 s
-    assert record.timestamp_seconds == pytest.approx(1.0 + 0.1 * (OBSERVED_STEPS - 1))
+    def test_one_record_per_scenario_with_relative_paths(self) -> None:
+        """
+        Input: the synthetic train scenario "abc" of 110 steps and three tracks.
+        Expected: one record without sensor annotations, stamped at the last observed step,
+        whose prediction struct names the two files relative to the root, the focal track and
+        the full window.
+        Check: every basic field of the record, its timestamp, and every prediction field.
+        """
+        write_scenario(self.root / "train", "abc")
 
-    prediction = record.prediction
-    assert prediction is not None
-    assert prediction.tracks_relative_path == "train/abc/scenario_abc.parquet"
-    assert prediction.map_relative_path == "train/abc/log_map_archive_abc.json"
-    assert prediction.dataset_format is DatasetFormat.AV2
-    assert prediction.scenario_key is None
-    assert prediction.focal_track_id == FOCAL_TRACK_ID
-    assert prediction.first_step_index == 0
-    assert prediction.current_step_index == OBSERVED_STEPS - 1
-    assert prediction.num_steps == 110
-    assert prediction.step_seconds == pytest.approx(0.1)
-    assert prediction.num_tracks == 3
+        records = AV2MotionRecordsGenerator(
+            self.root, _scenario_data("abc")
+        ).generate_dataset_records()
 
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record.scenario_id, "abc")
+        self.assertEqual(record.sample_id, "abc")
+        self.assertEqual(record.scenario_name, "abc")
+        self.assertEqual(record.sample_index, 0)
+        self.assertEqual(record.location, CITY)
+        self.assertIsNone(record.vehicle_type)
+        self.assertEqual(record.lidar_frames, [])
+        self.assertIsNone(record.lidar_sources)
+        self.assertIsNone(record.image_frames)
+        self.assertIsNone(record.category_mapping)
+        self.assertIsNone(record.boxes_3d)
+        # The current step is the last observed one, at 1.0 s + 49 * 0.1 s
+        self.assertAlmostEqual(record.timestamp_seconds, 1.0 + 0.1 * (OBSERVED_STEPS - 1))
 
-def test_a_test_split_scenario_ends_at_the_current_step(tmp_path: Path) -> None:
-    root = tmp_path / "av2"
-    write_scenario(root / "test", "t00", num_steps=OBSERVED_STEPS)
+        prediction = record.prediction
+        self.assertIsNotNone(prediction)
+        self.assertEqual(prediction.tracks_relative_path, "train/abc/scenario_abc.parquet")
+        self.assertEqual(prediction.map_relative_path, "train/abc/log_map_archive_abc.json")
+        self.assertIs(prediction.dataset_format, DatasetFormat.AV2)
+        self.assertIsNone(prediction.scenario_key)
+        self.assertEqual(prediction.focal_track_id, FOCAL_TRACK_ID)
+        self.assertEqual(prediction.first_step_index, 0)
+        self.assertEqual(prediction.current_step_index, OBSERVED_STEPS - 1)
+        self.assertEqual(prediction.num_steps, 110)
+        self.assertAlmostEqual(prediction.step_seconds, 0.1)
+        self.assertEqual(prediction.num_tracks, 3)
 
-    (record,) = AV2MotionRecordsGenerator(
-        root, _scenario_data("t00", split="test")
-    ).generate_dataset_records()
+    def test_a_test_split_scenario_ends_at_the_current_step(self) -> None:
+        """
+        Input: a test split scenario of exactly the observed steps.
+        Expected: the window is the observed steps and the current step is its last one.
+        Check: num_steps, current_step_index and the tracks path under the test split.
+        """
+        write_scenario(self.root / "test", "t00", num_steps=OBSERVED_STEPS)
 
-    assert record.prediction.num_steps == OBSERVED_STEPS
-    assert record.prediction.current_step_index == OBSERVED_STEPS - 1
-    assert record.prediction.tracks_relative_path == "test/t00/scenario_t00.parquet"
+        (record,) = AV2MotionRecordsGenerator(
+            self.root, _scenario_data("t00", split="test")
+        ).generate_dataset_records()
 
+        self.assertEqual(record.prediction.num_steps, OBSERVED_STEPS)
+        self.assertEqual(record.prediction.current_step_index, OBSERVED_STEPS - 1)
+        self.assertEqual(record.prediction.tracks_relative_path, "test/t00/scenario_t00.parquet")
 
-def test_a_window_shorter_than_the_observed_steps_is_rejected(tmp_path: Path) -> None:
-    root = tmp_path / "av2"
-    write_scenario(root / "train", "short", num_steps=OBSERVED_STEPS - 1)
+    def test_a_window_shorter_than_the_observed_steps_is_rejected(self) -> None:
+        """
+        Input: a scenario one step shorter than the observed steps.
+        Expected: a scenario that cannot fill the observed window is refused.
+        Check: ValueError naming the observed step count.
+        """
+        write_scenario(self.root / "train", "short", num_steps=OBSERVED_STEPS - 1)
 
-    with pytest.raises(ValueError, match="fewer than the 50 observed steps"):
-        AV2MotionRecordsGenerator(root, _scenario_data("short")).generate_dataset_records()
+        with self.assertRaisesRegex(ValueError, "fewer than the 50 observed steps"):
+            AV2MotionRecordsGenerator(self.root, _scenario_data("short")).generate_dataset_records()
 
+    def test_missing_files_are_rejected(self) -> None:
+        """
+        Input: a scenario directory that does not exist, and one whose map archive was
+        removed.
+        Expected: each of the two files is required, and the missing one is named.
+        Check: ValueError naming the missing tracks file and the missing map file.
+        """
+        generator = AV2MotionRecordsGenerator(self.root, _scenario_data("none"))
+        with self.assertRaisesRegex(ValueError, "missing its file .*scenario_none.parquet"):
+            generator.generate_dataset_records()
 
-def test_missing_files_are_rejected(tmp_path: Path) -> None:
-    root = tmp_path / "av2"
-    generator = AV2MotionRecordsGenerator(root, _scenario_data("none"))
-    with pytest.raises(ValueError, match="missing its file .*scenario_none.parquet"):
-        generator.generate_dataset_records()
+        scenario_path = write_scenario(self.root / "train", "nomap")
+        (scenario_path / "log_map_archive_nomap.json").unlink()
+        with self.assertRaisesRegex(ValueError, "missing its file .*log_map_archive_nomap.json"):
+            AV2MotionRecordsGenerator(self.root, _scenario_data("nomap")).generate_dataset_records()
 
-    scenario_path = write_scenario(root / "train", "nomap")
-    (scenario_path / "log_map_archive_nomap.json").unlink()
-    with pytest.raises(ValueError, match="missing its file .*log_map_archive_nomap.json"):
-        AV2MotionRecordsGenerator(root, _scenario_data("nomap")).generate_dataset_records()
+    def test_a_tracks_file_of_another_scenario_is_rejected(self) -> None:
+        """
+        Input: the files of scenario "abc" renamed into the directory of scenario "xyz".
+        Expected: the scenario id stored inside the tracks file must match the directory, so
+        a misplaced file is refused.
+        Check: ValueError naming both ids.
+        """
+        scenario_path = write_scenario(self.root / "train", "abc")
+        moved = self.root / "train" / "xyz"
+        scenario_path.rename(moved)
+        (moved / "scenario_abc.parquet").rename(moved / "scenario_xyz.parquet")
+        (moved / "log_map_archive_abc.json").rename(moved / "log_map_archive_xyz.json")
 
-
-def test_a_tracks_file_of_another_scenario_is_rejected(tmp_path: Path) -> None:
-    root = tmp_path / "av2"
-    scenario_path = write_scenario(root / "train", "abc")
-    moved = root / "train" / "xyz"
-    scenario_path.rename(moved)
-    (moved / "scenario_abc.parquet").rename(moved / "scenario_xyz.parquet")
-    (moved / "log_map_archive_abc.json").rename(moved / "log_map_archive_xyz.json")
-
-    with pytest.raises(ValueError, match="belongs to scenario 'abc', not to 'xyz'"):
-        AV2MotionRecordsGenerator(root, _scenario_data("xyz")).generate_dataset_records()
+        with self.assertRaisesRegex(ValueError, "belongs to scenario 'abc', not to 'xyz'"):
+            AV2MotionRecordsGenerator(self.root, _scenario_data("xyz")).generate_dataset_records()
