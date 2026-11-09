@@ -155,7 +155,7 @@ class MetricEvalMixin:
 
     def _check_requirements(self, metrics: list[MetricSuite], eval_output: EvalOutput) -> None:
         for metric in metrics:
-            missing = metric.requirements().unmet(eval_output)
+            missing = metric.requirements().check_requirements(eval_output)
             if missing:
                 raise ValueError(
                     f"Metric {type(metric).__name__!r} needs {list(missing)}, not produced by "
