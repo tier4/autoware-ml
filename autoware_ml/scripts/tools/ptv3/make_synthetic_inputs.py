@@ -15,7 +15,8 @@
 """Synthetic-inputs entrypoint for Autoware-ML PTv3 models.
 
 This script writes the export inputs of every module at set voxel counts per encoder stage.
-The voxels are as clustered as ``target_neighbors`` asks per stage.
+The voxels are as clustered as ``target_neighbors`` asks per stage. ``measure_ptv3_neighbors``
+measures the targets of a config on its train split.
 """
 
 from __future__ import annotations
@@ -27,28 +28,28 @@ import hydra
 from omegaconf import DictConfig
 import torch
 
-from autoware_ml.builders.model_builder import build_data_preprocessor, build_model
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.models.segmentation3d.encoders.voxel import (
     TIME_LAG_COLUMN,
     MeanVoxelFeatureEncoder,
 )
-from autoware_ml.models.segmentation3d.ptv3_base import (
-    PTv3BaseModel,
-    prepare_ptv3_export_inputs,
-)
+from autoware_ml.models.segmentation3d.ptv3_base import prepare_ptv3_export_inputs
 from autoware_ml.utils.deploy import validate_cuda_available
 from autoware_ml.utils.runtime import configure_torch_runtime, get_config_path, set_seed
 from autoware_ml.utils.synthetic_inputs import (
     VoxelLayoutSpec,
-    mean_neighbors,
+    build_ptv3_model,
+    check_voxels,
+    list_stage_grids,
+    measure_stage_neighbors,
     voxel_layout,
     write_export_inputs,
 )
 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
+_NEIGHBOR_TOLERANCE = 0.1
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -69,18 +70,7 @@ def main(cfg: DictConfig) -> None:
     validate_cuda_available()
     configure_torch_runtime()
     set_seed(cfg)
-    model = build_model(
-        cfg,
-        data_preprocessor=build_data_preprocessor(cfg),
-        device=torch.device("cuda"),
-        weights_path=None,
-        resume_checkpoint_path=None,
-        set_eval=True,
-    )
-    if not isinstance(model, PTv3BaseModel):
-        raise NotImplementedError(
-            f"{Path(__file__).stem} supports only PTv3 models, got {type(model).__name__}."
-        )
+    model = build_ptv3_model(cfg)
 
     grid_shape, _ = model.compute_export_geometry(torch.device("cpu"))
     point_cloud_range = torch.tensor(model.point_cloud_range, dtype=torch.float32)
@@ -113,20 +103,26 @@ def main(cfg: DictConfig) -> None:
         padding_mask=torch.zeros(1, dtype=torch.bool),
     )
     batch_inputs = model.on_after_batch_transfer(batch.to_device(model.device), dataloader_idx=0)
+    check_voxels(batch_inputs.voxels_data, "synthetic frame")
 
     inputs = prepare_ptv3_export_inputs(model, batch_inputs)
-    stages = [inputs.grid_coord, *(meta.grid_coord for meta in inputs.pooling_metadata)]
+    stages = list_stage_grids(inputs.grid_coord, inputs.pooling_metadata)
     counts = [len(stage) for stage in stages]
     if counts != list(spec.voxel_counts):
         raise RuntimeError(f"The stages hold {counts} voxels, not {spec.voxel_counts}.")
-    for index, (stage, target) in enumerate(zip(stages, spec.target_neighbors)):
+    reached = measure_stage_neighbors(stages)
+    for index, (count, value, target) in enumerate(zip(counts, reached, spec.target_neighbors)):
         logger.info(
-            "stage %d: %d voxels, %.2f neighbors (target %.2f)",
-            index,
-            len(stage),
-            mean_neighbors(stage),
-            target,
+            "stage %d: %d voxels, %.2f neighbors (target %.2f)", index, count, value, target
         )
+        if value < target - _NEIGHBOR_TOLERANCE:
+            logger.warning(
+                "stage %d: %d voxels cannot cluster to %.2f neighbors, the inputs are sparser "
+                "than the target",
+                index,
+                count,
+                target,
+            )
     write_export_inputs(
         model.build_export_specs(batch_inputs), Path(hydra.utils.to_absolute_path(cfg.out))
     )

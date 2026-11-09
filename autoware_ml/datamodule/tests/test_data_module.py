@@ -476,6 +476,21 @@ class TestDataModuleSources(MultiSourceTestCase):
             data_module.setup("fit")
         data_module.setup("predict")
 
+    def test_setup_splits_builds_only_the_given_splits(self) -> None:
+        """
+        Input: a source over a database whose scenarios put no scene in the validation split.
+        Expected: a script that needs the training split alone is not stopped by the empty
+            validation split the fit stage would build.
+        Check: the training split is built and no other.
+        """
+        data_module = self.build_data_module(
+            {"main": build_source(self.main_database)}, splitter=EmptyValidationSplitter()
+        )
+
+        data_module.setup_splits((SplitType.TRAIN,))
+
+        self.assertEqual(list(data_module.datasets), [SplitType.TRAIN])
+
     def test_an_empty_source_next_to_a_served_one_keeps_the_split(self) -> None:
         """
         Input: two sources of a split, one of them holding no record in it.
