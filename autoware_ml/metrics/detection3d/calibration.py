@@ -15,6 +15,7 @@ import numpy as np
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
 
 
 def _expected_calibration_error(scores: np.ndarray, correct: np.ndarray, num_bins: int) -> float:
@@ -66,7 +67,7 @@ class CalibrationError(Metric[Detection3DState]):
         if self.num_bins < 1:
             raise ValueError("num_bins must be >= 1.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report overall and macro calibration error at the TP threshold.
 
         Args:
@@ -74,7 +75,7 @@ class CalibrationError(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         all_scores: list[np.ndarray] = []
         all_correct: list[np.ndarray] = []
@@ -88,11 +89,13 @@ class CalibrationError(Metric[Detection3DState]):
             per_class.append(
                 _expected_calibration_error(curve.scores, curve.true_positive, self.num_bins)
             )
+        report = MetricReport()
         if not all_scores:
-            return {"ece": float("nan"), "ece_macro": float("nan")}
+            report.record("ece", float("nan"))
+            report.record("ece_macro", float("nan"))
+            return report
         scores = np.concatenate(all_scores)
         correct = np.concatenate(all_correct)
-        return {
-            "ece": _expected_calibration_error(scores, correct, self.num_bins),
-            "ece_macro": mean_valid(per_class),
-        }
+        report.record("ece", _expected_calibration_error(scores, correct, self.num_bins))
+        report.record("ece_macro", mean_valid(per_class))
+        return report

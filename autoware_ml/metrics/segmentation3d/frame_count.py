@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 
 
 class _CountsFrames(Protocol):
@@ -27,7 +28,7 @@ class FrameCount(Metric[_CountsFrames]):
 
     range_invariant = True
 
-    def evaluate(self, state: _CountsFrames, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: _CountsFrames, stage: EvalStage) -> MetricReport:
         """Count the accumulated frames.
 
         Args:
@@ -35,6 +36,8 @@ class FrameCount(Metric[_CountsFrames]):
             stage: Evaluation stage requesting the metric.
 
         Returns:
-            Mapping with the frame count.
+            The frame count.
         """
-        return {"num_frames": float(state.num_frames)}
+        report = MetricReport()
+        report.record("num_frames", float(state.num_frames))
+        return report

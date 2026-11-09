@@ -15,6 +15,7 @@ from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_vali
 from autoware_ml.metrics.base import number_token
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
 
 
 class CornerError(Metric[Detection3DState]):
@@ -42,7 +43,7 @@ class CornerError(Metric[Detection3DState]):
             if not 0.0 <= p <= 100.0:
                 raise ValueError(f"percentile {p} outside [0, 100].")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report per-class corner-displacement statistics at the TP threshold.
 
         Args:
@@ -50,9 +51,9 @@ class CornerError(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
-        report: dict[str, float] = {}
+        report = MetricReport()
         per_class_mean: list[float] = []
         per_class_max: list[float] = []
         for label in state.labels(full=True):
@@ -61,20 +62,20 @@ class CornerError(Metric[Detection3DState]):
             errors = errors[~np.isnan(errors)]
             name = label_metric_name(label, state.class_names)
             if errors.shape[0] == 0:
-                report[f"corner_mean_{name}"] = float("nan")
-                report[f"corner_max_{name}"] = float("nan")
+                report.record(f"corner_mean_{name}", float("nan"))
+                report.record(f"corner_max_{name}", float("nan"))
                 for p in self.percentiles:
-                    report[f"corner_p{number_token(p)}_{name}"] = float("nan")
+                    report.record(f"corner_p{number_token(p)}_{name}", float("nan"))
                 continue
             mean_value = float(np.mean(errors))
             maximum = float(np.max(errors))
-            report[f"corner_mean_{name}"] = mean_value
-            report[f"corner_max_{name}"] = maximum
+            report.record(f"corner_mean_{name}", mean_value)
+            report.record(f"corner_max_{name}", maximum)
             per_class_mean.append(mean_value)
             per_class_max.append(maximum)
             for p in self.percentiles:
-                report[f"corner_p{number_token(p)}_{name}"] = float(np.percentile(errors, p))
+                report.record(f"corner_p{number_token(p)}_{name}", float(np.percentile(errors, p)))
 
-        report["mcorner_mean"] = mean_valid(per_class_mean)
-        report["mcorner_max"] = mean_valid(per_class_max)
+        report.record("mcorner_mean", mean_valid(per_class_mean))
+        report.record("mcorner_max", mean_valid(per_class_max))
         return report

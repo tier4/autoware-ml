@@ -15,6 +15,7 @@ import numpy as np
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
 
 
 class ConfidentErrorRate(Metric[Detection3DState]):
@@ -48,7 +49,7 @@ class ConfidentErrorRate(Metric[Detection3DState]):
         if not 0.0 <= self.min_score <= self.score_threshold <= 1.0:
             raise ValueError("expected 0 <= min_score <= score_threshold <= 1.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report the confident false-positive rate over all classes.
 
         Args:
@@ -56,7 +57,7 @@ class ConfidentErrorRate(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         false_positive_total = 0
         confident_false_positive_total = 0
@@ -73,8 +74,8 @@ class ConfidentErrorRate(Metric[Detection3DState]):
             else float("nan")
         )
         num_frames = len(state.samples) if state.samples else float("nan")
-        return {
-            "confident_error_rate": rate,
-            "confident_error_count": float(confident_false_positive_total),
-            "confident_errors_per_frame": confident_false_positive_total / num_frames,
-        }
+        report = MetricReport()
+        report.record("confident_error_rate", rate)
+        report.record("confident_error_count", float(confident_false_positive_total))
+        report.record("confident_errors_per_frame", confident_false_positive_total / num_frames)
+        return report

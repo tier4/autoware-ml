@@ -20,6 +20,7 @@ from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
 
 
 class HeadingFlipRate(Metric[Detection3DState]):
@@ -45,7 +46,7 @@ class HeadingFlipRate(Metric[Detection3DState]):
         self.tp_threshold = float(tp_threshold)
         self.flip_threshold = float(flip_threshold)
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report per-class heading-flip rate and count at the TP threshold.
 
         Args:
@@ -53,9 +54,9 @@ class HeadingFlipRate(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
-        report: dict[str, float] = {}
+        report = MetricReport()
         rates: list[float] = []
         for label in state.labels(full=True):
             curve = state.match_curve(label, self.tp_threshold)
@@ -63,14 +64,14 @@ class HeadingFlipRate(Metric[Detection3DState]):
             errors = errors[~np.isnan(errors)]
             name = label_metric_name(label, state.class_names)
             if errors.shape[0] == 0:
-                report[f"flip_rate_{name}"] = float("nan")
-                report[f"flip_count_{name}"] = 0.0
+                report.record(f"flip_rate_{name}", float("nan"))
+                report.record(f"flip_count_{name}", 0.0)
                 continue
             flips = float(np.sum(errors > self.flip_threshold))
             rate = flips / float(errors.shape[0])
-            report[f"flip_count_{name}"] = flips
-            report[f"flip_rate_{name}"] = rate
+            report.record(f"flip_count_{name}", flips)
+            report.record(f"flip_rate_{name}", rate)
             rates.append(rate)
 
-        report["mflip_rate"] = mean_valid(rates)
+        report.record("mflip_rate", mean_valid(rates))
         return report

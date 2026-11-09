@@ -11,6 +11,7 @@ confident-phantom rate, whole-scene it characterizes the model overall.
 from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     PointCloudSeg3DState,
     valid_point_mask,
@@ -39,7 +40,7 @@ class ConfidentErrorRate(Metric[PointCloudSeg3DState]):
         if not 0.0 <= self.entropy_threshold <= 1.0:
             raise ValueError("entropy_threshold must be in [0, 1], the entropy is normalized.")
 
-    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> MetricReport:
         """Split misclassified points by confidence across frames.
 
         Args:
@@ -47,7 +48,7 @@ class ConfidentErrorRate(Metric[PointCloudSeg3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         error_total = confident_total = 0
         for frame in state.frames:
@@ -61,9 +62,10 @@ class ConfidentErrorRate(Metric[PointCloudSeg3DState]):
             error_total += int(wrong.sum())
             confident_total += int((entropy < self.entropy_threshold).sum())
 
-        return {
-            "confident_error_rate": (
-                (confident_total / error_total) if error_total else float("nan")
-            ),
-            "confident_error_count": float(confident_total),
-        }
+        report = MetricReport()
+        report.record(
+            "confident_error_rate",
+            (confident_total / error_total) if error_total else float("nan"),
+        )
+        report.record("confident_error_count", float(confident_total))
+        return report

@@ -27,6 +27,7 @@ from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.nds import Nds
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
@@ -89,8 +90,8 @@ def _det3d_shard(rank: int) -> dict[str, object]:
     }
 
 
-def _assert_reports_equal(actual: dict[str, float], expected: dict[str, float]) -> None:
-    assert set(actual) == set(expected), set(actual) ^ set(expected)
+def _assert_reports_equal(actual: MetricReport, expected: MetricReport) -> None:
+    assert set(actual.names()) == set(expected.names()), set(actual.names()) ^ set(expected.names())
     for key, expected_value in expected.items():
         actual_value = actual[key]
         if expected_value != expected_value:  # NaN

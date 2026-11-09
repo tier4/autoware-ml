@@ -27,6 +27,7 @@ import torch
 
 from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.metrics.class_groups import fold_labels, fold_labels_tensor, resolve_class_groups
+from autoware_ml.metrics.report import MetricReport
 
 
 def _reduce_scores(scores: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -247,23 +248,21 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 "single-process by design, run the test stage on a single device."
             )
 
-    def compute(self) -> dict[str, float]:
+    def compute(self) -> MetricReport:
         """Per-class components on the trained view, grouped ones under ``grouped/``.
 
         Also guards the sync path: a rank that saw no batches never ran update.
 
         Returns:
-            Metric keys mapped to values.
+            The suite's report, the grouped view's keys under the ``grouped`` view.
         """
         self._require_single_process()
         report = super().compute()
         grouped_active = self._active_grouped_components()
         if grouped_active:
-            for key, value in self._compute_report(grouped_active, self._grouped_state_for).items():
-                grouped_key = f"grouped/{key}"
-                if grouped_key in report:
-                    raise ValueError(f"Grouped view emits a colliding key {grouped_key!r}.")
-                report[grouped_key] = value
+            report.merge(
+                self._compute_report(grouped_active, self._grouped_state_for), view="grouped"
+            )
         return report
 
     def update(self, eval_out: dict[str, Any]) -> None:

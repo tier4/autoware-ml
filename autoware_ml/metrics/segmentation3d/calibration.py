@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     PointCloudSeg3DState,
     valid_point_mask,
@@ -68,7 +69,7 @@ class CalibrationError(Metric[PointCloudSeg3DState]):
         if self.num_bins < 1:
             raise ValueError("num_bins must be >= 1.")
 
-    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> MetricReport:
         """Bin per-class confidence vs accuracy across frames and reduce to ECE.
 
         Args:
@@ -76,7 +77,7 @@ class CalibrationError(Metric[PointCloudSeg3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         num_classes = state.num_classes
         conf_sum = np.zeros((num_classes, self.num_bins), dtype=np.float64)
@@ -102,4 +103,7 @@ class CalibrationError(Metric[PointCloudSeg3DState]):
             if count[c].sum() > 0
         ]
         macro = float(np.mean(per_class)) if per_class else float("nan")
-        return {"ece": overall, "ece_macro": macro}
+        report = MetricReport()
+        report.record("ece", overall)
+        report.record("ece_macro", macro)
+        return report

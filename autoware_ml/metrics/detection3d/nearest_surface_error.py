@@ -15,6 +15,7 @@ from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
 
 
 class NearestSurfaceError(Metric[Detection3DState]):
@@ -48,7 +49,7 @@ class NearestSurfaceError(Metric[Detection3DState]):
         if not 0.0 <= self.low_percentile < self.high_percentile <= 100.0:
             raise ValueError("expected 0 <= low_percentile < high_percentile <= 100.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report per-class signed nearest-surface error tails at the TP threshold.
 
         Args:
@@ -56,9 +57,9 @@ class NearestSurfaceError(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
-        report: dict[str, float] = {}
+        report = MetricReport()
         per_class_high: list[float] = []
         per_class_absmax: list[float] = []
         for label in state.labels(full=True):
@@ -67,20 +68,20 @@ class NearestSurfaceError(Metric[Detection3DState]):
             errors = errors[~np.isnan(errors)]
             name = label_metric_name(label, state.class_names)
             if errors.shape[0] == 0:
-                report[f"nsurf_mean_{name}"] = float("nan")
-                report[f"nsurf_low_{name}"] = float("nan")
-                report[f"nsurf_high_{name}"] = float("nan")
-                report[f"nsurf_absmax_{name}"] = float("nan")
+                report.record(f"nsurf_mean_{name}", float("nan"))
+                report.record(f"nsurf_low_{name}", float("nan"))
+                report.record(f"nsurf_high_{name}", float("nan"))
+                report.record(f"nsurf_absmax_{name}", float("nan"))
                 continue
             high = float(np.percentile(errors, self.high_percentile))
             absmax = float(np.max(np.abs(errors)))
-            report[f"nsurf_mean_{name}"] = float(np.mean(errors))
-            report[f"nsurf_low_{name}"] = float(np.percentile(errors, self.low_percentile))
-            report[f"nsurf_high_{name}"] = high
-            report[f"nsurf_absmax_{name}"] = absmax
+            report.record(f"nsurf_mean_{name}", float(np.mean(errors)))
+            report.record(f"nsurf_low_{name}", float(np.percentile(errors, self.low_percentile)))
+            report.record(f"nsurf_high_{name}", high)
+            report.record(f"nsurf_absmax_{name}", absmax)
             per_class_high.append(high)
             per_class_absmax.append(absmax)
 
-        report["mnsurf_high"] = mean_valid(per_class_high)
-        report["mnsurf_absmax"] = mean_valid(per_class_absmax)
+        report.record("mnsurf_high", mean_valid(per_class_high))
+        report.record("mnsurf_absmax", mean_valid(per_class_absmax))
         return report

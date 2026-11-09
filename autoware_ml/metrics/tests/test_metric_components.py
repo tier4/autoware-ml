@@ -41,13 +41,15 @@ def _det3d_state(class_names=("car",)) -> Detection3DState:
 
 def test_mean_ap_validation_emits_only_map_keys() -> None:
     out = MeanAP().evaluate(_det3d_state(), EvalStage.VAL)
-    assert set(out) == {"mAP", "mAP_car"}
+    assert set(out.names()) == {"mAP", "mAP_car"}
     assert out["mAP"] == pytest.approx(1.0)
 
 
 def test_mean_ap_test_adds_curve_details() -> None:
     out = MeanAP().evaluate(_det3d_state(), EvalStage.TEST)
-    assert {"mAP", "mAP_car", "gt_count_car", "AP_car_0p5m", "num_match_car_0p5m"} <= set(out)
+    assert {"mAP", "mAP_car", "gt_count_car", "AP_car_0p5m", "num_match_car_0p5m"} <= set(
+        out.names()
+    )
     assert out["num_match_car_0p5m"] == pytest.approx(1.0)
 
 
@@ -60,7 +62,7 @@ def test_heading_ap_is_test_only() -> None:
 def test_nds_is_test_only_and_combines_ap_with_errors() -> None:
     assert Nds().stages == frozenset({EvalStage.TEST})
     out = Nds().evaluate(_det3d_state(), EvalStage.TEST)
-    assert set(out) == {"map_based_nds", "mapH_based_nds"}
+    assert set(out.names()) == {"map_based_nds", "mapH_based_nds"}
 
 
 def test_tp_errors_emits_mean_and_per_class() -> None:
@@ -154,29 +156,31 @@ def _conf_state(num_classes: int = 2) -> ConfusionState:
 
 def test_iou_validation_emits_only_miou() -> None:
     out = IoU().evaluate(_conf_state(), EvalStage.VAL)
-    assert set(out) == {"mIoU"}
+    assert set(out.names()) == {"mIoU"}
 
 
 def test_iou_test_adds_fwiou_and_per_class() -> None:
     out = IoU().evaluate(_conf_state(), EvalStage.TEST)
-    assert {"mIoU", "fwIoU", "iou_car", "iou_road"} <= set(out)
+    assert {"mIoU", "fwIoU", "iou_car", "iou_road"} <= set(out.names())
     assert out["iou_car"] == pytest.approx(0.5)
 
 
 def test_accuracy_is_a_single_global_ratio() -> None:
     out = Accuracy().evaluate(_conf_state(), EvalStage.TEST)
-    assert set(out) == {"acc"}
+    assert set(out.names()) == {"acc"}
     assert out["acc"] == pytest.approx(2.0 / 3.0)
 
 
 def test_precision_recall_f1_validation_emits_only_mrecall() -> None:
     out = PrecisionRecallF1().evaluate(_conf_state(), EvalStage.VAL)
-    assert set(out) == {"mRecall"}
+    assert set(out.names()) == {"mRecall"}
 
 
 def test_precision_recall_f1_test_adds_macro_and_per_class() -> None:
     out = PrecisionRecallF1().evaluate(_conf_state(), EvalStage.TEST)
-    assert {"mRecall", "mPrecision", "mF1", "recall_car", "precision_car", "f1_car"} <= set(out)
+    assert {"mRecall", "mPrecision", "mF1", "recall_car", "precision_car", "f1_car"} <= set(
+        out.names()
+    )
 
 
 def test_suite_gates_metrics_by_configured_stages() -> None:
@@ -206,7 +210,7 @@ def test_suite_gates_metrics_by_configured_stages() -> None:
 
     val = suite.result(EvalStage.VAL)
     assert "mAP" in val
-    assert not any(key.startswith("mATE") for key in val)
+    assert not any(key.startswith("mATE") for key in val.names())
 
     suite.reset()
     suite.update(

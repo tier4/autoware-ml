@@ -15,6 +15,7 @@ from autoware_ml.metrics.detection3d.structures import (
     DEFAULT_TP_THRESHOLD,
     ERROR_NAMES,
 )
+from autoware_ml.metrics.report import MetricReport
 
 
 class Nds(Metric[Detection3DState]):
@@ -57,7 +58,7 @@ class Nds(Metric[Detection3DState]):
                 "the aggregate operating point must be an explicitly configured threshold."
             )
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Compute NDS-style summary scores from detection match curves.
 
         Args:
@@ -65,7 +66,7 @@ class Nds(Metric[Detection3DState]):
             stage: Evaluation stage requesting the metrics.
 
         Returns:
-            Mapping containing mAP-based and heading-aware NDS values.
+            The mAP-based and heading-aware NDS values.
         """
         labels = state.labels(full=True)
         per_class_ap: list[float] = []
@@ -97,7 +98,7 @@ class Nds(Metric[Detection3DState]):
             if error_dicts
             else {name: float("nan") for name in ERROR_NAMES}
         )
-        return {
-            "map_based_nds": nds(mean_ap, errors),
-            "mapH_based_nds": nds(mean_aph, errors),
-        }
+        report = MetricReport()
+        report.record("map_based_nds", nds(mean_ap, errors))
+        report.record("mapH_based_nds", nds(mean_aph, errors))
+        return report

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState
+from autoware_ml.metrics.report import MetricReport
 
 
 class FrameCount(Metric[Detection3DState]):
@@ -18,7 +19,7 @@ class FrameCount(Metric[Detection3DState]):
 
     range_invariant = True
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Count the accumulated frames.
 
         Args:
@@ -26,6 +27,8 @@ class FrameCount(Metric[Detection3DState]):
             stage: Evaluation stage requesting the metric.
 
         Returns:
-            Mapping with the frame count.
+            The frame count.
         """
-        return {"num_frames": float(len(state.samples))}
+        report = MetricReport()
+        report.record("num_frames", float(len(state.samples)))
+        return report

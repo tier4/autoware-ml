@@ -40,7 +40,7 @@ def test_autoware_seg3d_metric_validation_reports_headline_scalars() -> None:
     val = metric.result(EvalStage.VAL)
 
     # Validation reports exactly the three headline scalars, nothing per class.
-    assert set(val) == {"mIoU", "acc", "mRecall"}
+    assert set(val.names()) == {"mIoU", "acc", "mRecall"}
     assert val["mIoU"] == pytest.approx(1.0)
     assert val["acc"] == pytest.approx(1.0)
     assert val["mRecall"] == pytest.approx(1.0)
