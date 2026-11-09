@@ -29,6 +29,7 @@ from typing import Any
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.ops.indexing.operators import argsort
@@ -904,20 +905,20 @@ class Block(PointModule):
         return point
 
 
-class _LinearBeforeNorm(nn.Linear):
-    """``nn.Linear`` that runs in fp32 under autocast, for layers feeding a BatchNorm.
+class FullPrecisionLinear(nn.Linear):
+    """``nn.Linear`` that always computes in fp32 under CUDA autocast.
 
-    Batch normalisation makes the network invariant to the scale of the layer in
-    front of it, so nothing keeps that layer's output small. Under bf16 the output
-    mean drifts far from zero relative to its spread, the 8-bit mantissa quantizes
-    the per-point variation away and the gradients explode; under fp16 the output
-    overflows (in the 6 cm foundation model the stage 3 pooling projection passed
-    65,504 within one epoch). These projections cost a fraction of a percent of the
-    step, so they run in fp32 and the normalisation behind them stays in fp32 too.
-    Outside autocast this is a plain linear layer.
+    Used for the projections that feed a BatchNorm. Batch normalisation makes the
+    network invariant to the scale of the layer in front of it, so nothing keeps
+    that layer's output small. Under bf16 the output mean drifts far from zero
+    relative to its spread, the 8-bit mantissa quantizes the per-point variation
+    away and the gradients explode. Run in fp32 to avoid this. Outside autocast
+    this is a plain linear layer.
     """
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, input: Float[torch.Tensor, "num_points in_channels"]
+    ) -> Float[torch.Tensor, "num_points out_channels"]:
         """Apply the projection, in fp32 when CUDA autocast is enabled.
 
         Args:
@@ -962,7 +963,7 @@ class SerializedPooling(PointModule):
         self.shuffle_orders = shuffle_orders
         self.export_mode = False
         self.export_stage_index = export_stage_index
-        self.proj = _LinearBeforeNorm(in_channels, out_channels)
+        self.proj = FullPrecisionLinear(in_channels, out_channels)
         self.norm = PointSequential(nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01))
         self.act = PointSequential(nn.GELU())
 
@@ -1077,12 +1078,12 @@ class SerializedUnpooling(PointModule):
         """
         super().__init__()
         self.proj = PointSequential(
-            _LinearBeforeNorm(in_channels, out_channels),
+            FullPrecisionLinear(in_channels, out_channels),
             nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
         self.proj_skip = PointSequential(
-            _LinearBeforeNorm(skip_channels, out_channels),
+            FullPrecisionLinear(skip_channels, out_channels),
             nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )

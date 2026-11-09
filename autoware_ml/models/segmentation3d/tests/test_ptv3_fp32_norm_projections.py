@@ -22,19 +22,27 @@ import torch
 from torch import nn
 
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
+    FullPrecisionLinear,
     SerializedUnpooling,
-    _LinearBeforeNorm,
 )
 
 
-class TestLinearBeforeNorm(unittest.TestCase):
-    """Unit tests for the linear projections that feed a BatchNorm."""
+class TestFullPrecisionLinear(unittest.TestCase):
+    """Unit tests for the linear layer that computes in fp32 under autocast."""
 
     @unittest.skipUnless(torch.cuda.is_available(), "autocast on CUDA")
     def test_projection_survives_inputs_that_overflow_fp16(self) -> None:
-        """Test that the guarded projection stays finite where plain fp16 overflows."""
+        """
+        Input: a 64 -> 32 projection with weights scaled by 40 and 1000 features scaled by
+        3000, run under fp16 autocast both as FullPrecisionLinear and as an nn.Linear with
+        the same weights.
+        Expected: the products exceed the fp16 range (65,504), so the plain layer overflows,
+        while FullPrecisionLinear computes in fp32 and stays finite.
+        Check: the plain output has non-finite values; the FullPrecisionLinear output is fp32,
+        finite and matches the fp32 projection of the same input.
+        """
         torch.manual_seed(0)
-        layer = _LinearBeforeNorm(64, 32).cuda()
+        layer = FullPrecisionLinear(64, 32).cuda()
         with torch.no_grad():
             layer.weight.mul_(40.0)
         linear = nn.Linear(64, 32).cuda()
@@ -51,9 +59,15 @@ class TestLinearBeforeNorm(unittest.TestCase):
         torch.testing.assert_close(guarded, linear(feat.float()), rtol=1e-4, atol=1e-2)
 
     def test_layer_is_a_plain_linear_outside_autocast(self) -> None:
-        """Test that the layer matches nn.Linear outside autocast with the same state dict."""
+        """
+        Input: an 8 -> 4 FullPrecisionLinear and an nn.Linear loaded with its state dict,
+        applied to five random features without autocast.
+        Expected: outside autocast FullPrecisionLinear is a plain linear layer with the same
+        parameters, so checkpoints load unchanged.
+        Check: both outputs match, and the state dict holds only ``weight`` and ``bias``.
+        """
         torch.manual_seed(1)
-        layer = _LinearBeforeNorm(8, 4)
+        layer = FullPrecisionLinear(8, 4)
         plain = nn.Linear(8, 4)
         plain.load_state_dict(layer.state_dict())
         x = torch.randn(5, 8)
@@ -65,7 +79,13 @@ class TestSerializedUnpooling(unittest.TestCase):
     """Unit tests for the unpooling projections."""
 
     def test_unpooling_state_dict_layout_is_unchanged(self) -> None:
-        """Test that the projection and its BatchNorm keep their state dict keys."""
+        """
+        Input: a SerializedUnpooling with 16 input, 8 skip and 12 output channels.
+        Expected: the projections are FullPrecisionLinear inside the same PointSequential, so
+        the parameter names of existing checkpoints do not change.
+        Check: the state dict has ``proj.0.weight``, ``proj_skip.0.weight`` and the
+        BatchNorm running means at ``proj.1`` and ``proj_skip.1``.
+        """
         module = SerializedUnpooling(16, 8, 12)
         keys = set(module.state_dict())
         self.assertIn("proj.0.weight", keys)
