@@ -5,8 +5,7 @@ detection and the segmentation part a suite of each task reads. Every part is a 
 per-frame models, so a suite loops over frames and reads typed fields instead of
 indexing a flat dict by key. The per-frame metadata the region and collision filters
 need (ego pose, scene token, lanelet map path) travels as the dataset's own
-:class:`~autoware_ml.dataclasses.batch.frame_meta.FrameMetaSample`, and a frame carries
-it either for every frame of a batch or for none.
+:class:`~autoware_ml.dataclasses.batch.frame_meta.FrameMetaSample`.
 
 :class:`MetricRequirements` is what a suite declares it needs from the output at its
 stage. The eval mixin checks it against the first batch, so a model whose output lacks a
@@ -80,13 +79,6 @@ class Detection3DEvalOutput(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     frames: tuple[Detection3DEvalFrame, ...]
-
-    @model_validator(mode="after")
-    def _check_uniform_frames(self) -> Detection3DEvalOutput:
-        """Check that the optional parts are attached to every frame or to none."""
-        _check_uniform(self.frames, "frame_meta")
-        _check_uniform(self.frames, "gt_num_points")
-        return self
 
     @property
     def carries_frame_meta(self) -> bool:
@@ -164,14 +156,6 @@ class Segmentation3DEvalOutput(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
 
     frames: tuple[Segmentation3DEvalFrame, ...]
-
-    @model_validator(mode="after")
-    def _check_uniform_frames(self) -> Segmentation3DEvalOutput:
-        """Check that the optional parts are attached to every frame or to none."""
-        _check_uniform(self.frames, "frame_meta")
-        _check_uniform(self.frames, "scores")
-        _check_uniform(self.frames, "gt_boxes")
-        return self
 
     @property
     def carries_frame_meta(self) -> bool:
@@ -252,16 +236,6 @@ class MetricRequirements(BaseModel):
         if self.gt_boxes and not (segmentation is not None and segmentation.carries_gt_boxes):
             missing.append("gt_boxes (detection ground truth inside the segmentation frames)")
         return tuple(missing)
-
-
-def _check_uniform(frames: tuple[BaseModel, ...], field: str) -> None:
-    """Raise when an optional part is attached to some frames of a batch but not to all."""
-    present = [getattr(frame, field) is not None for frame in frames]
-    if any(present) and not all(present):
-        raise ValueError(
-            f"{field} is attached to {sum(present)} of {len(frames)} frames, a batch carries it "
-            "for every frame or for none."
-        )
 
 
 def _carries(
