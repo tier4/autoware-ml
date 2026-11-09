@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Prediction column of the record table.
+"""Motion column of the record table.
 
 A motion forecasting record stores only lightweight references to the source of the agent
 tracks and the vector map of one scenario, plus the shape of its time window. The tracks
@@ -41,9 +41,9 @@ from autoware_ml.types.dataset import DatasetFormat
 
 
 @dataclass(frozen=True)
-class PredictionDatasetSchema(BaseFieldSchema):
+class MotionDatasetSchema(BaseFieldSchema):
     """
-    Dataclass to define the polars schema of the prediction struct column.
+    Dataclass to define the polars schema of the motion struct column.
     """
 
     dataset_format = DatasetTableColumn("dataset_format", pl.String)
@@ -58,9 +58,9 @@ class PredictionDatasetSchema(BaseFieldSchema):
     num_tracks = DatasetTableColumn("num_tracks", pl.Int32)
 
 
-class PredictionDataModel(BaseModel, DataModelInterface):
+class MotionDataModel(BaseModel, DataModelInterface):
     """
-    Prediction data model that can be shared by multiple datasets. It names the source of the
+    Motion data model that can be shared by multiple datasets. It names the source of the
     agent tracks and the vector map of one scenario and describes its time window.
 
     Attributes:
@@ -127,12 +127,12 @@ class PredictionDataModel(BaseModel, DataModelInterface):
         return None if path is None else check_relative_path(path, "map_relative_path")
 
     @model_validator(mode="after")
-    def _check_window_and_source(self) -> PredictionDataModel:
+    def _check_window_and_source(self) -> MotionDataModel:
         """
         Check that the time window is well formed and the source fields fit the format.
 
         Returns:
-          PredictionDataModel: The model, unchanged.
+          MotionDataModel: The model, unchanged.
         """
 
         if self.first_step_index < 0:
@@ -177,48 +177,48 @@ class PredictionDataModel(BaseModel, DataModelInterface):
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """
-        Convert the prediction data model to a dictionary.
+        Convert the motion data model to a dictionary.
 
         Returns:
-          Mapping[str, Any]: Dictionary representation of the prediction data model.
+          Mapping[str, Any]: Dictionary representation of the motion data model.
         """
 
         return {
-            PredictionDatasetSchema.dataset_format.name: self.dataset_format.value,
-            PredictionDatasetSchema.tracks_relative_path.name: self.tracks_relative_path,
-            PredictionDatasetSchema.map_relative_path.name: self.map_relative_path,
-            PredictionDatasetSchema.scenario_key.name: self.scenario_key,
-            PredictionDatasetSchema.focal_track_id.name: self.focal_track_id,
-            PredictionDatasetSchema.first_step_index.name: self.first_step_index,
-            PredictionDatasetSchema.current_step_index.name: self.current_step_index,
-            PredictionDatasetSchema.num_steps.name: self.num_steps,
-            PredictionDatasetSchema.step_seconds.name: self.step_seconds,
-            PredictionDatasetSchema.num_tracks.name: self.num_tracks,
+            MotionDatasetSchema.dataset_format.name: self.dataset_format.value,
+            MotionDatasetSchema.tracks_relative_path.name: self.tracks_relative_path,
+            MotionDatasetSchema.map_relative_path.name: self.map_relative_path,
+            MotionDatasetSchema.scenario_key.name: self.scenario_key,
+            MotionDatasetSchema.focal_track_id.name: self.focal_track_id,
+            MotionDatasetSchema.first_step_index.name: self.first_step_index,
+            MotionDatasetSchema.current_step_index.name: self.current_step_index,
+            MotionDatasetSchema.num_steps.name: self.num_steps,
+            MotionDatasetSchema.step_seconds.name: self.step_seconds,
+            MotionDatasetSchema.num_tracks.name: self.num_tracks,
         }
 
     @classmethod
-    def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> PredictionDataModel:
+    def load_from_dictionary(cls, data_model: Mapping[str, Any]) -> MotionDataModel:
         """
-        Load the prediction data model and decode it to the corresponding PredictionDataModel
+        Load the motion data model and decode it to the corresponding MotionDataModel
         from a dictionary, which is deserialized from a Polars dataframe.
 
         Args:
-          data_model: Dictionary representation of the prediction data model, which is
+          data_model: Dictionary representation of the motion data model, which is
             deserialized from a Polars dataframe.
 
         Returns:
-          PredictionDataModel: PredictionDataModel object.
+          MotionDataModel: MotionDataModel object.
         """
 
         return cls(
-            dataset_format=DatasetFormat(data_model[PredictionDatasetSchema.dataset_format.name]),
-            tracks_relative_path=data_model[PredictionDatasetSchema.tracks_relative_path.name],
-            map_relative_path=data_model[PredictionDatasetSchema.map_relative_path.name],
-            scenario_key=data_model[PredictionDatasetSchema.scenario_key.name],
-            focal_track_id=data_model[PredictionDatasetSchema.focal_track_id.name],
-            first_step_index=data_model[PredictionDatasetSchema.first_step_index.name],
-            current_step_index=data_model[PredictionDatasetSchema.current_step_index.name],
-            num_steps=data_model[PredictionDatasetSchema.num_steps.name],
-            step_seconds=data_model[PredictionDatasetSchema.step_seconds.name],
-            num_tracks=data_model[PredictionDatasetSchema.num_tracks.name],
+            dataset_format=DatasetFormat(data_model[MotionDatasetSchema.dataset_format.name]),
+            tracks_relative_path=data_model[MotionDatasetSchema.tracks_relative_path.name],
+            map_relative_path=data_model[MotionDatasetSchema.map_relative_path.name],
+            scenario_key=data_model[MotionDatasetSchema.scenario_key.name],
+            focal_track_id=data_model[MotionDatasetSchema.focal_track_id.name],
+            first_step_index=data_model[MotionDatasetSchema.first_step_index.name],
+            current_step_index=data_model[MotionDatasetSchema.current_step_index.name],
+            num_steps=data_model[MotionDatasetSchema.num_steps.name],
+            step_seconds=data_model[MotionDatasetSchema.step_seconds.name],
+            num_tracks=data_model[MotionDatasetSchema.num_tracks.name],
         )
