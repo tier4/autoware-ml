@@ -328,31 +328,17 @@ class BaseBBoxes3D(ABC):
         raise NotImplementedError("Subclasses must implement the `corners` property.")
 
     @abstractmethod
-    def corners_to_surfaces_3d(self) -> Float32[Tensor, "num_bboxes 6 4 3"]:
-        """
-        Get the corners of the 3D bounding boxes in the form of surfaces.
-
-        Returns:
-            (num_bboxes, 6, 4, 3): The corners of the 3D bounding boxes as surfaces, where
-                6 is the number of surface, 4 is the number of corners for each surface,
-                and 3 is the (x, y, z) coordinates.
-        """
-        raise NotImplementedError(
-            "Subclasses must implement the `corners_to_surfaces_3d` property."
-        )
-
-    @abstractmethod
     def compute_points_in_bboxes(
         self, points: Float32[Tensor, "num_points 3"]
     ) -> Bool[Tensor, "num_bboxes num_points"]:
         """
-        Compute the number of points inside each 3D bounding box.
+        Mark the points inside every 3D bounding box, the surface included.
 
         Args:
             points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            Bool[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
             inside each bounding box.
         """
         raise NotImplementedError(
