@@ -95,8 +95,8 @@ def _assert_reports_equal(actual: MetricReport, expected: MetricReport) -> None:
     expected_keys = set(expected.metric_names())
     assert actual_keys == expected_keys, actual_keys ^ expected_keys
     for key in expected.metric_names():
-        expected_value = expected.value(key)
-        actual_value = actual.value(key)
+        expected_value = expected.metric_value(key)
+        actual_value = actual.metric_value(key)
         if expected_value != expected_value:  # NaN
             assert actual_value != actual_value, (key, actual_value)
         else:

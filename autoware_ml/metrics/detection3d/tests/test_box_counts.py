@@ -72,12 +72,12 @@ class TestBoxCounts(unittest.TestCase):
 
         report = suite.result(EvalStage.VAL)
 
-        self.assertEqual(report.value(MetricKey(name="total_num_gts")), 2.0)
-        self.assertEqual(report.value(MetricKey(name="num_gts_car")), 2.0)
-        self.assertEqual(report.value(MetricKey(name="num_gts_pedestrian")), 0.0)
-        self.assertEqual(report.value(MetricKey(name="total_num_preds")), 3.0)
-        self.assertEqual(report.value(MetricKey(name="num_preds_car")), 2.0)
-        self.assertEqual(report.value(MetricKey(name="num_preds_pedestrian")), 1.0)
+        self.assertEqual(report.metric_value(MetricKey(name="total_num_gts")), 2.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_gts_car")), 2.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_gts_pedestrian")), 0.0)
+        self.assertEqual(report.metric_value(MetricKey(name="total_num_preds")), 3.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_preds_car")), 2.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_preds_pedestrian")), 1.0)
 
     def test_counts_are_reported_per_range(self) -> None:
         """Test that each range bucket counts only the boxes clipped into it."""
@@ -87,19 +87,26 @@ class TestBoxCounts(unittest.TestCase):
         report = suite.result(EvalStage.VAL)
 
         # Near bucket: the car GT at 10m, the car and pedestrian predictions at 10m and 20m
-        self.assertEqual(report.value(MetricKey(name="num_gts_car", range_suffix="0m_50m")), 1.0)
-        self.assertEqual(report.value(MetricKey(name="num_preds_car", range_suffix="0m_50m")), 1.0)
         self.assertEqual(
-            report.value(MetricKey(name="num_preds_pedestrian", range_suffix="0m_50m")), 1.0
+            report.metric_value(MetricKey(name="num_gts_car", range_suffix="0m_50m")), 1.0
+        )
+        self.assertEqual(
+            report.metric_value(MetricKey(name="num_preds_car", range_suffix="0m_50m")), 1.0
+        )
+        self.assertEqual(
+            report.metric_value(MetricKey(name="num_preds_pedestrian", range_suffix="0m_50m")), 1.0
         )
 
         # Far bucket: the car GT at 70m and the car prediction at 60m
-        self.assertEqual(report.value(MetricKey(name="num_gts_car", range_suffix="50m_100m")), 1.0)
         self.assertEqual(
-            report.value(MetricKey(name="num_preds_car", range_suffix="50m_100m")), 1.0
+            report.metric_value(MetricKey(name="num_gts_car", range_suffix="50m_100m")), 1.0
         )
         self.assertEqual(
-            report.value(MetricKey(name="num_preds_pedestrian", range_suffix="50m_100m")), 0.0
+            report.metric_value(MetricKey(name="num_preds_car", range_suffix="50m_100m")), 1.0
+        )
+        self.assertEqual(
+            report.metric_value(MetricKey(name="num_preds_pedestrian", range_suffix="50m_100m")),
+            0.0,
         )
 
     def test_counts_keep_all_gt_without_a_point_filter(self) -> None:
@@ -109,8 +116,8 @@ class TestBoxCounts(unittest.TestCase):
 
         report = suite.result(EvalStage.VAL)
 
-        self.assertEqual(report.value(MetricKey(name="total_num_gts")), 3.0)
-        self.assertEqual(report.value(MetricKey(name="num_gts_pedestrian")), 1.0)
+        self.assertEqual(report.metric_value(MetricKey(name="total_num_gts")), 3.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_gts_pedestrian")), 1.0)
 
 
 if __name__ == "__main__":

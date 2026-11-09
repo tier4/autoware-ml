@@ -319,8 +319,10 @@ def test_confusion_suite_region_filter_buckets() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="acc")) == pytest.approx(0.5)
-    assert report.value(MetricKey(name="acc", filter_name="region_road")) == pytest.approx(1.0)
+    assert report.metric_value(MetricKey(name="acc")) == pytest.approx(0.5)
+    assert report.metric_value(MetricKey(name="acc", filter_name="region_road")) == pytest.approx(
+        1.0
+    )
 
 
 def _box(x: float) -> list[float]:
@@ -356,10 +358,10 @@ def test_detection3d_suite_region_filter_restricts_gt() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="gt_count_car")) == pytest.approx(2.0)
-    assert report.value(MetricKey(name="gt_count_car", filter_name="region_road")) == pytest.approx(
-        1.0
-    )
+    assert report.metric_value(MetricKey(name="gt_count_car")) == pytest.approx(2.0)
+    assert report.metric_value(
+        MetricKey(name="gt_count_car", filter_name="region_road")
+    ) == pytest.approx(1.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -442,10 +444,10 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="acc")) == pytest.approx(
+    assert report.metric_value(MetricKey(name="acc")) == pytest.approx(
         1.0 / 3.0
     )  # 1 of 3 points correct, all scenes
-    assert report.value(MetricKey(name="acc", filter_name="region_road")) == pytest.approx(
+    assert report.metric_value(MetricKey(name="acc", filter_name="region_road")) == pytest.approx(
         1.0
     )  # only s_map's road point
     assert suite.region_frames_seen.tolist() == [2]
@@ -482,8 +484,8 @@ def test_confusion_suite_frame_count_follows_filter_coverage() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="num_frames")) == 2.0
-    assert report.value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
+    assert report.metric_value(MetricKey(name="num_frames")) == 2.0
+    assert report.metric_value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
 
 
 def test_point_cloud_suite_frame_count_follows_filter_coverage() -> None:
@@ -518,8 +520,8 @@ def test_point_cloud_suite_frame_count_follows_filter_coverage() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="num_frames")) == 2.0
-    assert report.value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
+    assert report.metric_value(MetricKey(name="num_frames")) == 2.0
+    assert report.metric_value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
     assert len(suite.state_for(None, region).frames) == 1
 
 
@@ -556,8 +558,8 @@ def test_detection3d_suite_frame_count_follows_filter_coverage() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="num_frames")) == 2.0
-    assert report.value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
+    assert report.metric_value(MetricKey(name="num_frames")) == 2.0
+    assert report.metric_value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
     assert suite.region_frames_covered.tolist() == [1]
 
 
@@ -592,10 +594,10 @@ def test_detection3d_suite_excludes_scene_without_lanelet_map() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="gt_count_car")) == pytest.approx(2.0)
-    assert report.value(MetricKey(name="gt_count_car", filter_name="region_road")) == pytest.approx(
-        1.0
-    )
+    assert report.metric_value(MetricKey(name="gt_count_car")) == pytest.approx(2.0)
+    assert report.metric_value(
+        MetricKey(name="gt_count_car", filter_name="region_road")
+    ) == pytest.approx(1.0)
     assert suite.region_frames_seen.tolist() == [2]
     assert suite.region_frames_covered.tolist() == [1]
     # The uncovered frame is omitted from the filtered state entirely, so
@@ -636,12 +638,12 @@ def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert report.value(MetricKey(name="error_rate")) == pytest.approx(
+    assert report.metric_value(MetricKey(name="error_rate")) == pytest.approx(
         1.0 / 3.0
     )  # 1 wrong of 3, all scenes
-    assert report.value(MetricKey(name="error_rate", filter_name="region_road")) == pytest.approx(
-        0.0
-    )  # only s_map, clean
+    assert report.metric_value(
+        MetricKey(name="error_rate", filter_name="region_road")
+    ) == pytest.approx(0.0)  # only s_map, clean
     assert suite.region_frames_seen.tolist() == [2]
     assert suite.region_frames_covered.tolist() == [1]
 

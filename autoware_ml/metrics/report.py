@@ -100,7 +100,7 @@ class MetricReport:
 
     def __init__(self) -> None:
         """Start an empty report."""
-        self._values: dict[MetricKey, float] = {}
+        self._metrics: dict[MetricKey, float] = {}
 
     def record(self, name: str, value: float) -> None:
         """
@@ -120,12 +120,12 @@ class MetricReport:
           key: Where the value is reported.
           value: The value.
         """
-        if key in self._values:
+        if key in self._metrics:
             raise ValueError(
                 f"Two metrics emit the same key {str(key)!r}. Give one a distinct name, "
                 "filter name or suite prefix."
             )
-        self._values[key] = float(value)
+        self._metrics[key] = float(value)
 
     def merge(
         self,
@@ -150,7 +150,7 @@ class MetricReport:
                 key.scoped(
                     range_suffix=range_suffix, filter_name=filter_name, view=view, prefix=prefix
                 ),
-                other.value(key),
+                other.metric_value(key),
             )
 
     def metric_names(self) -> tuple[MetricKey, ...]:
@@ -160,9 +160,9 @@ class MetricReport:
         Returns:
           tuple[MetricKey, ...]: The keys.
         """
-        return tuple(self._values)
+        return tuple(self._metrics)
 
-    def value(self, key: MetricKey) -> float:
+    def metric_value(self, key: MetricKey) -> float:
         """
         The value reported under a key.
 
@@ -172,11 +172,11 @@ class MetricReport:
         Returns:
           float: The value.
         """
-        if key not in self._values:
+        if key not in self._metrics:
             raise KeyError(
-                f"{key} is not reported, the report holds {list(map(str, self._values))}."
+                f"{key} is not reported, the report holds {list(map(str, self._metrics))}."
             )
-        return self._values[key]
+        return self._metrics[key]
 
     def to_log_dict(self, split: str) -> dict[str, float]:
         """
@@ -193,7 +193,7 @@ class MetricReport:
           dict[str, float]: Rendered ``{split}/{name}`` to value.
         """
         payload: dict[str, float] = {}
-        for key, value in self._values.items():
+        for key, value in self._metrics.items():
             name = f"{split}/{key}"
             if name in payload:
                 raise ValueError(
@@ -205,9 +205,9 @@ class MetricReport:
 
     def __len__(self) -> int:
         """The number of reported values."""
-        return len(self._values)
+        return len(self._metrics)
 
     def __repr__(self) -> str:
         """Render the report as its names and values."""
-        rendered = {str(key): value for key, value in self._values.items()}
+        rendered = {str(key): value for key, value in self._metrics.items()}
         return f"MetricReport({rendered!r})"

@@ -75,7 +75,7 @@ class TestFrameCount(unittest.TestCase):
 
         report = suite.result(EvalStage.VAL)
 
-        self.assertEqual(report.value(MetricKey(name="num_frames")), 3.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_frames")), 3.0)
 
     def test_range_buckets_do_not_repeat_the_frame_count(self) -> None:
         """Test that the range-invariant count is reported once, not per range window."""
@@ -93,7 +93,7 @@ class TestFrameCount(unittest.TestCase):
 
         report = suite.result(EvalStage.TEST)
 
-        self.assertEqual(report.value(MetricKey(name="num_frames")), 2.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_frames")), 2.0)
         self.assertNotIn(MetricKey(name="num_frames", range_suffix="0m_50m"), report.metric_names())
         self.assertNotIn(
             MetricKey(name="num_frames", range_suffix="50m_100m"), report.metric_names()
@@ -114,7 +114,7 @@ class TestFrameCount(unittest.TestCase):
 
         report = suite.result(EvalStage.VAL)
 
-        self.assertEqual(report.value(MetricKey(name="num_frames")), 1.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_frames")), 1.0)
 
 
 if __name__ == "__main__":

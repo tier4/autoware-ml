@@ -124,7 +124,7 @@ places each metric's keys in the filter slice and range window it evaluated, the
 suite's keys under its prefix, and the key is logged as `{split}/{rendered key}`, for example
 `test/det3d/region_road/mAP_0m_50m`. A report rejects a duplicate key at every level and the log
 payload rejects two keys that render to one name, so two metrics, two filters or two suites can
-never silently overwrite each other. A value is read back by its key, `report.value(MetricKey(...))`,
+never silently overwrite each other. A value is read back by its key, `report.metric_value(MetricKey(...))`,
 and `report.metric_names()` lists the keys. Two suites of the same class run side by side under
 distinct configured prefixes, and the mixin rejects duplicate prefixes.
 

@@ -46,9 +46,9 @@ def test_autoware_seg3d_metric_validation_reports_headline_scalars() -> None:
         MetricKey(name="acc"),
         MetricKey(name="mRecall"),
     }
-    assert val.value(MetricKey(name="mIoU")) == pytest.approx(1.0)
-    assert val.value(MetricKey(name="acc")) == pytest.approx(1.0)
-    assert val.value(MetricKey(name="mRecall")) == pytest.approx(1.0)
+    assert val.metric_value(MetricKey(name="mIoU")) == pytest.approx(1.0)
+    assert val.metric_value(MetricKey(name="acc")) == pytest.approx(1.0)
+    assert val.metric_value(MetricKey(name="mRecall")) == pytest.approx(1.0)
 
 
 def test_autoware_seg3d_metric_test_reports_full_and_per_class() -> None:
@@ -60,10 +60,12 @@ def test_autoware_seg3d_metric_test_reports_full_and_per_class() -> None:
     test = metric.result(EvalStage.TEST)
 
     for scalar in ("mIoU", "acc", "mRecall", "fwIoU", "mPrecision", "mF1"):
-        assert test.value(MetricKey(name=scalar)) == pytest.approx(1.0)
+        assert test.metric_value(MetricKey(name=scalar)) == pytest.approx(1.0)
     for class_index in range(3):
         for family in ("iou", "recall", "precision", "f1"):
-            assert test.value(MetricKey(name=f"{family}_class_{class_index}")) == pytest.approx(1.0)
+            assert test.metric_value(
+                MetricKey(name=f"{family}_class_{class_index}")
+            ) == pytest.approx(1.0)
 
 
 def test_autoware_seg3d_metric_excludes_classes_without_support() -> None:
@@ -88,16 +90,16 @@ def test_autoware_seg3d_metric_per_class_values_are_exact() -> None:
     test = metric.result(EvalStage.TEST)
 
     # Class 0: TP=1, FP=0, FN=1 -> IoU 1/2, recall 1/2, precision 1/1, f1 2/3.
-    assert test.value(MetricKey(name="iou_class_0")) == pytest.approx(0.5)
-    assert test.value(MetricKey(name="recall_class_0")) == pytest.approx(0.5)
-    assert test.value(MetricKey(name="precision_class_0")) == pytest.approx(1.0)
-    assert test.value(MetricKey(name="f1_class_0")) == pytest.approx(2.0 / 3.0)
+    assert test.metric_value(MetricKey(name="iou_class_0")) == pytest.approx(0.5)
+    assert test.metric_value(MetricKey(name="recall_class_0")) == pytest.approx(0.5)
+    assert test.metric_value(MetricKey(name="precision_class_0")) == pytest.approx(1.0)
+    assert test.metric_value(MetricKey(name="f1_class_0")) == pytest.approx(2.0 / 3.0)
     # Class 1: TP=1, FP=1, FN=0 -> IoU 1/2, recall 1/1, precision 1/2, f1 2/3.
-    assert test.value(MetricKey(name="iou_class_1")) == pytest.approx(0.5)
-    assert test.value(MetricKey(name="recall_class_1")) == pytest.approx(1.0)
-    assert test.value(MetricKey(name="precision_class_1")) == pytest.approx(0.5)
-    assert test.value(MetricKey(name="f1_class_1")) == pytest.approx(2.0 / 3.0)
-    assert test.value(MetricKey(name="acc")) == pytest.approx(2.0 / 3.0)
+    assert test.metric_value(MetricKey(name="iou_class_1")) == pytest.approx(0.5)
+    assert test.metric_value(MetricKey(name="recall_class_1")) == pytest.approx(1.0)
+    assert test.metric_value(MetricKey(name="precision_class_1")) == pytest.approx(0.5)
+    assert test.metric_value(MetricKey(name="f1_class_1")) == pytest.approx(2.0 / 3.0)
+    assert test.metric_value(MetricKey(name="acc")) == pytest.approx(2.0 / 3.0)
 
 
 def test_autoware_seg3d_metric_uses_class_names_when_provided() -> None:
@@ -131,13 +133,15 @@ def test_autoware_seg3d_metric_range_buckets_are_exact() -> None:
     test = metric.result(EvalStage.TEST)
 
     # Overall: 1 of 2 correct.
-    assert test.value(MetricKey(name="acc")) == pytest.approx(0.5)
+    assert test.metric_value(MetricKey(name="acc")) == pytest.approx(0.5)
     # 0-50 m sees only the near (correct) point; 50-90 m only the far (wrong) point.
-    assert test.value(MetricKey(name="acc", range_suffix="0m_50m")) == pytest.approx(1.0)
-    assert test.value(MetricKey(name="acc", range_suffix="50m_90m")) == pytest.approx(0.0)
+    assert test.metric_value(MetricKey(name="acc", range_suffix="0m_50m")) == pytest.approx(1.0)
+    assert test.metric_value(MetricKey(name="acc", range_suffix="50m_90m")) == pytest.approx(0.0)
     # Per-class-per-range keys are emitted.
     assert MetricKey(name="iou_class_0", range_suffix="0m_50m") in test.metric_names()
-    assert test.value(MetricKey(name="iou_class_0", range_suffix="0m_50m")) == pytest.approx(1.0)
+    assert test.metric_value(MetricKey(name="iou_class_0", range_suffix="0m_50m")) == pytest.approx(
+        1.0
+    )
 
 
 def test_autoware_seg3d_frame_count_sums_frames_across_batches() -> None:
@@ -160,7 +164,7 @@ def test_autoware_seg3d_frame_count_sums_frames_across_batches() -> None:
 
     val = metric.result(EvalStage.VAL)
 
-    assert val.value(MetricKey(name="num_frames")) == 3.0
+    assert val.metric_value(MetricKey(name="num_frames")) == 3.0
     # Range windows clip points, never frames, so the count is reported once, not per window.
     assert MetricKey(name="num_frames", range_suffix="0m_50m") not in val.metric_names()
 
@@ -174,4 +178,4 @@ def test_autoware_seg3d_frame_count_resets_with_the_suite() -> None:
     metric.reset()
     metric.update(_eval_out(torch.tensor([0]), torch.tensor([0]), _coord(1)))
 
-    assert metric.result(EvalStage.TEST).value(MetricKey(name="num_frames")) == 1.0
+    assert metric.result(EvalStage.TEST).metric_value(MetricKey(name="num_frames")) == 1.0

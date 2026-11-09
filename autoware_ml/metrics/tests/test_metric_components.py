@@ -43,7 +43,7 @@ def _det3d_state(class_names=("car",)) -> Detection3DState:
 def test_mean_ap_validation_emits_only_map_keys() -> None:
     out = MeanAP().evaluate(_det3d_state(), EvalStage.VAL)
     assert set(out.metric_names()) == {MetricKey(name="mAP"), MetricKey(name="mAP_car")}
-    assert out.value(MetricKey(name="mAP")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="mAP")) == pytest.approx(1.0)
 
 
 def test_mean_ap_test_adds_curve_details() -> None:
@@ -55,13 +55,13 @@ def test_mean_ap_test_adds_curve_details() -> None:
         MetricKey(name="AP_car_0p5m"),
         MetricKey(name="num_match_car_0p5m"),
     } <= set(out.metric_names())
-    assert out.value(MetricKey(name="num_match_car_0p5m")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="num_match_car_0p5m")) == pytest.approx(1.0)
 
 
 def test_heading_ap_is_test_only() -> None:
     assert HeadingAP().stages == frozenset({EvalStage.TEST})
     out = HeadingAP().evaluate(_det3d_state(), EvalStage.TEST)
-    assert out.value(MetricKey(name="mAPH")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="mAPH")) == pytest.approx(1.0)
 
 
 def test_nds_is_test_only_and_combines_ap_with_errors() -> None:
@@ -93,13 +93,13 @@ def test_tp_error_means_ignore_classes_without_true_positives() -> None:
     state = Detection3DState(samples=[sample], class_names=("car", "truck"))
 
     nds_out = Nds().evaluate(state, EvalStage.TEST)
-    assert nds_out.value(MetricKey(name="map_based_nds")) == pytest.approx(
+    assert nds_out.metric_value(MetricKey(name="map_based_nds")) == pytest.approx(
         0.9
     )  # 0.7 if the absent truck leaked in
 
     tp_out = TpErrors().evaluate(state, EvalStage.TEST)
-    assert tp_out.value(MetricKey(name="mATE_default")) == pytest.approx(0.0)
-    assert tp_out.value(MetricKey(name="mAAE_default")) == pytest.approx(1.0)
+    assert tp_out.metric_value(MetricKey(name="mATE_default")) == pytest.approx(0.0)
+    assert tp_out.metric_value(MetricKey(name="mAAE_default")) == pytest.approx(1.0)
 
 
 def _det3d_state_tp_fp() -> Detection3DState:
@@ -124,19 +124,21 @@ def _det3d_state_tp_fp() -> Detection3DState:
 
 def test_det3d_confident_error_flags_high_score_false_positive() -> None:
     out = ConfidentErrorRate(score_threshold=0.5).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
-    assert out.value(MetricKey(name="confident_error_rate")) == pytest.approx(
+    assert out.metric_value(MetricKey(name="confident_error_rate")) == pytest.approx(
         1.0
     )  # the one FP (0.8) is confident
-    assert out.value(MetricKey(name="confident_error_count")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="confident_error_count")) == pytest.approx(1.0)
     lifted = ConfidentErrorRate(score_threshold=0.9).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
-    assert lifted.value(MetricKey(name="confident_error_rate")) == pytest.approx(0.0)  # 0.8 < 0.9
+    assert lifted.metric_value(MetricKey(name="confident_error_rate")) == pytest.approx(
+        0.0
+    )  # 0.8 < 0.9
 
 
 def test_det3d_calibration_matches_hand_computed_ece() -> None:
     # TP score 0.9 (correct) -> bin 13, gap |1-0.9|=0.1. FP score 0.8 (wrong) -> bin 12,
     # gap |0-0.8|=0.8. Each bin weight 1/2 -> ECE = 0.5*0.1 + 0.5*0.8 = 0.45.
     out = CalibrationError(num_bins=15).evaluate(_det3d_state_tp_fp(), EvalStage.TEST)
-    assert out.value(MetricKey(name="ece")) == pytest.approx(0.45)
+    assert out.metric_value(MetricKey(name="ece")) == pytest.approx(0.45)
     assert MetricKey(name="ece_macro") in out.metric_names()
 
 
@@ -179,13 +181,13 @@ def test_iou_test_adds_fwiou_and_per_class() -> None:
         MetricKey(name="iou_car"),
         MetricKey(name="iou_road"),
     } <= set(out.metric_names())
-    assert out.value(MetricKey(name="iou_car")) == pytest.approx(0.5)
+    assert out.metric_value(MetricKey(name="iou_car")) == pytest.approx(0.5)
 
 
 def test_accuracy_is_a_single_global_ratio() -> None:
     out = Accuracy().evaluate(_conf_state(), EvalStage.TEST)
     assert set(out.metric_names()) == {MetricKey(name="acc")}
-    assert out.value(MetricKey(name="acc")) == pytest.approx(2.0 / 3.0)
+    assert out.metric_value(MetricKey(name="acc")) == pytest.approx(2.0 / 3.0)
 
 
 def test_precision_recall_f1_validation_emits_only_mrecall() -> None:

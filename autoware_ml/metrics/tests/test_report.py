@@ -69,11 +69,11 @@ class TestMetricReport(unittest.TestCase):
         report.record("mAP", 0.5)
         report.record("mAP_car", 0.25)
         self.assertEqual(report.metric_names(), (MetricKey(name="mAP"), MetricKey(name="mAP_car")))
-        self.assertEqual(report.value(MetricKey(name="mAP")), 0.5)
-        self.assertEqual(report.value(MetricKey(name="mAP_car")), 0.25)
+        self.assertEqual(report.metric_value(MetricKey(name="mAP")), 0.5)
+        self.assertEqual(report.metric_value(MetricKey(name="mAP_car")), 0.25)
         self.assertEqual(len(report), 2)
         with self.assertRaisesRegex(KeyError, "mAPH is not reported"):
-            report.value(MetricKey(name="mAPH"))
+            report.metric_value(MetricKey(name="mAPH"))
 
     def test_rejects_a_duplicate_key(self) -> None:
         """
@@ -116,7 +116,7 @@ class TestMetricReport(unittest.TestCase):
         suite.merge(metric, range_suffix="0m_50m", filter_name="region_road")
         placed = MetricKey(name="mAP", range_suffix="0m_50m", filter_name="region_road")
         self.assertEqual(suite.metric_names(), (MetricKey(name="mAP"), placed))
-        self.assertEqual(suite.value(placed), 0.5)
+        self.assertEqual(suite.metric_value(placed), 0.5)
         self.assertEqual(metric.metric_names(), (MetricKey(name="mAP"),))
 
         model = MetricReport()
