@@ -36,7 +36,7 @@ ExtraConvsSource = Literal["on_input", "on_lateral", "on_output"]
 EXTRA_CONVS_SOURCES: tuple[ExtraConvsSource, ...] = ("on_input", "on_lateral", "on_output")
 
 
-class BaseFPN(ABC, nn.Module):
+class BaseFPN(nn.Module, ABC):
     """Lateral projection and top-down fusion shared by the feature pyramid necks.
 
     Every used input level is projected to ``out_channels`` by a 1x1 lateral convolution and
