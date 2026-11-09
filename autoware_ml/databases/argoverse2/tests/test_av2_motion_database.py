@@ -93,7 +93,7 @@ def test_hash_fields_and_compact_representations(corpus: Path, tmp_path: Path) -
         "dataset_format",
     ]
     assert fields["database"] == "AV2MotionDatabase"
-    assert fields["box3d_pipelines"] == "[]"
+    assert fields["box3d_pipelines"] == "None"
     assert fields["lidar_pointcloud_num_features"] == "None"
     assert fields["observed_steps"] == "50"
     assert fields["dataset_format"] == "av2"
