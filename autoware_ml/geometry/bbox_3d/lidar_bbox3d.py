@@ -166,21 +166,23 @@ class LidarBBoxes3D(BaseBBoxes3D):
 
         centers = self.bbox_params[:, :3]
         half_dims = self.dims / 2
-        # Only the points within the circumscribed radius of a box along x are tested: one
-        # slice of the points sorted along x, found by binary search. The radius carries a
-        # rounding margin so that the slice holds every point of the box surface.
+        # Only the points within the circumscribed BEV radius of a box are tested: the slice
+        # of the points sorted along x, found by binary search, narrowed along y by one
+        # comparison. The radius carries a rounding margin so that the candidates hold every
+        # point of the box surface.
         bev_radius = torch.linalg.vector_norm(half_dims[:, :2], dim=1) * (1 + 1e-5)
-        order = torch.argsort(points[:, 0])
-        sorted_x = points[order, 0]
+        sorted_x, order = torch.sort(points[:, 0])
+        sorted_points = points[order]
         slice_begins = torch.searchsorted(sorted_x, centers[:, 0] - bev_radius)
         slice_ends = torch.searchsorted(sorted_x, centers[:, 0] + bev_radius, right=True)
         to_box_frame = create_axis_rotation_matrices(-self.yaw, axis=self.YAW_AXIS)
         for index, (begin, end) in enumerate(zip(slice_begins.tolist(), slice_ends.tolist())):
-            candidates = order[begin:end]
-            offsets = points[candidates] - centers[index]
+            slice_points = sorted_points[begin:end]
+            candidates = (slice_points[:, 1] - centers[index, 1]).abs() <= bev_radius[index]
+            offsets = slice_points[candidates] - centers[index]
             local_offsets = rotate_points_3d(offsets[None], to_box_frame[index : index + 1])[0]
             inside = (local_offsets.abs() <= half_dims[index]).all(dim=1)
-            in_bboxes_mask[index, candidates[inside]] = True
+            in_bboxes_mask[index, order[begin:end][candidates][inside]] = True
         return in_bboxes_mask
 
     def rotate(
