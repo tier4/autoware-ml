@@ -243,9 +243,6 @@ class FinestLevelRefinedFPN(BaseFPN):
         input[1] --1x1--> fused[1] --3x3--> out[1]   input[1] --1x1--> fused[1] --------> out[1]
                           | upsample, add                              | upsample, add
         input[0] --1x1--> fused[0] --3x3--> out[0]   input[0] --1x1--> fused[0] --3x3--> out[0]
-
-    The convolutions carry no normalization and no activation. This is the layout of the
-    ``CPFPN`` neck of the StreamPETR code base, kept so its weights load one to one.
     """
 
     def __init__(self, in_channels: Sequence[int], out_channels: int) -> None:
