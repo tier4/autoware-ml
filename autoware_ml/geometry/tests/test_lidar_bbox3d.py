@@ -93,10 +93,19 @@ class TestComputePointsInBBoxes(unittest.TestCase):
 
         mask = boxes(params.tolist()).compute_points_in_bboxes(points)
 
-        expected = np.stack([points_in_rotated_box(points.numpy(), row) for row in params.numpy()])
+        # The float32 test and the float64 reference may disagree on a point within rounding
+        # distance of a face: the reference is taken on the boxes grown and shrunk by the
+        # tolerance, and the points on which those two differ are left out.
+        tolerance = 1e-4
+        grown, shrunk = params.numpy().copy(), params.numpy().copy()
+        grown[:, 3:6] += 2 * tolerance
+        shrunk[:, 3:6] -= 2 * tolerance
+        outer = np.stack([points_in_rotated_box(points.numpy(), row) for row in grown])
+        inner = np.stack([points_in_rotated_box(points.numpy(), row) for row in shrunk])
+        decided = outer == inner
         self.assertEqual(mask.shape, (num_boxes, num_points))
         self.assertGreater(int(mask.sum()), 0)
-        np.testing.assert_array_equal(mask.numpy(), expected)
+        np.testing.assert_array_equal(mask.numpy()[decided], inner[decided])
 
     def test_is_empty_without_boxes_or_points(self) -> None:
         points = torch.zeros((3, 3))
