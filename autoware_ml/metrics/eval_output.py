@@ -81,12 +81,12 @@ class Detection3DEvalOutput(BaseModel):
     frames: tuple[Detection3DEvalFrame, ...]
 
     @property
-    def carries_frame_meta(self) -> bool:
+    def check_all_frame_meta(self) -> bool:
         """Whether the frames carry their pose, scene and lanelet map."""
         return all(frame.frame_meta is not None for frame in self.frames)
 
     @property
-    def carries_gt_num_points(self) -> bool:
+    def check_all_gt_num_points(self) -> bool:
         """Whether the frames carry the lidar point count of every ground truth box."""
         return all(frame.gt_num_points is not None for frame in self.frames)
 
@@ -158,17 +158,17 @@ class Segmentation3DEvalOutput(BaseModel):
     frames: tuple[Segmentation3DEvalFrame, ...]
 
     @property
-    def carries_frame_meta(self) -> bool:
+    def check_all_frame_meta(self) -> bool:
         """Whether the frames carry their pose, scene and lanelet map."""
         return all(frame.frame_meta is not None for frame in self.frames)
 
     @property
-    def carries_scores(self) -> bool:
+    def check_all_scores(self) -> bool:
         """Whether the frames carry the per-class scores of their points."""
         return all(frame.scores is not None for frame in self.frames)
 
     @property
-    def carries_gt_boxes(self) -> bool:
+    def check_all_gt_boxes(self) -> bool:
         """Whether the frames carry the detection ground truth boxes."""
         return all(frame.gt_boxes is not None for frame in self.frames)
 
@@ -227,18 +227,18 @@ class MetricRequirements(BaseModel):
             missing.append("detection3d frames")
         if self.segmentation3d and segmentation is None:
             missing.append("segmentation3d frames")
-        if self.frame_meta and not _carries(detection, segmentation, "carries_frame_meta"):
+        if self.frame_meta and not _check_all(detection, segmentation, "check_all_frame_meta"):
             missing.append("frame_meta (ego pose, scene token and lanelet map path per frame)")
-        if self.gt_num_points and not (detection is not None and detection.carries_gt_num_points):
+        if self.gt_num_points and not (detection is not None and detection.check_all_gt_num_points):
             missing.append("gt_num_points (lidar points per ground truth box)")
-        if self.scores and not (segmentation is not None and segmentation.carries_scores):
+        if self.scores and not (segmentation is not None and segmentation.check_all_scores):
             missing.append("scores (per-class probabilities per point)")
-        if self.gt_boxes and not (segmentation is not None and segmentation.carries_gt_boxes):
+        if self.gt_boxes and not (segmentation is not None and segmentation.check_all_gt_boxes):
             missing.append("gt_boxes (detection ground truth inside the segmentation frames)")
         return tuple(missing)
 
 
-def _carries(
+def _check_all(
     detection: Detection3DEvalOutput | None,
     segmentation: Segmentation3DEvalOutput | None,
     attribute: str,

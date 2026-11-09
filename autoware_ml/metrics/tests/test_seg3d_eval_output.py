@@ -95,9 +95,9 @@ class TestSegmentation3DFramesEvalOutput(unittest.TestCase):
         assert first.gt_boxes is not None and second.gt_box_labels is not None
         self.assertEqual(first.gt_boxes.shape, (1, 9))
         self.assertEqual(second.gt_box_labels.shape, (0,))
-        self.assertTrue(output.carries_frame_meta)
-        self.assertTrue(output.carries_scores)
-        self.assertTrue(output.carries_gt_boxes)
+        self.assertTrue(output.check_all_frame_meta)
+        self.assertTrue(output.check_all_scores)
+        self.assertTrue(output.check_all_gt_boxes)
 
     def test_rejects_frame_meta_that_does_not_align_with_the_frames(self) -> None:
         """
