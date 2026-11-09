@@ -45,10 +45,6 @@ def _build_backbone(freeze_encoder: bool = False) -> PTv3SparseBackbone:
     )
 
 
-def test_in_channels_are_the_point_features_the_encoder_reads() -> None:
-    assert _build_backbone().in_channels == SweepSplitVoxelFeatureEncoder.out_channels
-
-
 def test_frozen_encoder_stays_in_eval_mode_without_gradients() -> None:
     backbone = _build_backbone(freeze_encoder=True)
 

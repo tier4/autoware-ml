@@ -22,9 +22,7 @@ from jaxtyping import Float32, Int
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.backbones.sparse_backbone import SparseBackbone
 from autoware_ml.models.detection3d.heads.sparse4d import SparseStage
-from autoware_ml.models.detection3d.necks.sparse_neck import SparseNeck
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 
 
@@ -40,33 +38,19 @@ class Sparse4DLidar(nn.Module):
     def __init__(
         self,
         pts_voxel_encoder: VoxelFeatureEncoder,
-        pts_backbone: SparseBackbone,
-        pts_neck: SparseNeck,
+        pts_backbone: nn.Module,
+        pts_neck: nn.Module,
     ) -> None:
         """Initialize the lidar branch.
 
         Args:
             pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
-            pts_backbone: Sparse backbone encoding the voxel features into a hierarchy of stages.
-            pts_neck: Neck turning the backbone stages into the levels the head samples.
-
-        Raises:
-            TypeError: If the backbone does not implement :class:`SparseBackbone` or the neck
-                :class:`SparseNeck`.
-            ValueError: If the voxel encoder and the backbone disagree on the voxel features.
+            pts_backbone: Sparse backbone encoding the voxel features and their coordinates into
+                a hierarchy of stages, grouping its parameters with ``build_optimizer_groups``.
+            pts_neck: Neck turning the backbone stages into the ``num_levels`` levels the head
+                samples.
         """
         super().__init__()
-        if not isinstance(pts_backbone, SparseBackbone):
-            raise TypeError(
-                f"The lidar backbone must be a SparseBackbone, got {type(pts_backbone).__name__}."
-            )
-        if not isinstance(pts_neck, SparseNeck):
-            raise TypeError(f"The lidar neck must be a SparseNeck, got {type(pts_neck).__name__}.")
-        if pts_backbone.in_channels != pts_voxel_encoder.out_channels:
-            raise ValueError(
-                f"The backbone reads {pts_backbone.in_channels} features per voxel but the voxel "
-                f"encoder describes a voxel with {pts_voxel_encoder.out_channels}."
-            )
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_backbone = pts_backbone
         self.pts_neck = pts_neck

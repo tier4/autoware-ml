@@ -20,9 +20,9 @@ from collections.abc import Mapping, Sequence
 
 from jaxtyping import Float32, Int
 import torch
+import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.models.detection3d.backbones.sparse_backbone import SparseBackbone
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.ptv3_base import (
@@ -37,7 +37,7 @@ from autoware_ml.utils.point_cloud.batching import batch_to_offset
 from autoware_ml.utils.point_cloud.structures import Point, bit_length_tensor
 
 
-class PTv3SparseBackbone(SparseBackbone):
+class PTv3SparseBackbone(nn.Module):
     """Run the PTv3 encoder on voxel features and return its deepest stage with the pooling chain.
 
     The backbone owns what the PTv3 task models keep on themselves: the serialization geometry
@@ -91,11 +91,6 @@ class PTv3SparseBackbone(SparseBackbone):
         if self.freeze_encoder:
             self.encoder.eval()
         return self
-
-    @property
-    def in_channels(self) -> int:
-        """Return the number of features the encoder reads per voxel."""
-        return self.encoder.in_channels
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Group the attention blocks of the pretrained encoder apart from its other parameters.

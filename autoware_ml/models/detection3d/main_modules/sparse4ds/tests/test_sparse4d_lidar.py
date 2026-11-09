@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import pytest
 import torch
-import torch.nn as nn
 
 from autoware_ml.models.detection3d.backbones.ptv3 import PTv3SparseBackbone
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
@@ -28,10 +27,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_ptv3_encoder,
 )
-from autoware_ml.models.segmentation3d.encoders.voxel import (
-    MeanVoxelFeatureEncoder,
-    SweepSplitVoxelFeatureEncoder,
-)
+from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 
 requires_cuda_spconv = pytest.mark.skipif(
@@ -61,33 +57,6 @@ def _build_branch(keep_deepest: bool = False) -> Sparse4DLidar:
         pts_backbone=_build_backbone(),
         pts_neck=_build_neck(keep_deepest=keep_deepest),
     )
-
-
-def test_backbone_must_be_a_sparse_backbone() -> None:
-    with pytest.raises(TypeError, match="SparseBackbone"):
-        Sparse4DLidar(
-            pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-            pts_backbone=nn.Identity(),
-            pts_neck=_build_neck(),
-        )
-
-
-def test_neck_must_be_a_sparse_neck() -> None:
-    with pytest.raises(TypeError, match="SparseNeck"):
-        Sparse4DLidar(
-            pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-            pts_backbone=_build_backbone(),
-            pts_neck=nn.Identity(),
-        )
-
-
-def test_voxel_encoder_must_describe_the_features_the_backbone_reads() -> None:
-    with pytest.raises(ValueError, match="features per voxel"):
-        Sparse4DLidar(
-            pts_voxel_encoder=MeanVoxelFeatureEncoder(),
-            pts_backbone=_build_backbone(),
-            pts_neck=_build_neck(),
-        )
 
 
 def test_num_levels_follows_the_neck() -> None:

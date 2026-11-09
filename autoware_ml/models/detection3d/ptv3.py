@@ -23,7 +23,6 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
-from autoware_ml.models.detection3d.necks.sparse_neck import SparseNeck
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
@@ -100,7 +99,7 @@ def _linear_bn_gelu(in_channels: int, out_channels: int) -> nn.Sequential:
     )
 
 
-class PTv3Det3DFeaturePyramid(SparseNeck):
+class PTv3Det3DFeaturePyramid(nn.Module):
     """Fuse the deepest encoder stage top-down into the finer stages and keep every fused stage.
 
     Every step mirrors one decoder unpooling step, reading the pooling chain without changing it.
