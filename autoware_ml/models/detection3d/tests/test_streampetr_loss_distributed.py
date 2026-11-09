@@ -114,35 +114,39 @@ def _sample(
     return cls_scores, bbox_preds, gt_boxes, gt_labels
 
 
+def _matching_losses(
+    head: StreamPETRHead,
+    frames: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+) -> torch.Tensor:
+    """The (cls, bbox) losses of the frames as a batch, from one-layer head outputs."""
+    outputs = StreamPETRHeadOutputs(
+        all_cls_scores=torch.stack([frame[0] for frame in frames]).unsqueeze(0),
+        all_bbox_preds=torch.stack([frame[1] for frame in frames]).unsqueeze(0),
+        denoising=None,
+    )
+    losses = head.loss(
+        outputs,
+        [frame[2] for frame in frames],
+        [frame[3] for frame in frames],
+        padding_mask=torch.zeros(len(frames), dtype=torch.bool),
+    )
+    return torch.stack([losses["loss_cls"].detach(), losses["loss_bbox"].detach()])
+
+
 def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> None:
     with gloo_process_group(rank, world_size, init_file):
         head = _build_head().train()
         frames = [_sample(2, seed=10), _sample(8, seed=20)]
 
-        cls_scores, bbox_preds, gt_boxes, gt_labels = frames[rank]
-        loss_cls, loss_bbox = head._loss_single(
-            cls_scores.unsqueeze(0),
-            bbox_preds.unsqueeze(0),
-            [gt_boxes],
-            [gt_labels],
-            label_weights=torch.ones(1, 1, 1),
-        )
-        sharded = torch.stack([loss_cls.detach(), loss_bbox.detach()])
+        sharded = _matching_losses(head, [frames[rank]])
         gathered = [torch.zeros_like(sharded) for _ in range(world_size)]
         dist.all_gather(gathered, sharded)
         ddp_averaged = torch.stack(gathered).mean(dim=0)
 
         # The whole batch on every rank: identical counts reduce to themselves.
-        combined_cls, combined_bbox = head._loss_single(
-            torch.stack([frames[0][0], frames[1][0]]),
-            torch.stack([frames[0][1], frames[1][1]]),
-            [frames[0][2], frames[1][2]],
-            [frames[0][3], frames[1][3]],
-            label_weights=torch.ones(2, 1, 1),
-        )
+        combined = _matching_losses(head, frames)
 
-        torch.testing.assert_close(ddp_averaged[0], combined_cls.detach(), rtol=1e-5, atol=1e-6)
-        torch.testing.assert_close(ddp_averaged[1], combined_bbox.detach(), rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(ddp_averaged, combined, rtol=1e-5, atol=1e-6)
 
 
 def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:

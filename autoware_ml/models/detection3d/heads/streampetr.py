@@ -880,22 +880,22 @@ class StreamPETRHead(nn.Module):
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
         label_weights: torch.Tensor,
+        total_pos: float,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute the matching losses of one decoder layer.
+
+        ``total_pos`` is the positive count of the step, floored at 1 by :meth:`loss`. The
+        divisions by it are explicit because the focal loss floors ``avg_factor`` per rank.
+        """
         targets = self._get_targets(cls_scores, bbox_preds, gt_boxes, gt_labels)
 
         target_labels = []
-        positive_counts = []
         for sample_targets in targets:
             one_hot = cls_scores.new_zeros((sample_targets.labels.shape[0], self.num_classes))
             pos_mask = sample_targets.labels >= 0
-            positive_counts.append(pos_mask.sum())
             one_hot[pos_mask, sample_targets.labels[pos_mask]] = 1.0
             target_labels.append(one_hot)
         target_labels_tensor = torch.stack(target_labels, dim=0)
-        # One collective per decoder layer, which every rank runs, so the ranks stay in step.
-        # The count is floored at 1 inside ``reduce_mean_count``, so the divisions below need
-        # no ``max``; they are explicit because the focal loss floors ``avg_factor`` per rank.
-        total_pos = reduce_mean_count(torch.stack(positive_counts).sum()).item()
         loss_cls = (
             self.loss_cls_weight
             * self.loss_cls(cls_scores, target_labels_tensor, weights=label_weights)
@@ -944,9 +944,8 @@ class StreamPETRHead(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute denoising-query supervision for one decoder layer.
 
-        The average factors are the denoising target counts of the step, reduced once by
-        :meth:`loss`, which floors them at 1: through :func:`reduce_mean_count` over the
-        ranks when training, by a clamp otherwise.
+        The average factors are the denoising target counts of the step, averaged over the
+        ranks and floored at 1 by :meth:`loss`.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
@@ -1126,16 +1125,39 @@ class StreamPETRHead(nn.Module):
         regression target, no positive and no denoising query either. The weights only scale
         the loss terms, so a batch of padding alone still yields a zero loss over the whole
         graph.
+
+        The losses are sums over the objects divided by the counts of the step. In training the
+        counts are averaged over the DDP ranks (see :func:`reduce_mean_count`) in one collective
+        per step, which every rank runs whatever its ground truth, so the ranks stay in step. In
+        evaluation nothing averages the gradients, so the counts of the rank are used and no
+        collective runs. The positive count is the number of boxes: the assigner matches every
+        box to one of the queries, in every decoder layer alike.
         """
         all_cls_scores = outputs.all_cls_scores
         all_bbox_preds = outputs.all_bbox_preds
+        num_queries = all_cls_scores.shape[2]
         label_weights = (~padding_mask).to(all_cls_scores.dtype).view(-1, 1, 1)
+
+        num_positives = sum(min(boxes.shape[0], num_queries) for boxes in gt_boxes)
+        num_targets = 0 if outputs.denoising is None else outputs.denoising.known_labels.numel()
+        # The denoising classification count is scaled by the expected positive rate of the
+        # noised queries (reference recipe): a ball of radius ``split`` inside the unit noise
+        # cube. Without denoising the two counts are 0 and unused.
+        counts = all_cls_scores.new_tensor(
+            [
+                float(num_positives),
+                num_targets * math.pi / 6 * self.split**3,
+                float(num_targets),
+            ]
+        )
+        counts = reduce_mean_count(counts) if self.training else counts.clamp(min=1.0)
+        total_pos, dn_cls_avg_factor, dn_bbox_avg_factor = counts.tolist()
 
         losses_cls = []
         losses_bbox = []
         for cls_scores, bbox_preds in zip(all_cls_scores, all_bbox_preds):
             loss_cls, loss_bbox = self._loss_single(
-                cls_scores, bbox_preds, gt_boxes, gt_labels, label_weights
+                cls_scores, bbox_preds, gt_boxes, gt_labels, label_weights, total_pos
             )
             losses_cls.append(loss_cls)
             losses_bbox.append(loss_bbox)
@@ -1150,56 +1172,43 @@ class StreamPETRHead(nn.Module):
             loss_dict[f"d{layer_index}.loss_bbox"] = loss_bbox
             total_loss = total_loss + loss_cls + loss_bbox
 
-        if outputs.denoising is None and self.with_dn and self.training:
-            # Keep the loss dictionary uniform across ranks when a batch has
-            # no ground truth: every logged key is a distributed collective.
-            zero = all_cls_scores.new_tensor(0.0)
-            loss_dict["dn_loss_cls"] = zero
-            loss_dict["dn_loss_bbox"] = zero.clone()
-            for layer_index in range(self.num_decoder_layers - 1):
-                loss_dict[f"d{layer_index}.dn_loss_cls"] = zero.clone()
-                loss_dict[f"d{layer_index}.dn_loss_bbox"] = zero.clone()
-
-        num_targets = 0 if outputs.denoising is None else outputs.denoising.known_labels.numel()
-        # The classification count is scaled by the expected positive rate of the noised queries
-        # (reference recipe): a ball of radius ``split`` inside the unit noise cube.
-        dn_counts = all_cls_scores.new_tensor(
-            [num_targets * math.pi / 6 * self.split**3, float(num_targets)]
-        )
+        # The head makes denoising queries only when training with denoising on, and then only
+        # for a batch with boxes; the ranks without boxes log zeros, so every key of the loss
+        # dictionary is a distributed collective on every rank.
         if self.with_dn and self.training:
-            # Gated on flags every rank shares, not on this rank's ground truth: a rank
-            # without boxes joins the collective with counts of 0.
-            dn_counts = reduce_mean_count(dn_counts)
-        else:
-            dn_counts = dn_counts.clamp(min=1.0)
-        dn_cls_avg_factor, dn_bbox_avg_factor = dn_counts.tolist()
-
-        if outputs.denoising is not None:
-            known_labels = outputs.denoising.known_labels
-            known_bboxs = outputs.denoising.known_boxes
-            output_known_class, output_known_coord = self._denoising_predictions(outputs.denoising)
-            dn_losses_cls = []
-            dn_losses_bbox = []
-            for cls_scores, bbox_preds in zip(output_known_class, output_known_coord):
-                dn_loss_cls, dn_loss_bbox = self.dn_loss_single(
-                    cls_scores,
-                    bbox_preds,
-                    known_bboxs,
-                    known_labels,
-                    dn_cls_avg_factor,
-                    dn_bbox_avg_factor,
+            if outputs.denoising is None:
+                zero = all_cls_scores.new_tensor(0.0)
+                loss_dict["dn_loss_cls"] = zero
+                loss_dict["dn_loss_bbox"] = zero.clone()
+                for layer_index in range(self.num_decoder_layers - 1):
+                    loss_dict[f"d{layer_index}.dn_loss_cls"] = zero.clone()
+                    loss_dict[f"d{layer_index}.dn_loss_bbox"] = zero.clone()
+            else:
+                output_known_class, output_known_coord = self._denoising_predictions(
+                    outputs.denoising
                 )
-                dn_losses_cls.append(dn_loss_cls)
-                dn_losses_bbox.append(dn_loss_bbox)
-            loss_dict["dn_loss_cls"] = dn_losses_cls[-1]
-            loss_dict["dn_loss_bbox"] = dn_losses_bbox[-1]
-            total_loss = total_loss + dn_losses_cls[-1] + dn_losses_bbox[-1]
-            for layer_index, (loss_cls, loss_bbox) in enumerate(
-                zip(dn_losses_cls[:-1], dn_losses_bbox[:-1])
-            ):
-                loss_dict[f"d{layer_index}.dn_loss_cls"] = loss_cls
-                loss_dict[f"d{layer_index}.dn_loss_bbox"] = loss_bbox
-                total_loss = total_loss + loss_cls + loss_bbox
+                dn_losses_cls = []
+                dn_losses_bbox = []
+                for cls_scores, bbox_preds in zip(output_known_class, output_known_coord):
+                    dn_loss_cls, dn_loss_bbox = self.dn_loss_single(
+                        cls_scores,
+                        bbox_preds,
+                        outputs.denoising.known_boxes,
+                        outputs.denoising.known_labels,
+                        dn_cls_avg_factor,
+                        dn_bbox_avg_factor,
+                    )
+                    dn_losses_cls.append(dn_loss_cls)
+                    dn_losses_bbox.append(dn_loss_bbox)
+                loss_dict["dn_loss_cls"] = dn_losses_cls[-1]
+                loss_dict["dn_loss_bbox"] = dn_losses_bbox[-1]
+                total_loss = total_loss + dn_losses_cls[-1] + dn_losses_bbox[-1]
+                for layer_index, (loss_cls, loss_bbox) in enumerate(
+                    zip(dn_losses_cls[:-1], dn_losses_bbox[:-1])
+                ):
+                    loss_dict[f"d{layer_index}.dn_loss_cls"] = loss_cls
+                    loss_dict[f"d{layer_index}.dn_loss_bbox"] = loss_bbox
+                    total_loss = total_loss + loss_cls + loss_bbox
 
         loss_dict["loss"] = total_loss
         return loss_dict
