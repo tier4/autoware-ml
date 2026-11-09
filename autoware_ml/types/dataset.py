@@ -22,7 +22,7 @@ class DatasetFormat(StrEnum):
     """
     Dataset family a record was built from, which fixes how its scenario is read.
 
-    A prediction record names the files of its scenario relative to the database root and the
+    A motion record names the files of its scenario relative to the database root and the
     loading transforms pick the reader by this value. The family also says where the map comes
     from: a scenario family ships one map file per scenario, a recording family resolves the
     lanelet map of the scene through the map provider of the dataset.
