@@ -72,14 +72,14 @@ class MetricKey(BaseModel):
         Returns:
           MetricKey: The key with the given levels set.
         """
-        if range_suffix and self.range_suffix:
-            raise ValueError(f"{self} already carries a range suffix, a level is set once.")
-        if filter_name and self.filter_name:
-            raise ValueError(f"{self} already carries a filter name, a level is set once.")
-        if view and self.view:
-            raise ValueError(f"{self} already carries a view, a level is set once.")
-        if prefix and self.prefix:
-            raise ValueError(f"{self} already carries a prefix, a level is set once.")
+        for level, requested, current in (
+            ("range suffix", range_suffix, self.range_suffix),
+            ("filter name", filter_name, self.filter_name),
+            ("view", view, self.view),
+            ("prefix", prefix, self.prefix),
+        ):
+            if requested and current:
+                raise ValueError(f"{self} already carries a {level}, a level is set once.")
         return MetricKey(
             name=self.name,
             range_suffix=range_suffix or self.range_suffix,
