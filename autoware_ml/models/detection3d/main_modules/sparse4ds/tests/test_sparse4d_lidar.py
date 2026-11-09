@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+import torch.nn as nn
 
 from autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder import PTv3MiddleEncoder
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
@@ -29,6 +30,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 )
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.utils.point_cloud.structures import Point
 
 requires_cuda_spconv = pytest.mark.skipif(
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
@@ -50,11 +52,26 @@ def _build_neck(keep_deepest: bool = False) -> PTv3Det3DFeaturePyramid:
     )
 
 
-def _build_branch(keep_deepest: bool = False) -> Sparse4DLidar:
+class _ScalingBackbone(nn.Module):
+    """Scale the deepest stage features by one learnable factor."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = nn.Parameter(torch.tensor(2.0))
+
+    def forward(self, point: Point) -> Point:
+        point.feat = point.feat * self.scale
+        return point
+
+
+def _build_branch(
+    keep_deepest: bool = False, pts_backbone: nn.Module | None = None
+) -> Sparse4DLidar:
     """Build a small branch over the two stage test middle encoder."""
     return Sparse4DLidar(
         pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         pts_middle_encoder=_build_middle_encoder(),
+        pts_backbone=pts_backbone,
         pts_neck=_build_neck(keep_deepest=keep_deepest),
     )
 
@@ -69,10 +86,20 @@ def test_optimizer_groups_split_the_middle_encoder_from_the_neck() -> None:
 
     groups = branch.build_optimizer_groups()
 
-    assert set(groups) == {"encoder_default", "encoder_block", "pts_neck"}
+    assert set(groups) == {"encoder_default", "encoder_block", "pts_backbone_neck"}
     grouped = sum(len(parameters) for parameters in groups.values())
     assert grouped == sum(1 for parameter in branch.parameters() if parameter.requires_grad)
-    assert len(groups["pts_neck"]) == sum(1 for _ in branch.pts_neck.parameters())
+    assert len(groups["pts_backbone_neck"]) == sum(1 for _ in branch.pts_neck.parameters())
+
+
+def test_optimizer_groups_place_the_backbone_with_the_neck() -> None:
+    branch = _build_branch(pts_backbone=_ScalingBackbone())
+
+    groups = branch.build_optimizer_groups()
+
+    neck_count = sum(1 for _ in branch.pts_neck.parameters())
+    assert len(groups["pts_backbone_neck"]) == neck_count + 1
+    assert groups["pts_backbone_neck"][0] is branch.pts_backbone.scale
 
 
 def test_points_must_follow_the_layout_of_the_voxel_encoder() -> None:
@@ -111,3 +138,30 @@ def test_forward_returns_one_stage_per_level_finest_first() -> None:
     assert deepest_feat.shape[0] == deepest_grid_coord.shape[0] <= fused_feat.shape[0]
     assert fused_offset.tolist() == [fused_feat.shape[0]]
     assert deepest_offset.tolist() == [deepest_feat.shape[0]]
+
+
+@requires_cuda_spconv
+def test_backbone_refines_the_encoder_stages_before_the_neck() -> None:
+    device = torch.device("cuda")
+    torch.manual_seed(0)
+    plain = _build_branch().to(device).eval()
+    torch.manual_seed(0)
+    refined = _build_branch(pts_backbone=_ScalingBackbone()).to(device).eval()
+    batch = build_inputs(device=device)
+    voxels_data = batch.voxels_data
+    time_lag_column = batch.multi_task_gt_batch.point_cloud_gt_batch.timestamp_difference_dim
+
+    with torch.no_grad():
+        outputs = [
+            branch(
+                voxels=voxels_data.voxels,
+                coords=voxels_data.batch_xyz_coords(),
+                num_points=voxels_data.num_points,
+                time_lag_column=time_lag_column,
+            )[0]
+            for branch in (plain, refined)
+        ]
+
+    (plain_feat, _, _), (refined_feat, _, _) = outputs
+    assert plain_feat.shape == refined_feat.shape
+    assert not torch.allclose(plain_feat, refined_feat)

@@ -135,14 +135,15 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         """Group the pretrained encoder parameters apart from the newly initialized branch.
 
         Returns:
-            The encoder groups of the lidar branch and ``det3d_branch``, the neck and the head.
+            The encoder groups of the lidar branch and ``det3d_branch``, the backbone, the neck
+            and the head.
         """
         groups = dict(self.lidar_network.build_optimizer_groups())
-        neck_params = groups.pop("pts_neck")
+        branch_params = groups.pop("pts_backbone_neck")
         head_params = [
             parameter for parameter in self.bbox_head.parameters() if parameter.requires_grad
         ]
-        groups["det3d_branch"] = [*neck_params, *head_params]
+        groups["det3d_branch"] = [*branch_params, *head_params]
         return groups
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:

@@ -28,16 +28,17 @@ from autoware_ml.models.detection3d.heads.sparse4d import SparseStage
 class Sparse4DLidar(nn.Module):
     """Encode voxelized lidar points into the sparse stages the Sparse4D head samples.
 
-    The branch owns the whole lidar path: the voxel encoder, the sparse middle encoder and the
-    neck that turns the encoder stages into the levels the head samples. That mirrors the BEVFusion
-    lidar branch, so the detector only runs the head and a camera branch can join with its own
-    path.
+    The branch owns the whole lidar path: the voxel encoder, the sparse middle encoder, the
+    optional backbone refining its stages and the neck that turns them into the levels the head
+    samples. That mirrors the BEVFusion lidar branch, so the detector only runs the head and a
+    camera branch can join with its own path.
     """
 
     def __init__(
         self,
         pts_voxel_encoder: nn.Module,
         pts_middle_encoder: nn.Module,
+        pts_backbone: nn.Module | None,
         pts_neck: nn.Module,
     ) -> None:
         """Initialize the lidar branch.
@@ -48,12 +49,14 @@ class Sparse4DLidar(nn.Module):
             pts_middle_encoder: Sparse middle encoder encoding the voxel features and their
                 coordinates into a hierarchy of stages, grouping its parameters with
                 ``build_optimizer_groups``.
-            pts_neck: Neck turning the encoder stages into the ``num_levels`` levels the head
-                samples.
+            pts_backbone: Optional sparse backbone refining the encoder stages before the neck,
+                the stages go straight to the neck without one.
+            pts_neck: Neck turning the stages into the ``num_levels`` levels the head samples.
         """
         super().__init__()
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
+        self.pts_backbone = pts_backbone
         self.pts_neck = pts_neck
 
     @property
@@ -62,15 +65,21 @@ class Sparse4DLidar(nn.Module):
         return self.pts_neck.num_levels
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the middle encoder parameters apart from the newly initialized neck.
+        """Group the middle encoder parameters apart from the newly initialized backbone and neck.
 
         Returns:
-            The optimizer groups of the middle encoder and ``pts_neck``, the trainable neck
-            parameters.
+            The optimizer groups of the middle encoder and ``pts_backbone_neck``, the trainable
+            parameters of the backbone and the neck.
         """
         groups = dict(self.pts_middle_encoder.build_optimizer_groups())
-        groups["pts_neck"] = [
-            parameter for parameter in self.pts_neck.parameters() if parameter.requires_grad
+        refining = (
+            [self.pts_neck] if self.pts_backbone is None else [self.pts_backbone, self.pts_neck]
+        )
+        groups["pts_backbone_neck"] = [
+            parameter
+            for module in refining
+            for parameter in module.parameters()
+            if parameter.requires_grad
         ]
         return groups
 
@@ -101,4 +110,6 @@ class Sparse4DLidar(nn.Module):
         self.pts_voxel_encoder.check_points(voxels, time_lag_column)
         voxel_features = self.pts_voxel_encoder(voxels, num_points)
         point = self.pts_middle_encoder(voxel_features=voxel_features, coords=coords)
+        if self.pts_backbone is not None:
+            point = self.pts_backbone(point)
         return self.pts_neck(point)

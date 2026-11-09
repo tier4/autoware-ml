@@ -102,7 +102,8 @@ model:
     sync_dist: true
 
   # Lidar branch: voxel encoder -> PTv3 middle encoder -> feature pyramid neck. The neck fuses
-  # the deepest encoder stage top-down into the stages the head samples.
+  # the deepest encoder stage top-down into the stages the head samples. No backbone refines the
+  # encoder stages before the neck.
   lidar_network:
     _target_: autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar.Sparse4DLidar
     pts_middle_encoder:
@@ -110,6 +111,7 @@ model:
       grid_size: ${grid_size}
       point_cloud_range: ${point_cloud_range}
       freeze_encoder: false
+    pts_backbone: null
     pts_neck:
       _target_: autoware_ml.models.detection3d.ptv3.PTv3Det3DFeaturePyramid
       stage_channels:
