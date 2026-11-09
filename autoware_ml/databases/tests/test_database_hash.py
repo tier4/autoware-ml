@@ -99,8 +99,15 @@ class TestBaseDatabaseWithoutSensorSettings(unittest.TestCase):
         )
 
     def test_sensor_settings_default_to_absent(self) -> None:
-        """Test that the box pipelines and the lidar settings are optional and render as empty
-        and None in the hash fields, with the field order of every other database."""
+        """
+        Input: a BaseDatabase built with the vocabulary only, no box pipelines and no lidar
+        settings.
+        Expected: the sensor settings default to None, and the hash fields keep the field order
+        of every other database with the absent settings rendered as None, so the cache key
+        stays explicit and stable.
+        Check: the lidar_intensity_scale property, the hash field names in order, the renders
+        of box3d_pipelines and lidar_pointcloud_num_features, and the length of the hash.
+        """
         database = self._build_database()
 
         self.assertIsNone(database.lidar_intensity_scale)
@@ -115,12 +122,20 @@ class TestBaseDatabaseWithoutSensorSettings(unittest.TestCase):
                 "scenarios",
             ],
         )
-        self.assertEqual(fields["box3d_pipelines"], "[]")
+        self.assertEqual(fields["box3d_pipelines"], "None")
         self.assertEqual(fields["lidar_pointcloud_num_features"], "None")
         self.assertEqual(len(database.database_hash), 64)
 
     def test_explicit_sensor_settings_are_still_validated(self) -> None:
-        """Test that a lidar setting that is given keeps its range check."""
+        """
+        Input: a lidar_intensity_scale of 0.0, a lidar_pointcloud_num_features of 2, and then
+        the valid pair 255.0 and 5.
+        Expected: a lidar setting that is given keeps its range check, and a valid one is
+        stored and rendered in the hash fields as before.
+        Check: ValueError naming the setting for the two invalid values, the
+        lidar_intensity_scale property and the lidar_pointcloud_num_features hash field for
+        the valid pair.
+        """
         with self.assertRaisesRegex(ValueError, "lidar_intensity_scale must be positive"):
             self._build_database(lidar_intensity_scale=0.0)
         with self.assertRaisesRegex(ValueError, "lidar_pointcloud_num_features must be at least 3"):
