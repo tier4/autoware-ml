@@ -660,7 +660,7 @@ class TestCliCommands:
 
         assert result.exit_code == 0
         run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.mlflow_wrapper",
+            "autoware_ml.scripts.cli.mlflow_wrapper",
             "run_mlflow_ui",
             host="0.0.0.0",
             port=6000,
@@ -675,7 +675,7 @@ class TestCliCommands:
 
         assert result.exit_code == 0
         run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.mlflow_wrapper",
+            "autoware_ml.scripts.cli.mlflow_wrapper",
             "export_experiment_from_db",
             db_path="mlruns/mlflow.db",
             experiment_name=None,
@@ -704,7 +704,7 @@ class TestCliCommands:
 
         assert result.exit_code == 0
         run_lazy_script_mock.assert_called_once_with(
-            "autoware_ml.scripts.session",
+            "autoware_ml.scripts.cli.session",
             "start_session",
             name=SAMPLE_SESSION_NAME,
             command_args=["train", "--config-name", SAMPLE_CONFIG_NAME],
@@ -729,9 +729,9 @@ class TestCliCommands:
 class TestCliRuntime:
     def test_run_hydra_entrypoint_uses_runtime_script_argv_for_distributed_launches(self) -> None:
         def assert_runtime_context(*args, **kwargs) -> None:
-            assert cli_runtime.sys.argv[0] == "autoware_ml.scripts.train"
+            assert cli_runtime.sys.argv[0] == "autoware_ml.scripts.cli.train"
             assert __main__.__spec__ is not None
-            assert __main__.__spec__.name == "autoware_ml.scripts.train"
+            assert __main__.__spec__.name == "autoware_ml.scripts.cli.train"
 
         with (
             patch(
@@ -753,7 +753,7 @@ class TestCliRuntime:
                 extra_args=["+trainer.strategy=ddp", "trainer.devices=2"],
             )
 
-        run_lazy_script_mock.assert_called_once_with("autoware_ml.scripts.train", "main")
+        run_lazy_script_mock.assert_called_once_with("autoware_ml.scripts.cli.train", "main")
         assert "+trainer.strategy=ddp" in cli_runtime.sys.argv
         assert "trainer.devices=2" in cli_runtime.sys.argv
 
@@ -826,7 +826,7 @@ class TestCliRuntime:
         """
         The CLI creates the run before the entrypoint starts. It must use the experiment and
         run names the entrypoint's builder derives from the same config, otherwise ``aml train``
-        and ``python -m autoware_ml.scripts.train`` would name their runs differently.
+        and ``python -m autoware_ml.scripts.cli.train`` would name their runs differently.
         """
         config_name = "multi/ptv3/voxel012"
         with (
@@ -994,11 +994,11 @@ class TestResolveHydraArgv:
 
     def test_resolves_runtime_entrypoint_script_path(self) -> None:
         runtime_argv = cli_runtime.resolve_hydra_entrypoint_argv(
-            "autoware_ml.scripts.train",
+            "autoware_ml.scripts.cli.train",
             SAMPLE_CONFIG_NAME,
             "tasks",
         )
-        assert runtime_argv[0] == "autoware_ml.scripts.train"
+        assert runtime_argv[0] == "autoware_ml.scripts.cli.train"
         assert runtime_argv[1:] == cli_runtime.resolve_hydra_argv(SAMPLE_CONFIG_NAME, "tasks")
 
 

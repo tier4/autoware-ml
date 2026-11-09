@@ -75,10 +75,10 @@ session_app = typer.Typer(
 )
 
 TASK_CONFIG_PREFIX = "tasks"
-TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
-DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
-TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
-VISUALIZE_ENTRYPOINT_MODULE = "autoware_ml.scripts.visualize"
+TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.train"
+DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.deploy"
+TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.test"
+VISUALIZE_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.visualize"
 CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
 
 
@@ -662,7 +662,7 @@ def mlflow_ui(
         db_path: Path to the SQLite backend store file.
     """
     run_lazy_script(
-        "autoware_ml.scripts.mlflow_wrapper",
+        "autoware_ml.scripts.cli.mlflow_wrapper",
         "run_mlflow_ui",
         host=host,
         port=port,
@@ -714,7 +714,7 @@ def mlflow_export(
         override: Whether to overwrite an existing export directory.
     """
     run_lazy_script(
-        "autoware_ml.scripts.mlflow_wrapper",
+        "autoware_ml.scripts.cli.mlflow_wrapper",
         "export_experiment_from_db",
         db_path=db_path,
         experiment_name=experiment_name,
@@ -767,7 +767,7 @@ def session_start(
         command_args: Command tokens forwarded to the managed shell.
     """
     run_lazy_script(
-        "autoware_ml.scripts.session",
+        "autoware_ml.scripts.cli.session",
         "start_session",
         name=name,
         command_args=command_args or [],
@@ -794,7 +794,7 @@ def session_attach(
     Args:
         name: Name of the session to view.
     """
-    run_lazy_script("autoware_ml.scripts.session", "attach_session", name=name)
+    run_lazy_script("autoware_ml.scripts.cli.session", "attach_session", name=name)
 
 
 @session_app.command(name="detach", cls=OptionFirstTyperCommand)
@@ -809,7 +809,7 @@ def session_detach(
     Args:
         name: Name of the session whose tmux clients should be detached.
     """
-    run_lazy_script("autoware_ml.scripts.session", "detach_session", name=name)
+    run_lazy_script("autoware_ml.scripts.cli.session", "detach_session", name=name)
 
 
 @session_app.command(name="ls", cls=OptionFirstTyperCommand)
@@ -819,7 +819,7 @@ def session_ls() -> None:
     The command prints formatted session information and exits quietly when no
     managed sessions are currently running.
     """
-    output = run_lazy_script("autoware_ml.scripts.session", "list_sessions")
+    output = run_lazy_script("autoware_ml.scripts.cli.session", "list_sessions")
     if output:
         typer.echo(output)
 
@@ -836,7 +836,7 @@ def session_stop(
     Args:
         name: Name of the session to stop.
     """
-    run_lazy_script("autoware_ml.scripts.session", "stop_session", name=name)
+    run_lazy_script("autoware_ml.scripts.cli.session", "stop_session", name=name)
 
 
 def main() -> None:

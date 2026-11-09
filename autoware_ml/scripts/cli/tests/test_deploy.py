@@ -14,7 +14,7 @@ from omegaconf import DictConfig, OmegaConf
 import pytest
 
 from autoware_ml.builders.tests.conftest import HydraRuntime
-from autoware_ml.scripts import deploy as deploy_script
+from autoware_ml.scripts.cli import deploy as deploy_script
 from autoware_ml.utils.mlflow_helpers import (
     CONFIG_ARTIFACTS_DIRNAME,
     RUN_METADATA_FILENAME,
@@ -349,13 +349,13 @@ def test_run_deploy_without_logger_exports_into_the_experiment_run_dir(
 
 def test_module_entrypoint_runs_hydra_main() -> None:
     """
-    Input: ``python -m autoware_ml.scripts.deploy --help``.
+    Input: ``python -m autoware_ml.scripts.cli.deploy --help``.
     Expected: the module guard calls the Hydra entrypoint, which prints its help instead of
         doing nothing.
     Check: the exit code and the Hydra help banner.
     """
     result = subprocess.run(
-        [sys.executable, "-m", "autoware_ml.scripts.deploy", "--help"],
+        [sys.executable, "-m", "autoware_ml.scripts.cli.deploy", "--help"],
         capture_output=True,
         text=True,
         check=False,
