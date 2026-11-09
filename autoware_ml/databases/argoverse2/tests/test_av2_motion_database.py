@@ -215,9 +215,9 @@ class TestAV2MotionDatabaseRecords(AV2MotionDatabaseTestCase):
         Input: three train, one val and one 50 step test scenario written as real files,
         processed by two workers with two scenarios per task.
         Expected: the cache file holds one record per scenario in split and id order, every
-        record carries a prediction struct with its relative tracks path and step count and
+        record carries a motion struct with its relative tracks path and step count and
         no sensor annotations, and a second run finds the cache and leaves it untouched.
-        Check: the cache file, the record ids and prediction fields, the empty lidar frames
+        Check: the cache file, the record ids and motion fields, the empty lidar frames
         and absent boxes, and the modification time of the cache after the second run.
         """
         root = self.tmp_path / "records"
@@ -238,9 +238,9 @@ class TestAV2MotionDatabaseRecords(AV2MotionDatabaseTestCase):
         self.assertTrue(database.cache_file_path.is_file())
         records = database.load_scenario_records()
         self.assertEqual([record.scenario_id for record in records], ["a0", "a1", "a2", "b0", "c0"])
-        self.assertTrue(all(record.prediction is not None for record in records))
-        self.assertEqual(records[0].prediction.tracks_relative_path, "train/a0/scenario_a0.parquet")
-        self.assertEqual(records[-1].prediction.num_steps, 50)
+        self.assertTrue(all(record.motion is not None for record in records))
+        self.assertEqual(records[0].motion.tracks_relative_path, "train/a0/scenario_a0.parquet")
+        self.assertEqual(records[-1].motion.num_steps, 50)
         self.assertEqual(records[0].lidar_frames, [])
         self.assertIsNone(records[0].boxes_3d)
 

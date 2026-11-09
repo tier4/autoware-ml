@@ -27,7 +27,7 @@ from typing import Sequence
 
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
-from autoware_ml.databases.schemas.prediction import PredictionDataModel
+from autoware_ml.databases.schemas.motion import MotionDataModel
 from autoware_ml.databases.schemas.utils import relative_to_database_root
 from autoware_ml.types.dataset import DatasetFormat
 
@@ -107,7 +107,7 @@ class AV2MotionRecordsGenerator:
                 f"{OBSERVED_STEPS} observed steps."
             )
 
-        prediction = PredictionDataModel(
+        motion = MotionDataModel(
             dataset_format=DatasetFormat.AV2,
             tracks_relative_path=relative_to_database_root(
                 self.tracks_path, self.database_root_path
@@ -135,6 +135,6 @@ class AV2MotionRecordsGenerator:
             image_frames=None,
             category_mapping=None,
             boxes_3d=None,
-            prediction=prediction,
+            motion=motion,
         )
         return [record]
