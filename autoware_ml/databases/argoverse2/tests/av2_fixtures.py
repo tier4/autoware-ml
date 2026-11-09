@@ -57,8 +57,8 @@ def av2_vocabulary() -> LabelVocabulary:
     )
 
 
-def av2_prediction_taxonomy() -> LabelTaxonomy:
-    """The coarse prediction classes of section 3.2 of the integration plan."""
+def av2_motion_taxonomy() -> LabelTaxonomy:
+    """The coarse motion classes of section 3.2 of the integration plan."""
     return LabelTaxonomy(
         vocabulary=av2_vocabulary(),
         class_names=["vehicle", "pedestrian", "cyclist"],

@@ -16,7 +16,7 @@
 
 This is the only module that imports the ``av2`` devkit. A scenario is a
 ``scenario_<id>.parquet`` file of agent tracks and a ``log_map_archive_<id>.json`` static map;
-the readers turn them into the dataset agnostic samples of the prediction task, in the city
+the readers turn them into the dataset agnostic samples of the motion task, in the city
 frame of the scenario.
 """
 
@@ -36,7 +36,7 @@ from av2.map.map_api import ArgoverseStaticMap
 from jaxtyping import Float64
 
 from autoware_ml.databases.taxonomy import LabelTaxonomy
-from autoware_ml.dataclasses.batch.prediction import AgentTracksSample, MapPolylinesSample
+from autoware_ml.dataclasses.batch.motion import AgentTracksSample, MapPolylinesSample
 from autoware_ml.types.motion import AgentRole, PolylineType
 
 # Number of points every map polyline is resampled to by default.

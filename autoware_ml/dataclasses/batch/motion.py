@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Samples of the prediction task.
+"""Samples of the motion task.
 
 The agent tracks and the vector map of a scenario are dataset agnostic: a reader of every
 source format fills the same tensors, so the transforms and the models downstream never see

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the prediction samples."""
+"""Tests for the motion samples."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import unittest
 
 import torch
 
-from autoware_ml.dataclasses.batch.prediction import AgentTracksSample
+from autoware_ml.dataclasses.batch.motion import AgentTracksSample
 
 
 def _tracks(num_agents: int = 2, num_steps: int = 5, **kwargs) -> AgentTracksSample:
