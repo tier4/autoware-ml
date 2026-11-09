@@ -21,10 +21,12 @@ The Calibration Status Classifier is a camera-LiDAR binary classification model 
 
 Experiment configs live under `autoware_ml/configs/tasks/calibration_status/calibration_status_classifier/` and are passed to the CLI as the path relative to `tasks/`.
 
-| Config Name                                                                                        | Dataset   | Purpose                         |
-| -------------------------------------------------------------------------------------------------- | --------- | ------------------------------- |
-| `calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes`               | NuScenes  | Standard training configuration |
-| `calibration_status/calibration_status_classifier/t4dataset/resnet18_b8_30e_t4dataset_j6gen2_base` | T4Dataset | Standard training configuration |
+| Config Name                                                                          | Dataset   | Purpose                         |
+| ------------------------------------------------------------------------------------ | --------- | ------------------------------- |
+| `calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes` | NuScenes  | Standard training configuration |
+| `calibration_status/calibration_status_classifier/t4dataset/base`                    | T4Dataset | Standard training configuration |
+
+The T4Dataset row is a base. A T4Dataset experiment binds it together with its database in an external config root, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
 
 ## Input Representation
 
@@ -40,7 +42,6 @@ The model consumes a fused image with five channels.
 
 ```bash
 autoware-ml train --config-name calibration_status/calibration_status_classifier/nuscenes/resnet18_b8_30e_nuscenes
-autoware-ml train --config-name calibration_status/calibration_status_classifier/t4dataset/resnet18_b8_30e_t4dataset_j6gen2_base
 ```
 
 For a pipeline validation run:

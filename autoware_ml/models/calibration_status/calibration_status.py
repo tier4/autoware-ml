@@ -151,6 +151,7 @@ class CalibrationStatusClassifier(ModuleBaseModel):
             # wrapper's parameter name does not matter to the graph.
             input_names=["input"],
             output_names=["output"],
+            dynamic_axes={"input": {2: "height", 3: "width"}},
         )
 
 

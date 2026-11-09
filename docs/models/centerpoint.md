@@ -21,12 +21,9 @@ CenterPoint is a LiDAR-based 3D object detection model integrated under the `det
 
 Experiment configs live under `autoware_ml/configs/tasks/detection3d/centerpoint/<dataset>/` and are passed to the CLI as the path relative to `tasks/`.
 
-| Leaf                                  | Database          | Weights                                             |
-| ------------------------------------- | ----------------- | --------------------------------------------------- |
-| `t4dataset/<variant>_gen1_base`       | T4Dataset gen1    | Trained from scratch                                |
-| `t4dataset/<variant>_jpntaxi_base`    | T4Dataset jpntaxi | Fine-tuned from a checkpoint given with `--weights` |
-| `t4dataset/<variant>_j6gen2_base`     | T4Dataset j6gen2  | Fine-tuned from a checkpoint given with `--weights` |
-| `nuscenes/<variant>_nuscenes_<range>` | nuScenes          | Trained from scratch                                |
+| Leaf                                  | Database | Weights              |
+| ------------------------------------- | -------- | -------------------- |
+| `nuscenes/<variant>_nuscenes_<range>` | nuScenes | Trained from scratch |
 
 The leaf name spells out its variant: the voxel size, the backbone and neck, the batch size, the epoch count and the detection range, so the values live in one place, the config. The configs are layered so that each file owns one concern:
 
@@ -37,27 +34,21 @@ The leaf name spells out its variant: the voxel size, the backbone and neck, the
 | `<dataset>/base_<voxel>_<range>.yaml` | Voxel size, BEV canvas shape, backbone strides, and head output stride                        |
 | `<dataset>/<voxel>_<variant>.yaml`    | Database selection, batch size, experiment name, epochs, and optional pretrained weights      |
 
+For T4Dataset the bundled configs stop at the bases `t4dataset/base_120m.yaml` and `t4dataset/base_voxel024_120m.yaml`. They declare the classes the model trains and require the taxonomy that folds the labels of the database onto them, so a T4Dataset experiment lives in an external config root, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
+
 ## Training
 
-Train the base model from scratch:
+The nuScenes config trains from scratch on the `nuscenes/nuscenes_base` database:
 
 ```bash
-autoware-ml train --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_gen1_base
-```
-
-The `jpntaxi` and `j6gen2` configs declare `weights: ???`, so they must be started from a pretrained checkpoint. Pass it with `--weights`. The config already lowers the learning rate for fine-tuning:
-
-```bash
-autoware-ml train \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/centerpoint/T4Dataset-gen1_base-v1.0.0/gen1_base/voxel024_second_secfpn_b16_30e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
+autoware-ml train --config-name detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m
 ```
 
 For a pipeline validation run:
 
 ```bash
 autoware-ml train \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_30e_t4dataset_120m_gen1_base \
+    --config-name detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m \
     +trainer.fast_dev_run=true
 ```
 
@@ -67,8 +58,8 @@ Checkpoints are written to `mlruns/<experiment_group_name>/<experiment_name>/<ru
 
 ```bash
 autoware-ml test \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel024_second_secfpn_b16_50e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m \
+    --weights mlruns/centerpoint/NuScenesDataset-base-v1.0.0/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Evaluation runs on a single device by default so metrics are deterministic. Pass `--use-config-devices` to keep the `trainer.devices` from the config.
@@ -77,8 +68,8 @@ Evaluation runs on a single device by default so metrics are deterministic. Pass
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/centerpoint/t4dataset/voxel024_second_secfpn_b16_50e_t4dataset_120m_j6gen2_base \
-    --weights mlruns/centerpoint/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel024_second_secfpn_b16_50e_t4dataset_120m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --config-name detection3d/centerpoint/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m \
+    --weights mlruns/centerpoint/NuScenesDataset-base-v1.0.0/nuscenes/voxel020_second_secfpn_b16_30e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
     --release v1.0.0
 ```
 

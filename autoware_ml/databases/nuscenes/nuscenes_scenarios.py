@@ -29,18 +29,18 @@ from autoware_ml.databases.scenarios import DatasetParams, ScenarioData, Scenari
 logger = logging.getLogger(__name__)
 
 # Maps a NuScenes version directory name to the nuscenes-devkit `nuscenes.utils.splits` scene-name
-# lists that apply to it.
+# lists that apply to it. The labels of the official test scenes are not public, so the validation
+# scenes also serve the test split.
 _VERSION_TO_SPLIT_SCENE_NAMES = {
     "v1.0-trainval": {
         SplitType.TRAIN: nuscenes_splits.train,
         SplitType.VAL: nuscenes_splits.val,
+        SplitType.TEST: nuscenes_splits.val,
     },
     "v1.0-mini": {
         SplitType.TRAIN: nuscenes_splits.mini_train,
         SplitType.VAL: nuscenes_splits.mini_val,
-    },
-    "v1.0-test": {
-        SplitType.TEST: nuscenes_splits.test,
+        SplitType.TEST: nuscenes_splits.mini_val,
     },
 }
 
@@ -98,36 +98,36 @@ class NuScenesScenarios(Scenarios):
             verbose=False,
         )
 
-        scene_name_to_split = self._build_scene_name_to_split(dataset_params.dataset_name)
+        scene_name_to_splits = self._build_scene_name_to_splits(dataset_params.dataset_name)
 
         scenario_splits = defaultdict(list)
         for scene in nusc.scene:
-            split = scene_name_to_split.get(scene["name"])
-            if split is None:
+            splits = scene_name_to_splits.get(scene["name"])
+            if splits is None:
                 continue
             log_record = nusc.get("log", scene["log_token"])
-            scenario_splits[split].append(
-                ScenarioData(
-                    dataset_params=dataset_params,
-                    scenario_id=scene["name"],
-                    scenario_version=dataset_params.dataset_name,
-                    vehicle_type=log_record.get("vehicle"),
-                    location=log_record.get("location"),
-                )
+            scenario = ScenarioData(
+                dataset_params=dataset_params,
+                scenario_id=scene["name"],
+                scenario_version=dataset_params.dataset_name,
+                vehicle_type=log_record.get("vehicle"),
+                location=log_record.get("location"),
             )
+            for split in splits:
+                scenario_splits[split].append(scenario)
         return scenario_splits
 
-    def _build_scene_name_to_split(self, dataset_name: str) -> Mapping[str, SplitType]:
+    def _build_scene_name_to_splits(self, dataset_name: str) -> Mapping[str, Sequence[SplitType]]:
         """
-        Build a mapping of scene name -> SplitType using nuscenes-devkit's official scene-name
+        Build a mapping of scene name -> SplitTypes using nuscenes-devkit's official scene-name
         split lists (`nuscenes.utils.splits`) for this NuScenes version.
 
         Args:
-          dataset_name: NuScenes version directory name (e.g. `v1.0-trainval`, `v1.0-mini`,
-            `v1.0-test`), used to select which official split lists apply.
+          dataset_name: NuScenes version directory name (e.g. `v1.0-trainval`, `v1.0-mini`),
+            used to select which official split lists apply.
 
         Returns:
-          Mapping[str, SplitType]: Dictionary of scene name to the split it belongs to.
+          Mapping[str, Sequence[SplitType]]: Dictionary of scene name to the splits it serves.
         """
 
         split_scene_names = _VERSION_TO_SPLIT_SCENE_NAMES.get(dataset_name)
@@ -137,9 +137,9 @@ class NuScenesScenarios(Scenarios):
                 f"expected one of {sorted(_VERSION_TO_SPLIT_SCENE_NAMES.keys())}."
             )
 
-        scene_name_to_split = {}
+        scene_name_to_splits = defaultdict(list)
         for split, scene_names in split_scene_names.items():
             for scene_name in scene_names:
-                scene_name_to_split[scene_name] = split
+                scene_name_to_splits[scene_name].append(split)
 
-        return scene_name_to_split
+        return scene_name_to_splits

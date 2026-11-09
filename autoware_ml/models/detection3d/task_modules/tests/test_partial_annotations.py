@@ -27,14 +27,14 @@ class TestPartialAnnotations(unittest.TestCase):
     def setUp(self) -> None:
         self.class_names = ["car", "pedestrian", "traffic_cone", "barrier"]
         self.partial_annotations = PartialAnnotations(
-            class_names=self.class_names, partial_ignore_labels=["traffic_cone", "barrier"]
+            class_names=self.class_names, partially_annotated_classes=["traffic_cone", "barrier"]
         )
 
     def test_resolves_labels_to_sorted_unique_class_ids(self) -> None:
         """Test that labels resolve to sorted, de-duplicated class ids."""
         partial_annotations = PartialAnnotations(
             class_names=self.class_names,
-            partial_ignore_labels=["barrier", "traffic_cone", "barrier"],
+            partially_annotated_classes=["barrier", "traffic_cone", "barrier"],
         )
 
         self.assertEqual(list(partial_annotations.partial_ignore_class_ids), [2, 3])
@@ -43,12 +43,14 @@ class TestPartialAnnotations(unittest.TestCase):
     def test_rejects_unknown_labels(self) -> None:
         """Test that a label outside class_names is rejected rather than silently ignored."""
         with self.assertRaisesRegex(ValueError, "helicopter"):
-            PartialAnnotations(class_names=self.class_names, partial_ignore_labels=["helicopter"])
+            PartialAnnotations(
+                class_names=self.class_names, partially_annotated_classes=["helicopter"]
+            )
 
     def test_rejects_no_labels(self) -> None:
         """Test that an empty label list is rejected, since it would never ignore anything."""
         with self.assertRaises(ValueError):
-            PartialAnnotations(class_names=self.class_names, partial_ignore_labels=[])
+            PartialAnnotations(class_names=self.class_names, partially_annotated_classes=[])
 
     def test_builds_masks_dropping_the_ignored_classes_of_unannotated_samples(self) -> None:
         """

@@ -31,7 +31,7 @@ from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.t4dataset.t4records_generator import MAX_SWEEPS, T4RecordsGenerator
 from autoware_ml.databases.t4dataset.t4scenarios import T4Scenarios
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
+from autoware_ml.databases.taxonomy import LabelVocabulary
 from autoware_ml.types.sensor import LidarChannel
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,6 @@ class T4RecordsGeneratorWorkerParams:
       lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
       box_annotation_dir: Directory of each scene with the category and instance tables to read
         box names from.
-      taxonomy: Taxonomies the database labels are built with.
       box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
     """
 
@@ -59,7 +58,6 @@ class T4RecordsGeneratorWorkerParams:
     lidar_channel: LidarChannel
     lidar_pointcloud_num_features: int
     box_annotation_dir: str
-    taxonomy: DatabaseTaxonomy
     box3d_pipelines: Sequence[Box3DPipeline]
 
 
@@ -84,7 +82,6 @@ def _apply_t4_records_generator(
             t4_records_generator_worker_params.lidar_pointcloud_num_features
         ),
         box_annotation_dir=t4_records_generator_worker_params.box_annotation_dir,
-        taxonomy=t4_records_generator_worker_params.taxonomy,
         box3d_pipelines=t4_records_generator_worker_params.box3d_pipelines,
     )
     # Generate DatasetRecords
@@ -102,9 +99,9 @@ class T4Dataset(BaseDatabase):
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
-        taxonomy: DatabaseTaxonomy,
         lidar_channel: str,
         lidar_pointcloud_num_features: int,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         box_annotation_dir: str,
@@ -119,9 +116,9 @@ class T4Dataset(BaseDatabase):
           cache_path: Path to cache the dataset records.
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<dataset_hash>.parquet
           num_workers: Number of workers to use for processing the dataset.
-          taxonomy: Taxonomies the database labels are built with.
           lidar_channel: Lidar channel each sample is keyed on.
           lidar_pointcloud_num_features: Number of features in the lidar pointcloud.
+          vocabulary: Vocabulary of the raw box labels of the recordings.
           box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
             clouds.
@@ -136,7 +133,7 @@ class T4Dataset(BaseDatabase):
             cache_path=cache_path,
             cache_file_prefix_name=cache_file_prefix_name,
             num_workers=num_workers,
-            taxonomy=taxonomy,
+            vocabulary=vocabulary,
             box3d_pipelines=box3d_pipelines,
             lidar_intensity_scale=lidar_intensity_scale,
             lidar_pointcloud_num_features=lidar_pointcloud_num_features,
@@ -158,7 +155,6 @@ class T4Dataset(BaseDatabase):
             f"root_path={str(self._root_path)}, "
             f"cache path={str(self._cache_path)}, "
             f"cache file prefix name={self._cache_file_prefix_name}, "
-            f"taxonomy={self._taxonomy}, "
             f"lidar_channel={self._lidar_channel.value}, "
             f"lidar_pointcloud_num_features={self._lidar_pointcloud_num_features}, "
             f"box_annotation_dir={self._box_annotation_dir}, "
@@ -273,7 +269,6 @@ class T4Dataset(BaseDatabase):
                 lidar_channel=self._lidar_channel,
                 lidar_pointcloud_num_features=self._lidar_pointcloud_num_features,
                 box_annotation_dir=self._box_annotation_dir,
-                taxonomy=self._taxonomy,
                 box3d_pipelines=self._box3d_pipelines,
             )
             for scenario in scenario_data.values()

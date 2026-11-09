@@ -24,8 +24,8 @@ hydra:
   output_subdir: code/hydra # Store hydra's config breakdown here for debugging
   # Note: hydra.searchpath cannot be set here. Hydra only accepts it in the primary
   # config (the one passed to --config-name), and this file is always reached through a
-  # defaults chain. The entrypoint roots config_path at autoware_ml/configs instead, so
-  # every group below it is already discoverable.
+  # defaults chain. The CLI passes the config root holding the task as config_path and
+  # every other config root through hydra.searchpath instead.
 
 # Note: The following are placeholders for the experiment configuration. They should be overridden
 # in the experiment-specific configuration files.

@@ -388,14 +388,28 @@ class FrustumMix(DataPreprocessorModule):
 class InstanceCopy(DataPreprocessorModule):
     """Copy the points of selected classes from the next sample of the batch."""
 
-    def __init__(self, instance_classes: Sequence[int], probability: float = 1.0) -> None:
+    def __init__(
+        self,
+        instance_classes: Sequence[str],
+        class_names: Sequence[str],
+        probability: float = 1.0,
+    ) -> None:
         """Initialize the InstanceCopy layer.
 
         Args:
-            instance_classes: Semantic class indices copied from the second cloud.
+            instance_classes: Semantic classes whose points are copied from the second cloud.
+            class_names: Semantic classes of the model, in label index order.
             probability: Probability of copying into a sample.
+
+        Raises:
+            ValueError: If an instance class is not a class of the model.
         """
-        self.instance_classes = list(instance_classes)
+        unknown = [name for name in instance_classes if name not in class_names]
+        if unknown:
+            raise ValueError(
+                f"instance_classes {unknown} are not in class_names {list(class_names)}."
+            )
+        self.instance_classes = [list(class_names).index(name) for name in instance_classes]
         self.probability = probability
 
     def __call__(self, batch_inputs: ModelBatchInputs, *, is_training: bool) -> ModelBatchInputs:

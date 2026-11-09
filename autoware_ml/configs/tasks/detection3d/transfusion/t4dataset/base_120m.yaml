@@ -7,12 +7,15 @@ defaults:
   - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  - /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: ???
+  - /ego@ego: ???
   - _self_
 
-point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
+taxonomy:
+  detection3d:
+    class_names: [car, truck, bus, bicycle, pedestrian, barrier, traffic_cone]
 
-# Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${database.taxonomy.detection3d.eval_range}
+point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
 
 # Boxes carrying one of these (class, attribute) pairs are dropped from training, evaluation
 # and the frame sampler alike.
@@ -96,11 +99,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all
@@ -169,11 +171,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all

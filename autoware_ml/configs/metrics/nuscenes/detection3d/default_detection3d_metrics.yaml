@@ -1,7 +1,11 @@
 # @package metric_params.detection3d
 defaults:
   - components: default_detection3d_components
+  - class_catalog: default
   - _self_
 
-# Grouped classes for evaluation, from the detection taxonomy of the database.
-class_groups: ${database.taxonomy.detection3d.class_groups}
+max_distances:
+  _target_: autoware_ml.metrics.class_catalog.max_distances
+  _convert_: all
+  catalog: ${metric_params.detection3d.class_catalog}
+  class_names: ${taxonomy.detection3d.class_names}

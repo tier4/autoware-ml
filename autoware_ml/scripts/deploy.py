@@ -19,6 +19,7 @@ integration, and model deployment execution.
 """
 
 import logging
+from collections.abc import Mapping
 from types import MappingProxyType
 
 import hydra
@@ -49,7 +50,10 @@ from autoware_ml.utils.mlflow_helpers import (
 )
 from autoware_ml.utils.onnx_meta import release_to_model_version
 from autoware_ml.utils.deploy import (
+    ExportSpec,
+    resolve_export_specs,
     validate_cuda_available,
+    validate_onnx_modules_exported,
     validate_onnx_names_not_configured,
 )
 from autoware_ml.utils.runtime import (
@@ -68,8 +72,8 @@ CONFIG_NAME_PREFIX = "tasks/"
 def deploy(
     deploy_cfg: DictConfig,
     output_dir: Path,
-    datamodule: DataModule,
     model: ModuleBaseModel,
+    export_specs: Mapping[str, ExportSpec],
     config_name: str,
     release: str | None,
     tracker: str | None = None,
@@ -80,8 +84,9 @@ def deploy(
     Args:
         deploy_cfg: Hydra configuration for deployment.
         output_dir: Directory to save the exported models.
-        datamodule: Data module providing the example batch used for tracing.
         model: The trained model to be deployed.
+        export_specs: The model's export specifications, resolved and checked before the
+            deploy run exists.
         config_name: User-facing config name stamped into the ONNX metadata.
         release: ``vMAJOR.MINOR.PATCH`` stamped into the ONNX metadata, or ``None``
             for an unversioned export.
@@ -91,8 +96,8 @@ def deploy(
     deployment_exporter = DeploymentExport(
         deploy_cfg=deploy_cfg,
         output_dir=output_dir,
-        datamodule=datamodule,
         model=model,
+        export_specs=export_specs,
         config_name=config_name,
         release=release,
         tracker=tracker,
@@ -201,6 +206,12 @@ def run_deploy(cfg: DictConfig) -> None:
     source_run_ids = [
         source["run_id"] for source in source_checkpoints if source["run_id"] is not None
     ]
+
+    # Built before the run exists: a model that does not build, or a module without its
+    # deploy.onnx.modules entry, stops the deploy without leaving a FAILED run behind.
+    datamodule, model, export_specs = _build(cfg, weights_path)
+    validate_onnx_modules_exported(cfg.deploy.onnx, export_specs)
+
     logger_enabled = cfg.get("logger") is not None
     run_context = build_mlflow_run_context(
         cfg,
@@ -219,7 +230,7 @@ def run_deploy(cfg: DictConfig) -> None:
     )
 
     if run_context is None:
-        _export(cfg, config_name, weights_path, release, run_context=None)
+        _export(cfg, config_name, model, export_specs, release, run_context=None)
         return
 
     try:
@@ -231,7 +242,7 @@ def run_deploy(cfg: DictConfig) -> None:
             checkpoint_path=checkpoint_path,
             source_checkpoints=source_checkpoints,
         )
-        _export(cfg, config_name, weights_path, release, run_context=run_context)
+        _export(cfg, config_name, model, export_specs, release, run_context=run_context)
     except Exception:
         MlflowClient(tracking_uri=run_context.tracking_uri).set_terminated(
             run_context.run_id, status=RunStatus.to_string(RunStatus.FAILED)
@@ -242,22 +253,18 @@ def run_deploy(cfg: DictConfig) -> None:
     )
 
 
-def _export(
-    cfg: DictConfig,
-    config_name: str,
-    weights_path: list[Path],
-    release: str | None,
-    run_context: MlflowRunContext | None,
-) -> None:
-    """Build the data module and the model, then export under the run's exports directory.
+def _build(
+    cfg: DictConfig, weights_path: list[Path]
+) -> tuple[DataModule, ModuleBaseModel, MappingProxyType[str, ExportSpec]]:
+    """Build the data module and the model, and resolve what the model exports.
 
     Args:
         cfg: Hydra configuration.
-        config_name: User-facing config name.
         weights_path: Checkpoints the model is built from.
-        release: ``vMAJOR.MINOR.PATCH`` of the export, or ``None``.
-        run_context: The deploy run, whose ``exports`` directory receives the outputs. Without
-            one the outputs land in ``experiment_run_dir`` of the config.
+
+    Returns:
+        The data module, the model on the CUDA device, and its export specifications,
+        resolved from the data module's first prediction batch.
     """
     validate_cuda_available()
     configure_torch_runtime()
@@ -267,20 +274,8 @@ def _export(
     logger.info("Using device: %s", device)
     logger.info("CUDA device: %s", torch.cuda.get_device_name(0))
 
-    if run_context is not None:
-        output_dir = run_context.exports_dir
-    elif cfg.get("experiment_run_dir") is not None:
-        output_dir = Path(cfg.experiment_run_dir)
-    else:
-        raise ValueError(
-            "Output directory must be specified in the configuration or obtained from MLflow run context."
-        )
-    logger.info("Output directory for deployment: %s", output_dir)
-
-    # Build datamodule
     datamodule = build_datamodule(cfg)
 
-    # Build model
     data_preprocessor = build_data_preprocessor(cfg)
     model = build_model(
         cfg,
@@ -291,12 +286,44 @@ def _export(
         set_eval=True,
         enforce_full_coverage=True,
     )
+    export_specs = resolve_export_specs(datamodule=datamodule, model=model, device=device)
+    return datamodule, model, MappingProxyType(export_specs)
+
+
+def _export(
+    cfg: DictConfig,
+    config_name: str,
+    model: ModuleBaseModel,
+    export_specs: Mapping[str, ExportSpec],
+    release: str | None,
+    run_context: MlflowRunContext | None,
+) -> None:
+    """Export the built model under the run's exports directory.
+
+    Args:
+        cfg: Hydra configuration.
+        config_name: User-facing config name.
+        model: The built model.
+        export_specs: The model's export specifications.
+        release: ``vMAJOR.MINOR.PATCH`` of the export, or ``None``.
+        run_context: The deploy run, whose ``exports`` directory receives the outputs. Without
+            one the outputs land in ``experiment_run_dir`` of the config.
+    """
+    if run_context is not None:
+        output_dir = run_context.exports_dir
+    elif cfg.get("experiment_run_dir") is not None:
+        output_dir = Path(cfg.experiment_run_dir)
+    else:
+        raise ValueError(
+            "Output directory must be specified in the configuration or obtained from MLflow run context."
+        )
+    logger.info("Output directory for deployment: %s", output_dir)
 
     deploy(
         deploy_cfg=cfg.deploy,
         output_dir=output_dir,
-        datamodule=datamodule,
         model=model,
+        export_specs=export_specs,
         config_name=config_name,
         release=release,
         tracker="mlflow" if run_context is not None else None,

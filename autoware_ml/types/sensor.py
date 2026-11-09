@@ -53,7 +53,7 @@ class CameraChannel(str, Enum):
     CAM_BACK = "CAM_BACK"
     CAM_BACK_LEFT = "CAM_BACK_LEFT"
     CAM_BACK_RIGHT = "CAM_BACK_RIGHT"
-    # jpntaxigen2 wide camera channels
+    # Wide camera channels
     CAM_FRONT_WIDE = "CAM_FRONT_WIDE"
     CAM_FRONT_LEFT_WIDE = "CAM_FRONT_LEFT_WIDE"
     CAM_FRONT_RIGHT_WIDE = "CAM_FRONT_RIGHT_WIDE"
