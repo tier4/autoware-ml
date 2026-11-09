@@ -157,13 +157,11 @@ class LidarBBoxes3D(BaseBBoxes3D):
             Bool[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
             inside each bounding box.
         """
-        num_bboxes = self.bbox_params.shape[0]
         in_bboxes_mask = torch.zeros(
-            (num_bboxes, points.shape[0]), dtype=torch.bool, device=self.bbox_params.device
+            (self.bbox_params.shape[0], points.shape[0]),
+            dtype=torch.bool,
+            device=self.bbox_params.device,
         )
-        if num_bboxes == 0 or points.shape[0] == 0:
-            return in_bboxes_mask
-
         centers = self.center
         half_dims = self.dims / 2
         # Only the points within the circumscribed BEV radius of a box are tested: the slice
