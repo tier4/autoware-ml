@@ -55,17 +55,6 @@ def test_frozen_encoder_stays_in_eval_mode_without_gradients() -> None:
     assert all(not parameter.requires_grad for parameter in middle_encoder.encoder.parameters())
 
 
-def test_optimizer_groups_split_the_attention_blocks_from_the_rest() -> None:
-    middle_encoder = _build_middle_encoder()
-
-    groups = middle_encoder.build_optimizer_groups()
-
-    assert set(groups) == {"encoder_default", "encoder_block"}
-    grouped = sum(len(parameters) for parameters in groups.values())
-    assert grouped == sum(1 for parameter in middle_encoder.parameters() if parameter.requires_grad)
-    assert len(groups["encoder_block"]) > 0
-
-
 def test_encoder_inputs_read_the_position_and_the_batch_from_the_voxels() -> None:
     voxel_features = torch.arange(24, dtype=torch.float32).reshape(4, 6)
     coords = torch.tensor([[0, 1, 2, 3], [0, 4, 5, 6], [1, 7, 8, 9], [1, 1, 1, 1]])

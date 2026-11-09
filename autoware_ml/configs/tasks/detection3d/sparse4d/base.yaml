@@ -155,11 +155,6 @@ model:
     dn_query_budget: 0
 
   optimizer: ${optimizer}
-  optimizer_group_overrides:
-    encoder_block:
-      lr: 0.00002
-    encoder_default:
-      lr: 0.00005
   # Warmup and decay are spread over the optimizer steps of the run.
   scheduler:
     _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.StepCyclicCosineAnnealingLR

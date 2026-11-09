@@ -131,24 +131,6 @@ class Sparse4DDetectionModel(ModuleBaseModel):
                 f"{len(self.bbox_head.level_grids)}."
             )
 
-    def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the pretrained middle encoder parameters apart from the newly initialized ones.
-
-        Returns:
-            The optimizer groups of the middle encoder and ``det3d_branch``, the trainable
-            parameters of the lidar backbone, the lidar neck and the head.
-        """
-        groups = dict(self.lidar_network.pts_middle_encoder.build_optimizer_groups())
-        lidar_network = self.lidar_network
-        fresh_modules = [lidar_network.pts_backbone, lidar_network.pts_neck, self.bbox_head]
-        groups["det3d_branch"] = [
-            parameter
-            for module in fresh_modules
-            for parameter in module.parameters()
-            if parameter.requires_grad
-        ]
-        return groups
-
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the lidar branch and the Sparse4D head on one batch of frames.
 
@@ -248,8 +230,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             The fused stages the head samples.
 
         Raises:
-            ValueError: If the batch carries no points or no voxels, or the points do not
-                follow the layout the voxel encoder reads.
+            ValueError: If the batch carries no points or no voxels.
             RuntimeError: If the voxelizer dropped occupied voxels, which the head would never
                 sample.
         """
@@ -259,9 +240,6 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         voxels_data = multi_task_batch_inputs.voxels_data
         if voxels_data is None:
             raise ValueError("Sparse4D needs the voxels of a voxelizer in the model inputs.")
-        self.lidar_network.pts_voxel_encoder.check_points(
-            voxels_data.voxels, point_batch.timestamp_difference_dim
-        )
         if int(voxels_data.num_dropped_voxels) > 0:
             raise RuntimeError(
                 f"The voxelizer dropped {int(voxels_data.num_dropped_voxels)} occupied voxels. "

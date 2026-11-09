@@ -110,31 +110,6 @@ def test_lidar_branch_and_head_must_agree_on_the_sampled_levels(tmp_path: Path) 
         )
 
 
-def test_optimizer_groups_cover_the_encoder_and_the_detection_branch(tmp_path: Path) -> None:
-    model = _build_model(tmp_path)
-
-    groups = model.build_optimizer_groups()
-
-    assert set(groups) == {"encoder_default", "encoder_block", "det3d_branch"}
-    grouped = sum(len(parameters) for parameters in groups.values())
-    assert grouped == sum(1 for parameter in model.parameters() if parameter.requires_grad)
-    head_count = sum(1 for p in model.bbox_head.parameters() if p.requires_grad)
-    neck_count = sum(1 for p in model.lidar_network.pts_neck.parameters() if p.requires_grad)
-    assert len(groups["det3d_branch"]) == head_count + neck_count
-
-
-def test_points_must_follow_the_layout_of_the_voxel_encoder(tmp_path: Path) -> None:
-    model = _build_model(tmp_path)
-    batch = frame_inputs(torch.device("cpu"), 100.0)
-    gt_batch = batch.multi_task_gt_batch
-    point_batch = gt_batch.point_cloud_gt_batch._replace(timestamp_difference_dim=-1)
-
-    with pytest.raises(ValueError, match="time lag"):
-        model(
-            batch.replace(multi_task_gt_batch=gt_batch._replace(point_cloud_gt_batch=point_batch))
-        )
-
-
 def test_dropped_voxels_are_refused(tmp_path: Path) -> None:
     model = _build_model(tmp_path)
     batch = frame_inputs(torch.device("cpu"), 100.0)

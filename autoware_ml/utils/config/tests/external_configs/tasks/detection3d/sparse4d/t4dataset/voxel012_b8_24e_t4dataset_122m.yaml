@@ -33,12 +33,7 @@ model:
     # An instance becomes a target once it holds 2 points in a frame of the stream
     min_observed_points: 2
     track_birth_score: 0.2
-  optimizer_group_overrides:
-    encoder_block:
-      lr: 0.000008
-    encoder_default:
-      lr: 0.00002
-  # Peaks of 2e-4 for the head and 1e-4 for the encoder, sized for 8 GPUs x 8 lanes
+  # Peaks of 2e-4, sized for 8 GPUs x 8 lanes
   scheduler:
     warmup_epochs: 2
     decay_epochs: 22

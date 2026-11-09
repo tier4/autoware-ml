@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 from jaxtyping import Float32, Int
 import torch
@@ -30,7 +30,6 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3ExportContext,
     run_ptv3_export_encoder,
     serialize_ptv3_export_inputs,
-    split_block_parameters,
     validate_serialization_geometry,
 )
 from autoware_ml.utils.point_cloud.structures import Point, bit_length_tensor
@@ -40,9 +39,8 @@ class PTv3MiddleEncoder(nn.Module):
     """Run the PTv3 encoder on voxel features and return its deepest stage with the pooling chain.
 
     The middle encoder owns what the PTv3 task models keep on themselves: the serialization geometry
-    the encoder is checked against and the exports bake in, the optionally frozen encoder and
-    the optimizer groups of its pretrained blocks, see
-    :class:`autoware_ml.models.segmentation3d.ptv3_base.PTv3BaseModel`.
+    the encoder is checked against and the exports bake in, and the optionally frozen encoder,
+    see :class:`autoware_ml.models.segmentation3d.ptv3_base.PTv3BaseModel`.
     """
 
     EXPORT_ORDER = PTv3BaseModel.EXPORT_ORDER
@@ -91,16 +89,6 @@ class PTv3MiddleEncoder(nn.Module):
         if self.freeze_encoder:
             self.encoder.eval()
         return self
-
-    def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the attention blocks of the pretrained encoder apart from its other parameters.
-
-        Returns:
-            ``encoder_default`` and ``encoder_block``, see
-            :func:`autoware_ml.models.segmentation3d.ptv3_base.split_block_parameters`.
-        """
-        encoder_default_params, encoder_block_params = split_block_parameters(self.encoder)
-        return {"encoder_default": encoder_default_params, "encoder_block": encoder_block_params}
 
     def forward(
         self,
