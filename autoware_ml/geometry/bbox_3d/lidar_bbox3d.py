@@ -121,29 +121,6 @@ class LidarBBoxes3D(BaseBBoxes3D):
         corners += self.bbox_params[:, :3].view(-1, 1, 3)
         return corners
 
-    def corners_to_surfaces_3d(self) -> Float32[Tensor, "num_bboxes 6 4 3"]:
-        """
-        Get the corners of the 3D bounding boxes in the form of surfaces.
-
-        Returns:
-            (num_bboxes, 6, 4, 3): The corners of the 3D bounding boxes as surfaces, where
-                6 is the number of surface, 4 is the number of corners for each surface,
-                and 3 is the (x, y, z) coordinates.
-        """
-        corners = self.corners
-        surfaces = torch.stack(
-            [
-                corners[:, [0, 1, 2, 3]],  # front surface
-                corners[:, [7, 6, 5, 4]],  # back surface
-                corners[:, [0, 3, 7, 4]],  # bottom surface
-                corners[:, [1, 5, 6, 2]],  # top surface
-                corners[:, [0, 4, 5, 1]],  # left surface
-                corners[:, [3, 2, 6, 7]],  # right surface
-            ],
-            dim=1,
-        )
-        return surfaces
-
     def compute_points_in_bboxes(
         self, points: Float32[Tensor, "num_points 3"]
     ) -> Bool[Tensor, "num_bboxes num_points"]:
