@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the prediction dataset, from a synthetic Argoverse 2 corpus to a collated batch."""
+"""Tests for the motion dataset, from a synthetic Argoverse 2 corpus to a collated batch."""
 
 from __future__ import annotations
 
@@ -30,18 +30,18 @@ from autoware_ml.databases.argoverse2.av2_motion_database import AV2MotionDataba
 from autoware_ml.databases.argoverse2.av2_motion_scenarios import AV2MotionScenarios  # noqa: E402
 from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
     FOCAL_TRACK_ID,
-    av2_prediction_taxonomy,
+    av2_motion_taxonomy,
     av2_vocabulary,
     write_scenario,
 )
 from autoware_ml.databases.scenarios import DatasetParams  # noqa: E402
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema  # noqa: E402
 from autoware_ml.datamodule.data_module import DataLoaderConfig, DataModule  # noqa: E402
-from autoware_ml.datamodule.prediction.dataset import PredictionDataset  # noqa: E402
+from autoware_ml.datamodule.motion.dataset import MotionDataset  # noqa: E402
 from autoware_ml.datamodule.sources import DatasetSource  # noqa: E402
 from autoware_ml.datamodule.splitters.dataset_record_splitter import ScenarioSplitter  # noqa: E402
 from autoware_ml.transforms.base import TransformsCompose  # noqa: E402
-from autoware_ml.transforms.prediction.loading import LoadAgentTracks, LoadVectorMap  # noqa: E402
+from autoware_ml.transforms.motion.loading import LoadAgentTracks, LoadVectorMap  # noqa: E402
 from autoware_ml.types.dataset import DatasetFormat  # noqa: E402
 
 TRAIN_IDS = ("a0", "a1")
@@ -79,17 +79,17 @@ def _write_database(tmp_path: Path) -> AV2MotionDatabase:
     return database
 
 
-def _dataset(database: AV2MotionDatabase, with_map: bool = True) -> PredictionDataset:
+def _dataset(database: AV2MotionDatabase, with_map: bool = True) -> MotionDataset:
     """An unbound dataset over the database root, loading the tracks and, by default, the map."""
-    pipeline = [LoadAgentTracks(av2_prediction_taxonomy())]
+    pipeline = [LoadAgentTracks(av2_motion_taxonomy())]
     if with_map:
         pipeline.append(LoadVectorMap(num_points_per_polyline=5))
-    return PredictionDataset(
+    return MotionDataset(
         database_root_path=str(database.root_path), transforms=TransformsCompose(pipeline)
     )
 
 
-class PredictionDatasetTestCase(unittest.TestCase):
+class MotionDatasetTestCase(unittest.TestCase):
     """Base case that writes the synthetic corpus and its record table per test."""
 
     def setUp(self) -> None:
@@ -98,8 +98,8 @@ class PredictionDatasetTestCase(unittest.TestCase):
         self.database = _write_database(Path(self._tmp_dir.name))
 
 
-class TestPredictionDataset(PredictionDatasetTestCase):
-    """The dataset serves one sample per prediction record of the bound table."""
+class TestMotionDataset(MotionDatasetTestCase):
+    """The dataset serves one sample per motion record of the bound table."""
 
     def test_a_declared_dataset_serves_nothing_until_bound(self) -> None:
         """
@@ -120,7 +120,7 @@ class TestPredictionDataset(PredictionDatasetTestCase):
         """
         Input: the dataset bound to the record table of the six scenarios.
         Expected: one sample per record, each scenario its own scene group, and a table
-        narrowed to the scenario id, the timestamp and the prediction struct.
+        narrowed to the scenario id, the timestamp and the motion struct.
         Check: is_bound, the length, samples_per_record, the scene index groups and the
         column names.
         """
@@ -137,7 +137,7 @@ class TestPredictionDataset(PredictionDatasetTestCase):
             [
                 DatasetTableSchema.SCENARIO_ID.name,
                 DatasetTableSchema.TIMESTAMP_SECONDS.name,
-                DatasetTableSchema.PREDICTION.name,
+                DatasetTableSchema.MOTION.name,
             ],
         )
 
@@ -155,7 +155,7 @@ class TestPredictionDataset(PredictionDatasetTestCase):
 
         sample = dataset.get_data_sample(0)
 
-        source = sample.prediction_source_sample
+        source = sample.motion_source_sample
         self.assertIsNotNone(source)
         self.assertEqual(
             source.tracks_path, str(self.database.root_path / "train/a0/scenario_a0.parquet")
@@ -175,7 +175,7 @@ class TestPredictionDataset(PredictionDatasetTestCase):
         self.assertAlmostEqual(sample.frame_meta.timestamp, 1.0 + 4.9)
         self.assertEqual(sample.frame_meta.ego2global.diag().tolist(), [1.0, 1.0, 1.0, 1.0])
         self.assertIsNone(sample.frame_meta.lanelet_map_path)
-        self.assertIsNone(sample.prediction_gt_sample)
+        self.assertIsNone(sample.motion_gt_sample)
         for field in (
             "lidar_point_cloud_samples",
             "image_samples",
@@ -190,16 +190,16 @@ class TestPredictionDataset(PredictionDatasetTestCase):
         """
         Input: the first two samples of the bound dataset, read through getitem and collated.
         Expected: getitem runs the tracks and map loaders and times the IO, and the collated
-        batch carries the prediction GT batch only, with the two train scenarios in order.
+        batch carries the motion GT batch only, with the two train scenarios in order.
         Check: the GT sample shapes and timing, the None perception batches, the scene
-        tokens, the batch size and the prediction batch shapes, mask and current step.
+        tokens, the batch size and the motion batch shapes, mask and current step.
         """
         dataset = _dataset(self.database).bind(self.database.load_polars_scenario_dataframe())
 
         first, second = dataset[0], dataset[1]
 
-        self.assertEqual(first.prediction_gt_sample.agents.positions.shape, (3, 110, 3))
-        self.assertEqual(first.prediction_gt_sample.map_polylines.points.shape, (6, 5, 3))
+        self.assertEqual(first.motion_gt_sample.agents.positions.shape, (3, 110, 3))
+        self.assertEqual(first.motion_gt_sample.map_polylines.points.shape, (6, 5, 3))
         self.assertGreater(first.io_processing_time, 0.0)
         self.assertFalse(first.is_padding)
 
@@ -211,16 +211,16 @@ class TestPredictionDataset(PredictionDatasetTestCase):
         self.assertIsNone(batch.image_gt_batch)
         self.assertEqual(batch.frame_meta_batch.scene_tokens, ["a0", "a1"])
         self.assertEqual(batch.batch_size, 2)
-        prediction = batch.prediction_gt_batch
-        self.assertEqual(prediction.agent_positions.shape, (2, 3, 110, 3))
-        self.assertTrue(prediction.agent_mask.all().item())
-        self.assertEqual(prediction.map_points.shape, (2, 6, 5, 3))
-        self.assertEqual(prediction.current_step_index, 49)
+        motion = batch.motion_gt_batch
+        self.assertEqual(motion.agent_positions.shape, (2, 3, 110, 3))
+        self.assertTrue(motion.agent_mask.all().item())
+        self.assertEqual(motion.map_points.shape, (2, 6, 5, 3))
+        self.assertEqual(motion.current_step_index, 49)
 
     def test_a_pipeline_without_the_map_loader_serves_tracks_only(self) -> None:
         """
         Input: a dataset whose pipeline loads the tracks only, collated from one sample.
-        Expected: the prediction batch has no map and the agent tensors of one sample.
+        Expected: the motion batch has no map and the agent tensors of one sample.
         Check: map_points and the agent positions shape.
         """
         dataset = _dataset(self.database, with_map=False).bind(
@@ -229,35 +229,33 @@ class TestPredictionDataset(PredictionDatasetTestCase):
 
         batch = dataset.collate_fn([dataset[0]])
 
-        self.assertIsNone(batch.prediction_gt_batch.map_points)
-        self.assertEqual(batch.prediction_gt_batch.agent_positions.shape, (1, 3, 110, 3))
+        self.assertIsNone(batch.motion_gt_batch.map_points)
+        self.assertEqual(batch.motion_gt_batch.agent_positions.shape, (1, 3, 110, 3))
 
     def test_records_without_a_scenario_are_rejected(self) -> None:
         """
-        Input: the record table with its prediction column nulled, bound on its own and
+        Input: the record table with its motion column nulled, bound on its own and
         concatenated with the real records.
-        Expected: a prediction dataset serves prediction records only, so a table with a
+        Expected: a motion dataset serves motion records only, so a table with a
         record without a scenario is refused, both through bind and the constructor.
-        Check: ValueError saying the records carry no prediction scenario.
+        Check: ValueError saying the records carry no motion scenario.
         """
         records = self.database.load_polars_scenario_dataframe()
         perception = records.with_columns(
-            pl.lit(None)
-            .cast(DatasetTableSchema.PREDICTION.dtype)
-            .alias(DatasetTableSchema.PREDICTION.name)
+            pl.lit(None).cast(DatasetTableSchema.MOTION.dtype).alias(DatasetTableSchema.MOTION.name)
         )
 
-        with self.assertRaisesRegex(ValueError, "carry no prediction scenario"):
+        with self.assertRaisesRegex(ValueError, "carry no motion scenario"):
             _dataset(self.database).bind(perception)
-        with self.assertRaisesRegex(ValueError, "carry no prediction scenario"):
-            PredictionDataset(
+        with self.assertRaisesRegex(ValueError, "carry no motion scenario"):
+            MotionDataset(
                 database_root_path=str(self.database.root_path),
                 transforms=None,
                 dataset_records_dataframe=pl.concat([records, perception]),
             )
 
 
-class TestPredictionDataModule(PredictionDatasetTestCase):
+class TestMotionDataModule(MotionDatasetTestCase):
     """The data module splits the database by scenario and serves every split."""
 
     def test_datamodule_serves_the_splits_end_to_end(self) -> None:
@@ -267,7 +265,7 @@ class TestPredictionDataModule(PredictionDatasetTestCase):
         Expected: the fit stage serves the two train scenarios in one batch and the val
         scenario alone, and the test stage serves the three 50 step scenarios as batches of
         2 and 1 with the current step at 49.
-        Check: the batch sizes, the prediction batch shapes, the scene tokens, the padding
+        Check: the batch sizes, the motion batch shapes, the scene tokens, the padding
         mask and the current step of the test batch.
         """
         loader = DataLoaderConfig(batch_size=2, num_workers=0)
@@ -292,8 +290,8 @@ class TestPredictionDataModule(PredictionDatasetTestCase):
         datamodule.setup("fit")
         train_batch = next(iter(datamodule.train_dataloader()))
         self.assertEqual(train_batch.batch_size, 2)
-        self.assertEqual(train_batch.prediction_gt_batch.agent_positions.shape, (2, 3, 110, 3))
-        self.assertEqual(train_batch.prediction_gt_batch.map_points.shape, (2, 6, 5, 3))
+        self.assertEqual(train_batch.motion_gt_batch.agent_positions.shape, (2, 3, 110, 3))
+        self.assertEqual(train_batch.motion_gt_batch.map_points.shape, (2, 6, 5, 3))
         self.assertEqual(sorted(train_batch.frame_meta_batch.scene_tokens), list(TRAIN_IDS))
         self.assertFalse(train_batch.padding_mask.any().item())
         val_batch = next(iter(datamodule.val_dataloader()))
@@ -302,5 +300,5 @@ class TestPredictionDataModule(PredictionDatasetTestCase):
         datamodule.setup("test")
         test_batches = list(datamodule.test_dataloader())
         self.assertEqual([batch.batch_size for batch in test_batches], [2, 1])
-        self.assertEqual(test_batches[0].prediction_gt_batch.agent_positions.shape, (2, 3, 50, 3))
-        self.assertEqual(test_batches[0].prediction_gt_batch.current_step_index, 49)
+        self.assertEqual(test_batches[0].motion_gt_batch.agent_positions.shape, (2, 3, 50, 3))
+        self.assertEqual(test_batches[0].motion_gt_batch.current_step_index, 49)
