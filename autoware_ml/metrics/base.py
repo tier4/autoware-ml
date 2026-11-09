@@ -22,13 +22,17 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import numpy as np
 import torch.distributed
 import torchmetrics
 
+from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
+
+if TYPE_CHECKING:
+    from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 
 logger = logging.getLogger(__name__)
 
@@ -104,8 +108,10 @@ class MetricFilter(ABC):
     (detection boxes, segmentation points) a metric sees, exactly as the range
     bins do. ``name`` prefixes the metric's keys (empty for the identity filter).
     ``cache_key`` groups components that share a filter so the suite builds the
-    filtered sub-state once. ``required_eval_keys`` names the per-frame data the
-    filter needs (e.g. the ego pose), folded into the suite's fail-loud check.
+    filtered sub-state once. ``required_eval_keys`` names the fields of the frame
+    metadata (:class:`~autoware_ml.dataclasses.batch.frame_meta.FrameMetaSample`)
+    the filter reads, e.g. the ego pose. A filter that names any makes its suite
+    require the frame metadata, checked loud at the first batch.
     """
 
     name: str = ""
@@ -125,8 +131,8 @@ class MetricFilter(ABC):
                 ``(N, 7+)``. Concrete filters dispatch on the column count so a
                 box's whole footprint (not just its center) can be tested.
             context: Per-frame values named in ``required_eval_keys`` (e.g.
-                ``ego2global``, ``scene_token``), supplied by the suite from the
-                model's eval-output.
+                ``ego2global``, ``scene_token``), read by the suite off the frame's
+                metadata.
 
         Returns:
             Boolean mask over the input elements, true for those to keep.
@@ -181,9 +187,7 @@ class Metric(ABC, Generic[StateT]):
     A metric is a stateless strategy: it reads the synced ``state`` the suite
     builds and returns its slice of the report. ``stages`` declares when it runs
     and is configurable, so the same metric can be light at validation and full
-    at test purely from config. ``required_eval_keys`` names any extra keys the
-    metric needs in the model's eval-output, folded into the suite's own
-    required-key check so a misconfigured metric fails loud at the first batch.
+    at test purely from config.
     ``filter`` is an optional region/selection axis (default ``None`` means
     whole-scene) by which the suite groups components and prefixes their keys.
     ``needs_ttc`` declares that the metric reads the per-box collision TTC, so
@@ -200,7 +204,6 @@ class Metric(ABC, Generic[StateT]):
     the suite reports it once per filter slice instead of once per range.
     """
 
-    required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
     ttc_score_floor: float = 0.0
     needs_boxes: bool = False
@@ -248,11 +251,10 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
     and once per range, then asks each stage-applicable metric to ``evaluate``.
 
     Subclasses implement the task-specific parts only: ``add_state`` (in their
-    ``__init__``), ``update``, and ``state_for``.
+    ``__init__``), ``update``, ``state_for`` and ``requirements``.
     """
 
     prefix: str = ""
-    _required_keys: tuple[str, ...] = ()
 
     full_state_update: bool = False
 
@@ -387,25 +389,31 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
             if self._stage in component.stages and component.filter.name
         }
 
-    def required_keys(self) -> tuple[str, ...]:
-        """Eval-output keys needed at this suite instance's stage.
-
-        Returns:
-            The required eval-output key names.
-        """
-        extra = tuple(
-            key
-            for component in self.active_components()
-            for key in (*component.required_eval_keys, *component.filter.required_eval_keys)
+    def _filters_need_frame_meta(self) -> bool:
+        """Whether a filter active at this stage reads the frame metadata."""
+        return any(
+            component.filter.required_eval_keys
+            for component in self._filterable_components()
+            if self._stage in component.stages
         )
-        return tuple(dict.fromkeys(tuple(type(self)._required_keys) + extra))
 
     @abstractmethod
-    def update(self, eval_out: dict[str, Any]) -> None:
+    def requirements(self) -> MetricRequirements:
+        """What this suite needs from the eval output at its stage.
+
+        The mixin checks it against the first batch, so a model whose output lacks
+        a part a configured metric reads fails loud with both named.
+
+        Returns:
+            The requirements.
+        """
+
+    @abstractmethod
+    def update(self, eval_output: EvalOutput) -> None:
         """Accumulate one batch into the suite's state.
 
         Args:
-            eval_out: Flat eval-output dict built by the model for one batch.
+            eval_output: The typed eval output the model built for one batch.
         """
 
     @abstractmethod
@@ -485,34 +493,48 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         if available:
             self.region_frames_covered[index] += 1
 
-    def _frame_filter_context(
-        self, index: int, metric_filter: MetricFilter, frame: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        """The filter's context read out of one ``seg3d_frames`` entry.
+    @staticmethod
+    def _filter_context(
+        metric_filter: MetricFilter, frame_meta: FrameMetaSample | None
+    ) -> dict[str, Any]:
+        """The per-frame values a filter reads, taken off the frame's metadata.
 
-        A filter's per-frame keys (ego pose, scene token) live inside the frame
-        entry rather than at the eval-output top level, so they are checked here,
-        per frame. Coverage is tallied for the filter at ``index`` either way, so
-        a slice reported over fewer scenes is never silent.
+        Args:
+            metric_filter: The filter asking for its context.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
+
+        Returns:
+            The values named by the filter's ``required_eval_keys``.
+
+        Raises:
+            ValueError: If the filter reads the metadata and the frame carries none.
+        """
+        if not metric_filter.required_eval_keys:
+            return {}
+        if frame_meta is None:
+            raise ValueError(
+                f"Filter {metric_filter.name!r} reads {list(metric_filter.required_eval_keys)} "
+                "of the frame metadata, the model's build_eval_output must attach it."
+            )
+        return {key: getattr(frame_meta, key) for key in metric_filter.required_eval_keys}
+
+    def _frame_filter_context(
+        self, index: int, metric_filter: MetricFilter, frame_meta: FrameMetaSample | None
+    ) -> dict[str, Any] | None:
+        """The filter's context for one frame, ``None`` for a frame it cannot cover.
+
+        Coverage is tallied for the filter at ``index`` either way, so a slice
+        reported over fewer scenes is never silent.
 
         Args:
             index: Position of the filter in the registered component filters.
             metric_filter: The filter asking for its context.
-            frame: One ``seg3d_frames`` entry.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
 
         Returns:
             The context, or ``None`` for a scene the filter cannot cover.
-
-        Raises:
-            ValueError: If the frame lacks a key the filter declared.
         """
-        missing = [key for key in metric_filter.required_eval_keys if key not in frame]
-        if missing:
-            raise ValueError(
-                f"Filter {metric_filter.name!r} needs {missing} inside each seg3d_frames "
-                "entry, the model's build_eval_output must add them."
-            )
-        context = {key: frame[key] for key in metric_filter.required_eval_keys}
+        context = self._filter_context(metric_filter, frame_meta)
         available = metric_filter.available(context)
         self._note_frame_coverage(index, available)
         return context if available else None

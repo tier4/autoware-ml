@@ -6,9 +6,9 @@ matrix per (filter, range) bucket in a single stacked ``(F+1, R+1, C, C)``
 configured evaluation filters (region / corridor / collision) and range slices 1..R the
 radial windows, so memory never grows with the dataset and torchmetrics sums the
 matrices across ranks exactly. The frame count comes from the base suite's counters.
-Per-point filter membership is resolved at ``update`` from each ``seg3d_frames`` entry
-(where the ego pose lives), which is what lets a bounded matrix support the filter axis
-at all. It knows nothing about which metrics run: it hands each a ``ConfusionState``.
+Per-point filter membership is resolved at ``update`` from each segmentation frame's
+metadata (where the ego pose lives), which is what lets a bounded matrix support the
+filter axis at all. It knows nothing about which metrics run: it hands each a ``ConfusionState``.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import torch
 
 from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.metrics.class_groups import fold_confusion, resolve_class_groups
+from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
 
 
@@ -27,7 +28,6 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
     """Confusion-matrix segmentation suite over (filter, range) buckets."""
 
     prefix = "seg3d"
-    _required_keys = ("seg3d_frames",)
 
     def __init__(
         self,
@@ -79,37 +79,36 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             dist_reduce_fx="sum",
         )
 
-    def required_keys(self) -> tuple[str, ...]:
-        """``seg3d_frames`` plus any component-declared eval-output keys.
-
-        Filter context keys (ego pose, scene token) live *inside* each frame
-        entry, not at the eval-output top level, so they are validated per frame in
-        ``update`` instead. Component-level keys stay in the batch-0 check.
+    def requirements(self) -> MetricRequirements:
+        """The segmentation frames, plus the frame metadata when a filter reads it.
 
         Returns:
-            The required eval-output key names.
+            The requirements at this suite instance's stage.
         """
-        extra = tuple(
-            key for component in self.active_components() for key in component.required_eval_keys
-        )
-        return tuple(dict.fromkeys(type(self)._required_keys + extra))
+        return MetricRequirements(segmentation3d=True, frame_meta=self._filters_need_frame_meta())
 
     def _counts(self, predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         indices = targets * self.num_classes + predictions
         counts = torch.bincount(indices, minlength=self.num_classes**2)
         return counts.reshape(self.num_classes, self.num_classes).long()
 
-    def update(self, eval_out: dict[str, Any]) -> None:
+    def update(self, eval_output: EvalOutput) -> None:
         """Fold one batch of per-frame point predictions into the matrices.
 
         Args:
-            eval_out: Flat eval-output dict with the per-frame ``seg3d_frames``.
+            eval_output: The typed eval output the model built for one batch.
         """
+        output = eval_output.segmentation3d
+        if output is None:
+            raise ValueError(
+                "The segmentation suite needs the segmentation3d frames, the eval output "
+                "carries none."
+            )
         active_filter_keys = self._stage_filter_keys()
-        for frame in eval_out["seg3d_frames"]:
-            predictions = frame["pred"].detach().reshape(-1)
-            targets = frame["target"].detach().reshape(-1)
-            coord = frame["coord"].detach().to(dtype=torch.float32)
+        for frame in output.frames:
+            predictions = frame.pred.detach().reshape(-1)
+            targets = frame.target.detach().reshape(-1)
+            coord = frame.coord.detach().to(dtype=torch.float32)
             valid = (
                 (targets != self.ignore_index)
                 & (targets >= 0)
@@ -131,7 +130,7 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             for index, metric_filter in enumerate(self._component_filters):
                 if metric_filter.cache_key not in active_filter_keys:
                     continue
-                context = self._frame_filter_context(index, metric_filter, frame)
+                context = self._frame_filter_context(index, metric_filter, frame.frame_meta)
                 if context is None:
                     continue  # scene without a lanelet map, excluded from this slice
                 keep = torch.from_numpy(

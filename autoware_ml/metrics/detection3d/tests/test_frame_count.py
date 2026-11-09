@@ -22,6 +22,13 @@ from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.frame_count import FrameCount
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.metrics.eval_output import EvalOutput
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    prediction,
+)
 
 _CLASS_NAMES = ("car", "pedestrian")
 
@@ -31,13 +38,27 @@ def _box(x: float) -> list[float]:
     return [x, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]
 
 
-def _prediction(xs: list[float]) -> dict[str, torch.Tensor]:
+def _prediction(xs: list[float]) -> Detection3DSamplePredictions:
     """One frame of car predictions at the given distances."""
-    return {
-        "bboxes_3d": torch.tensor([_box(x) for x in xs], dtype=torch.float32).reshape(-1, 9),
-        "scores_3d": torch.full((len(xs),), 0.9, dtype=torch.float32),
-        "labels_3d": torch.zeros((len(xs),), dtype=torch.long),
-    }
+    return prediction(
+        torch.tensor([_box(x) for x in xs], dtype=torch.float32).reshape(-1, 9),
+        torch.full((len(xs),), 0.9, dtype=torch.float32),
+        torch.zeros((len(xs),), dtype=torch.long),
+    )
+
+
+def _two_cars_eval_output() -> EvalOutput:
+    """Two frames, a car at 10 m and a car at 60 m, each predicted where it is."""
+    return detection_eval_output(
+        [
+            detection_frame(
+                predictions=_prediction([x]),
+                gt_boxes=torch.tensor([_box(x)], dtype=torch.float32),
+                gt_labels=torch.tensor([0]),
+            )
+            for x in (10.0, 60.0)
+        ]
+    )
 
 
 class TestFrameCount(unittest.TestCase):
@@ -54,23 +75,18 @@ class TestFrameCount(unittest.TestCase):
     def test_counts_every_accumulated_frame(self) -> None:
         """Test that frames are summed across batches, an empty frame included."""
         suite = self._build_suite()
-        suite.update(
-            {
-                "predictions": [_prediction([10.0]), _prediction([60.0])],
-                "gt_boxes": [
-                    torch.tensor([_box(10.0)], dtype=torch.float32),
-                    torch.tensor([_box(60.0)], dtype=torch.float32),
-                ],
-                "gt_labels": [torch.tensor([0]), torch.tensor([0])],
-            }
-        )
+        suite.update(_two_cars_eval_output())
         # A frame with no boxes on either side is still an evaluated frame
         suite.update(
-            {
-                "predictions": [_prediction([])],
-                "gt_boxes": [torch.zeros((0, 9), dtype=torch.float32)],
-                "gt_labels": [torch.zeros((0,), dtype=torch.long)],
-            }
+            detection_eval_output(
+                [
+                    detection_frame(
+                        predictions=_prediction([]),
+                        gt_boxes=torch.zeros((0, 9), dtype=torch.float32),
+                        gt_labels=torch.zeros((0,), dtype=torch.long),
+                    )
+                ]
+            )
         )
 
         report = suite.result(EvalStage.VAL)
@@ -80,16 +96,7 @@ class TestFrameCount(unittest.TestCase):
     def test_range_buckets_do_not_repeat_the_frame_count(self) -> None:
         """Test that the range-invariant count is reported once, not per range window."""
         suite = self._build_suite()
-        suite.update(
-            {
-                "predictions": [_prediction([10.0]), _prediction([60.0])],
-                "gt_boxes": [
-                    torch.tensor([_box(10.0)], dtype=torch.float32),
-                    torch.tensor([_box(60.0)], dtype=torch.float32),
-                ],
-                "gt_labels": [torch.tensor([0]), torch.tensor([0])],
-            }
-        )
+        suite.update(_two_cars_eval_output())
 
         report = suite.result(EvalStage.TEST)
 
@@ -102,11 +109,15 @@ class TestFrameCount(unittest.TestCase):
     def test_reset_drops_the_frames_of_the_previous_epoch(self) -> None:
         """Test that the count starts over after the suite is reset."""
         suite = self._build_suite()
-        batch = {
-            "predictions": [_prediction([10.0])],
-            "gt_boxes": [torch.tensor([_box(10.0)], dtype=torch.float32)],
-            "gt_labels": [torch.tensor([0])],
-        }
+        batch = detection_eval_output(
+            [
+                detection_frame(
+                    predictions=_prediction([10.0]),
+                    gt_boxes=torch.tensor([_box(10.0)], dtype=torch.float32),
+                    gt_labels=torch.tensor([0]),
+                )
+            ]
+        )
         suite.update(batch)
         suite.update(batch)
         suite.reset()

@@ -4,15 +4,15 @@
 as list states (so torchmetrics handles cross-GPU sync) and applies the GT
 filters at ``update`` time. It knows nothing about which metrics run: it builds
 a ``Detection3DState`` (overall and per range/filter) and hands it to the injected
-metrics. Region and collision filters need per-frame metadata (ego pose, scene token) in the
-eval output, so their keep-masks are precomputed per frame at update and nothing needs the map
-at compute time, DDP gathers only tensors.
+metrics. Region and collision filters need the per-frame metadata (ego pose, lanelet map) the
+eval frames carry, so their keep-masks are precomputed per frame at update and nothing needs
+the map at compute time, DDP gathers only tensors.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -33,8 +33,12 @@ from autoware_ml.metrics.detection3d.matching import (
 )
 from autoware_ml.metrics.detection3d.naming import metric_token
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
+from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
 from autoware_ml.types.metrics import MatchCost
+
+if TYPE_CHECKING:
+    from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +63,6 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
     """
 
     prefix = "det3d"
-    _required_keys = ("predictions", "gt_boxes", "gt_labels")
 
     def __init__(
         self,
@@ -206,49 +209,44 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                         metric_range.name,
                     )
 
-    def required_keys(self) -> tuple[str, ...]:
-        """Fold in the collision provider's frame-context keys.
+    def requirements(self) -> MetricRequirements:
+        """The detection frames, plus the frame metadata and point counts the config reads.
 
         The collision TTC needs the ego pose and lanelet map path exactly like the
-        region filters do. Declaring them here makes a missing key fail loud at
-        the first batch instead of silently reporting zero coverage.
+        region filters do, and the ground truth point filter needs the point count of
+        every box. Declaring them makes a missing part fail loud at the first batch
+        instead of silently reporting zero coverage.
 
         Returns:
-            The required eval-output key names.
+            The requirements at this suite instance's stage.
         """
-        keys = super().required_keys()
-        if self.collision is not None:
-            keys = tuple(dict.fromkeys(keys + ("ego2global", "lanelet_map_path")))
-        if self.min_num_points > 0:
-            keys = tuple(dict.fromkeys(keys + ("gt_num_points",)))
-        return keys
+        return MetricRequirements(
+            detection3d=True,
+            frame_meta=self.collision is not None or self._filters_need_frame_meta(),
+            gt_num_points=self.min_num_points > 0,
+        )
 
-    def update(self, eval_out: dict[str, Any]) -> None:
+    def update(self, eval_output: EvalOutput) -> None:
         """Accumulate one batch, applying every GT filter per frame.
 
         Args:
-            eval_out: Flat eval-output dict built by the model for one batch.
+            eval_output: The typed eval output the model built for one batch.
         """
-        predictions = eval_out["predictions"]
-        gt_boxes = eval_out["gt_boxes"]
-        gt_labels = eval_out["gt_labels"]
-        gt_num_points = eval_out.get("gt_num_points")
-        padding_mask = eval_out.get("padding_mask")
-        if len(predictions) != len(gt_boxes) or len(predictions) != len(gt_labels):
+        output = eval_output.detection3d
+        if output is None:
             raise ValueError(
-                "Detection metric expects equal numbers of predictions, gt_boxes, and gt_labels."
+                "The detection suite needs the detection3d frames, the eval output carries none."
             )
-        if self.min_num_points > 0 and gt_num_points is None:
+        if self.min_num_points > 0 and not output.carries_gt_num_points:
             raise ValueError(
                 f"min_num_points={self.min_num_points} is configured but the eval output "
                 "carries no gt_num_points, the GT filter cannot be applied."
             )
 
-        for i, (prediction, boxes, labels) in enumerate(
-            zip(predictions, gt_boxes, gt_labels, strict=True)
-        ):
-            frame_boxes = boxes.detach().to(dtype=torch.float32)
-            frame_labels = labels.detach().to(dtype=torch.long)
+        for i, frame in enumerate(output.frames):
+            prediction = frame.predictions
+            frame_boxes = frame.gt_boxes.detach().to(dtype=torch.float32)
+            frame_labels = frame.gt_labels.detach().to(dtype=torch.long)
             if self.class_names and bool(
                 ((frame_labels < 0) | (frame_labels >= len(self.class_names))).any()
             ):
@@ -257,8 +255,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                     "classes, the evaluation pipeline has to drop the boxes of ignored classes."
                 )
             num_points = (
-                gt_num_points[i].detach().to(dtype=torch.long, device=frame_boxes.device)
-                if gt_num_points is not None
+                frame.gt_num_points.detach().to(dtype=torch.long, device=frame_boxes.device)
+                if frame.gt_num_points is not None
                 else None
             )
             keep = gt_keep_mask(
@@ -271,45 +269,45 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             )
 
             self._note_frame()
-            pred_boxes = prediction["bboxes_3d"].detach().to(dtype=torch.float32)
+            pred_boxes = prediction.bboxes_3d.detach().to(dtype=torch.float32)
+            pred_labels = prediction.labels_3d.detach().to(dtype=torch.long)
             self.pred_boxes.append(pred_boxes)
-            self.pred_scores.append(prediction["scores_3d"].detach().to(dtype=torch.float32))
-            self.pred_labels.append(prediction["labels_3d"].detach().to(dtype=torch.long))
+            self.pred_scores.append(prediction.scores_3d.detach().to(dtype=torch.float32))
+            self.pred_labels.append(pred_labels)
             self.gt_boxes.append(frame_boxes[keep])
             self.gt_labels.append(frame_labels[keep])
-            is_padding = bool(padding_mask[i]) if padding_mask is not None else False
-            self.padding.append(torch.tensor([is_padding], device=frame_boxes.device))
+            self.padding.append(torch.tensor([frame.is_padding], device=frame_boxes.device))
 
             if self.collision is not None:
-                covered = self._ttc_frame_covered(eval_out, i)
+                frame_meta = self._collision_frame_meta(frame.frame_meta)
+                covered = self.collision.available(frame_meta.lanelet_map_path)
                 self.ttc_covered.append(torch.tensor([covered], device=frame_boxes.device))
-                if not is_padding:
+                if not frame.is_padding:
                     self.ttc_frames_seen += 1
                     self.ttc_frames_covered += int(covered)
                 self.gt_ttc.append(
-                    self._frame_ttc(frame_boxes[keep], frame_labels[keep], eval_out, i, covered)
+                    self._frame_ttc(frame_boxes[keep], frame_labels[keep], frame_meta, covered)
                 )
                 self.pred_ttc.append(
                     self._frame_ttc(
                         pred_boxes,
-                        prediction["labels_3d"].detach().to(dtype=torch.long),
-                        eval_out,
-                        i,
+                        pred_labels,
+                        frame_meta,
                         covered,
-                        scores=prediction["scores_3d"].detach(),
+                        scores=prediction.scores_3d.detach(),
                     )
                 )
 
             if self._component_filters and self._stage_filter_keys():
-                available = self._frame_region_availability(eval_out, i)
+                available = self._frame_region_availability(frame.frame_meta)
                 self.region_available.append(
                     torch.tensor(available, dtype=torch.bool, device=frame_boxes.device)
                 )
                 self.gt_region_masks.append(
-                    self._region_columns(frame_boxes[keep], eval_out, i, available)
+                    self._region_columns(frame_boxes[keep], frame.frame_meta, available)
                 )
                 self.pred_region_masks.append(
-                    self._region_columns(pred_boxes, eval_out, i, available)
+                    self._region_columns(pred_boxes, frame.frame_meta, available)
                 )
 
     def bind_stage(self, stage: Any) -> None:
@@ -327,20 +325,31 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         ):
             self.collision = None
 
-    def _ttc_frame_covered(self, eval_out: dict[str, Any], frame_index: int) -> bool:
-        """Whether this frame carries a lanelet map for TTC.
+    @staticmethod
+    def _collision_frame_meta(frame_meta: FrameMetaSample | None) -> FrameMetaSample:
+        """The frame metadata the collision provider reads, guaranteed by the requirements.
 
-        The ego pose and map path themselves are guaranteed by
-        :meth:`required_keys` at the first batch.
+        Args:
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
+
+        Returns:
+            The metadata.
+
+        Raises:
+            ValueError: If the frame carries no metadata.
         """
-        return self.collision.available(eval_out["lanelet_map_path"][frame_index])
+        if frame_meta is None:
+            raise ValueError(
+                "The collision provider reads the ego pose and lanelet map path of every "
+                "frame, the model's build_eval_output must attach the frame metadata."
+            )
+        return frame_meta
 
     def _frame_ttc(
         self,
         boxes: torch.Tensor,
         labels: torch.Tensor,
-        eval_out: dict[str, Any],
-        frame_index: int,
+        frame_meta: FrameMetaSample,
         covered: bool,
         scores: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -357,8 +366,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         ttc = self.collision.per_box_ttc(
             boxes.detach().cpu().numpy().astype(np.float64),
             labels.detach().cpu().numpy().astype(np.int64),
-            eval_out["ego2global"][frame_index],
-            eval_out["lanelet_map_path"][frame_index],
+            frame_meta.ego2global,
+            frame_meta.lanelet_map_path,
             scores=None if scores is None else scores.cpu().numpy().astype(np.float64),
             score_floor=self._ttc_score_floor(),
         )
@@ -376,7 +385,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             if component.needs_ttc
         )
 
-    def _frame_region_availability(self, eval_out: dict[str, Any], frame_index: int) -> list[bool]:
+    def _frame_region_availability(self, frame_meta: FrameMetaSample | None) -> list[bool]:
         """Per region filter: active at this stage *and* its map present this frame.
 
         Tallies the per-filter coverage counters (a scene missing its lanelet map
@@ -387,7 +396,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         available = []
         for index, metric_filter in enumerate(self._component_filters):
             is_available = metric_filter.cache_key in active and metric_filter.available(
-                {key: eval_out[key][frame_index] for key in metric_filter.required_eval_keys}
+                self._filter_context(metric_filter, frame_meta)
             )
             if metric_filter.cache_key in active:
                 self._note_frame_coverage(index, is_available)
@@ -397,8 +406,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
     def _region_columns(
         self,
         boxes: torch.Tensor,
-        eval_out: dict[str, Any],
-        frame_index: int,
+        frame_meta: FrameMetaSample | None,
         available: list[bool],
     ) -> torch.Tensor:
         """Per-box keep-mask for each region filter, as an ``(N, F)`` bool tensor.
@@ -414,9 +422,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         columns = []
         for index, metric_filter in enumerate(self._component_filters):
             if available[index]:
-                context = {
-                    key: eval_out[key][frame_index] for key in metric_filter.required_eval_keys
-                }
+                context = self._filter_context(metric_filter, frame_meta)
                 columns.append(metric_filter.keep(elements, context))
             else:
                 columns.append(np.zeros(elements.shape[0], dtype=bool))

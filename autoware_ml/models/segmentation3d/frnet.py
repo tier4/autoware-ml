@@ -33,6 +33,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.metrics.segmentation3d.eval_output import (
     concat_frame_ids,
     segmentation3d_frames_eval_output,
@@ -271,7 +272,7 @@ class FRNet(ModuleBaseModel):
         metrics["loss"] = total_loss
         return metrics
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Pair per-frame point predictions with targets for the segmentation suites.
 
         FRNet's logits are already at the original point level, so each point's
@@ -283,20 +284,22 @@ class FRNet(ModuleBaseModel):
             outputs: Raw forward outputs.
 
         Returns:
-            Flat dict with the per-frame ``seg3d_frames`` the suites read.
+            The eval output with the per-frame segmentation frames the suites read.
         """
         point_logits = outputs.segmentation3d().logits
         point_batch = _point_cloud_batch(batch)
         offset = point_batch.offsets()
         point_index = torch.arange(point_logits.shape[0], device=point_logits.device)
-        return segmentation3d_frames_eval_output(
-            coord=point_batch.points[:, :3],
-            pred_labels=point_logits.argmax(dim=1),
-            target_labels=_point_labels(batch),
-            scores=torch.softmax(point_logits, dim=1),
-            frame_ids=concat_frame_ids(offset, point_index),
-            num_frames=int(offset.shape[0]),
-            batch_inputs=batch,
+        return EvalOutput(
+            segmentation3d=segmentation3d_frames_eval_output(
+                coord=point_batch.points[:, :3],
+                pred_labels=point_logits.argmax(dim=1),
+                target_labels=_point_labels(batch),
+                scores=torch.softmax(point_logits, dim=1),
+                frame_ids=concat_frame_ids(offset, point_index),
+                num_frames=int(offset.shape[0]),
+                batch_inputs=batch,
+            )
         )
 
     def decode_outputs(

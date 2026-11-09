@@ -12,20 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for eval_output."""
+"""Unit tests for the detection eval-output builder."""
 
 import unittest
 
 import torch
 
-from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
-from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.dataclasses.batch.detection3d import (
-    Detection3DGTBatch,
-)
+from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 
 
@@ -34,7 +32,6 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
 
     def setUp(self) -> None:
         """Set up the common inputs for the tests."""
-        # Create dummy ModelPredictions
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.multi_task_predictions = ModelPredictions(
             detection3d_predictions=[
@@ -79,9 +76,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
         gt_bboxes_num_points = torch.tensor(
             [[100, 200], [300, 0]], dtype=torch.int32, device=self.device
         )
-
-        # Inputs
-        detection3d_gt_batch = Detection3DGTBatch(
+        self.detection3d_gt_batch = Detection3DGTBatch(
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
             gt_valid_bboxes=gt_valid_bboxes,
@@ -90,7 +85,7 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
         self.multi_task_batch_inputs = ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
-                detection3d_gt_batch=detection3d_gt_batch,
+                detection3d_gt_batch=self.detection3d_gt_batch,
                 segmentation3d_gt_batch=None,
                 image_gt_batch=None,
                 padding_mask=torch.zeros(2, dtype=torch.bool, device=self.device),
@@ -100,103 +95,81 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
             range_view_data=None,
         )
 
-    def test_detection3d_gt_batch_assertion(self):
-        """Test that detection3d_eval_output raises ValueError when detection3d_gt_batch is None."""
+    def _with_gt_batch(self, gt_batch: ModelGTBatch) -> ModelBatchInputs:
+        """The common inputs with another ground truth batch."""
+        return ModelBatchInputs(
+            multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None, range_view_data=None
+        )
 
-        multi_task_batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=ModelGTBatch(
+    def test_rejects_a_batch_without_detection_ground_truth(self) -> None:
+        """
+        Input: a batch whose ground truth carries no detection part.
+        Expected: the builder refuses it, there is nothing to pair the predictions with.
+        Check: ValueError.
+        """
+        batch_inputs = self._with_gt_batch(
+            ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=None,
                 segmentation3d_gt_batch=None,
                 image_gt_batch=None,
                 padding_mask=torch.zeros(1, dtype=torch.bool),
-            ),
-            voxels_data=None,
-            image_data=None,
-            range_view_data=None,
+            )
         )
         with self.assertRaises(ValueError):
             detection3d_eval_output(
-                batch_inputs=multi_task_batch_inputs,
-                predictions=self.multi_task_predictions,
+                batch_inputs=batch_inputs, predictions=self.multi_task_predictions
             )
 
-    def test_detection3d_predictions_assertion(self):
-        """Test that detection3d_eval_output raises ValueError when detection3d_predictions is None."""
-
-        multi_task_predictions = ModelPredictions(detection3d_predictions=None)
+    def test_rejects_predictions_without_a_detection_part(self) -> None:
+        """
+        Input: model predictions that carry no detection part.
+        Expected: the builder refuses them.
+        Check: ValueError.
+        """
         with self.assertRaises(ValueError):
             detection3d_eval_output(
                 batch_inputs=self.multi_task_batch_inputs,
-                predictions=multi_task_predictions,
+                predictions=ModelPredictions(detection3d_predictions=None),
             )
 
-    def test_eval_outputs(self):
-        """Test that detection3d_eval_output correctly pairs predictions with ground truth."""
-
-        eval_outputs = detection3d_eval_output(
-            batch_inputs=self.multi_task_batch_inputs,
-            predictions=self.multi_task_predictions,
+    def test_pairs_every_sample_with_its_valid_ground_truth(self) -> None:
+        """
+        Input: two samples with two and one valid ground truth boxes.
+        Expected: one frame per sample, the ground truth trimmed to the valid boxes and the
+        predictions carried through untouched.
+        Check: the frame count, the ground truth tensors and the predictions of every frame.
+        """
+        output = detection3d_eval_output(
+            batch_inputs=self.multi_task_batch_inputs, predictions=self.multi_task_predictions
         )
 
-        self.assertIn("predictions", eval_outputs)
-        self.assertIn("gt_boxes", eval_outputs)
-        self.assertIn("gt_labels", eval_outputs)
-        self.assertIn("gt_num_points", eval_outputs)
-
-        # Ground truth comes back as one tensor per sample, trimmed to the valid boxes, which is
-        # the layout the detection metric consumes.
-        detection3d_gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch.detection3d_gt_batch
-        assert detection3d_gt_batch is not None
-        batch_size = detection3d_gt_batch.gt_valid_bboxes.shape[0]
-        self.assertEqual(len(eval_outputs["gt_boxes"]), batch_size)
-        self.assertEqual(len(eval_outputs["gt_labels"]), batch_size)
-        self.assertEqual(len(eval_outputs["gt_num_points"]), batch_size)
-        for batch_idx in range(batch_size):
-            num_valid = int(detection3d_gt_batch.gt_valid_bboxes[batch_idx])
-            self.assertEqual(eval_outputs["gt_boxes"][batch_idx].shape[0], num_valid)
-            self.assertTrue(
-                torch.equal(
-                    eval_outputs["gt_boxes"][batch_idx],
-                    detection3d_gt_batch.gt_bboxes_3d[batch_idx, :num_valid],
-                )
-            )
-            self.assertTrue(
-                torch.equal(
-                    eval_outputs["gt_labels"][batch_idx],
-                    detection3d_gt_batch.gt_labels_3d[batch_idx, :num_valid].long(),
-                )
-            )
-            self.assertTrue(
-                torch.equal(
-                    eval_outputs["gt_num_points"][batch_idx],
-                    detection3d_gt_batch.gt_bboxes_num_points[batch_idx, :num_valid],
-                )
-            )
-
+        gt_batch = self.detection3d_gt_batch
+        self.assertEqual(len(output.frames), 2)
         assert self.multi_task_predictions.detection3d_predictions is not None
-        for batch_idx in range(len(eval_outputs["predictions"])):
+        for index, frame in enumerate(output.frames):
+            num_valid = int(gt_batch.gt_valid_bboxes[index])
+            self.assertEqual(frame.gt_boxes.shape[0], num_valid)
+            self.assertTrue(torch.equal(frame.gt_boxes, gt_batch.gt_bboxes_3d[index, :num_valid]))
             self.assertTrue(
-                torch.allclose(
-                    eval_outputs["predictions"][batch_idx]["bboxes_3d"],
-                    self.multi_task_predictions.detection3d_predictions[batch_idx].bboxes_3d,
-                )
+                torch.equal(frame.gt_labels, gt_batch.gt_labels_3d[index, :num_valid].long())
             )
+            assert frame.gt_num_points is not None
             self.assertTrue(
-                torch.allclose(
-                    eval_outputs["predictions"][batch_idx]["scores_3d"],
-                    self.multi_task_predictions.detection3d_predictions[batch_idx].scores_3d,
-                )
+                torch.equal(frame.gt_num_points, gt_batch.gt_bboxes_num_points[index, :num_valid])
             )
-            self.assertTrue(
-                torch.allclose(
-                    eval_outputs["predictions"][batch_idx]["labels_3d"],
-                    self.multi_task_predictions.detection3d_predictions[batch_idx].labels_3d,
-                )
+            self.assertIs(
+                frame.predictions, self.multi_task_predictions.detection3d_predictions[index]
             )
+        self.assertTrue(output.carries_gt_num_points)
+        self.assertFalse(output.carries_frame_meta)
 
-    def test_frame_meta_is_passed_through_per_frame(self):
-        """Test that the ego pose, scene token and map path are handed to the metric per frame."""
+    def test_frame_meta_is_attached_per_frame(self) -> None:
+        """
+        Input: the two-sample batch with frame metadata, the second frame without a map.
+        Expected: every frame carries its own pose, scene token and map path.
+        Check: the metadata of both frames.
+        """
         ego2globals = torch.eye(4, device=self.device).repeat(2, 1, 1)
         ego2globals[1, 0, 3] = 7.0
         gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch._replace(
@@ -207,54 +180,37 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
                 lanelet_map_paths=["/maps/scene_a.osm", None],
             )
         )
-        multi_task_batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None, range_view_data=None
+
+        output = detection3d_eval_output(
+            batch_inputs=self._with_gt_batch(gt_batch), predictions=self.multi_task_predictions
         )
 
-        eval_outputs = detection3d_eval_output(
-            batch_inputs=multi_task_batch_inputs,
-            predictions=self.multi_task_predictions,
-        )
+        self.assertTrue(output.carries_frame_meta)
+        first, second = output.frames
+        assert first.frame_meta is not None and second.frame_meta is not None
+        self.assertTrue(torch.equal(second.frame_meta.ego2global, ego2globals[1]))
+        self.assertEqual(first.frame_meta.scene_token, "db/scene_a/0")
+        self.assertEqual(second.frame_meta.scene_token, "db/scene_b/1")
+        self.assertEqual(first.frame_meta.lanelet_map_path, "/maps/scene_a.osm")
+        self.assertIsNone(second.frame_meta.lanelet_map_path)
 
-        self.assertEqual(len(eval_outputs["ego2global"]), 2)
-        self.assertTrue(torch.equal(eval_outputs["ego2global"][1], ego2globals[1]))
-        self.assertEqual(eval_outputs["scene_token"], ["db/scene_a/0", "db/scene_b/1"])
-        self.assertEqual(eval_outputs["lanelet_map_path"], ["/maps/scene_a.osm", None])
-
-    def test_frame_meta_keys_absent_without_frame_meta_batch(self):
-        """Test that the metadata keys are left out when the batch carries none."""
-        eval_outputs = detection3d_eval_output(
-            batch_inputs=self.multi_task_batch_inputs,
-            predictions=self.multi_task_predictions,
-        )
-
-        self.assertNotIn("ego2global", eval_outputs)
-        self.assertNotIn("scene_token", eval_outputs)
-        self.assertNotIn("lanelet_map_path", eval_outputs)
-
-    def test_the_eval_output_flags_the_padding_samples(self):
+    def test_flags_the_padding_samples(self) -> None:
         """
         Input: the two-sample batch with its second sample flagged as padding.
-        Expected: the padding sample keeps its entry in every per-frame list, which every GPU
-        has to hold as many entries of for the metrics, and the eval output flags it for the
-        metric to leave out.
-        Check: the lengths of the per-frame lists and the per-frame padding flags.
+        Expected: the padding sample keeps its frame, which every GPU has to hold for the
+        gather, and the frame is flagged for the metric to leave out.
+        Check: the frame count and the per-frame padding flags.
         """
         gt_batch = self.multi_task_batch_inputs.multi_task_gt_batch._replace(
             padding_mask=torch.tensor([False, True], device=self.device)
         )
-        multi_task_batch_inputs = ModelBatchInputs(
-            multi_task_gt_batch=gt_batch, voxels_data=None, image_data=None, range_view_data=None
+
+        output = detection3d_eval_output(
+            batch_inputs=self._with_gt_batch(gt_batch), predictions=self.multi_task_predictions
         )
 
-        eval_outputs = detection3d_eval_output(
-            batch_inputs=multi_task_batch_inputs,
-            predictions=self.multi_task_predictions,
-        )
-
-        for key in ("predictions", "gt_boxes", "gt_labels", "gt_num_points"):
-            self.assertEqual(len(eval_outputs[key]), 2)
-        self.assertEqual(eval_outputs["padding_mask"], [False, True])
+        self.assertEqual(len(output.frames), 2)
+        self.assertEqual([frame.is_padding for frame in output.frames], [False, True])
 
 
 if __name__ == "__main__":

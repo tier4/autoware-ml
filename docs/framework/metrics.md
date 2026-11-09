@@ -57,7 +57,7 @@ suite does not exist at validation time at all.
 
 A suite runs the standard `torchmetrics` contract across an epoch.
 
-- `update(eval_out)` runs once per batch on each GPU. It folds the batch into the suite's state
+- `update(eval_output)` runs once per batch on each GPU. It folds the batch into the suite's state
   and never talks to other GPUs. Everything that needs per-frame context that is not a tensor,
   such as the ego pose or the scene's lanelet map, happens here.
 - sync runs once at epoch end, inside `compute`. torchmetrics combines every GPU's state using
@@ -68,9 +68,9 @@ A suite runs the standard `torchmetrics` contract across an epoch.
 
 `result(stage)` sets the reporting stage and calls `compute`. The mixin clones a suite per stage
 it reports at and resets it at epoch start, so each instance reports for exactly one stage. A
-suite declares the eval-output keys it needs through `required_keys()`, which folds in the keys
-its active components and their filters require, and the first batch fails loud when one is
-missing.
+suite declares what it needs from the eval output through `requirements()`, a `MetricRequirements`
+model that folds in what its active components and their filters read, and the first batch fails
+loud when a part is missing.
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +81,7 @@ sequenceDiagram
     loop each val batch
         L->>M: on_validation_batch_end(outputs, batch)
         M->>M: build_eval_output(batch, outputs)
-        M->>S: update(eval_out)
+        M->>S: update(eval_output)
     end
     L->>M: on_validation_epoch_end()
     M->>S: result(stage)
@@ -98,11 +98,11 @@ sequenceDiagram
 Each piece of state is registered with `add_state(name, default, dist_reduce_fx)`, the reduce
 function torchmetrics uses to combine that state across GPUs.
 
-| Suite                                      | `prefix`   | Required keys                          | State (`dist_reduce_fx`)                                  |
-| ------------------------------------------ | ---------- | -------------------------------------- | --------------------------------------------------------- |
-| `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)             |
-| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg3d_frames`                         | one confusion tensor over (filter, range) buckets (`sum`) |
-| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg3d_frames`                         | per-frame point tensors (`None`)                          |
+| Suite                                      | `prefix`   | Reads                                   | State (`dist_reduce_fx`)                                  |
+| ------------------------------------------ | ---------- | --------------------------------------- | --------------------------------------------------------- |
+| `Detection3DMetricSuite`                   | `det3d`    | `EvalOutput.detection3d` frames         | per-frame box tensors as list states (`None`)             |
+| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `EvalOutput.segmentation3d` frames      | one confusion tensor over (filter, range) buckets (`sum`) |
+| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `EvalOutput.segmentation3d` with scores | per-frame point tensors (`None`)                          |
 
 A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
 matching is score ordered inside each frame and the point-level metrics read raw points, so those
@@ -110,11 +110,16 @@ states stay per-frame list elements gathered with no reduction. Evaluation filte
 pose and the scene's lanelet map, which are not tensors, so their keep-masks are computed per
 frame at `update` and stored as boolean states, and DDP gathers only tensors.
 
-`seg3d_frames` is a list with one entry per frame carrying that frame's point coordinates,
-predicted and target labels, per-class scores, and the per-frame metadata configured filters
-need (`ego2global`, `lanelet_map_path`). `required_keys()` extends the base tuple with what
-the configuration demands: a detection suite with a collision provider also requires
-`ego2global` and `lanelet_map_path`, and a ground-truth point filter requires `gt_num_points`.
+The eval output is the typed `EvalOutput` of `autoware_ml/metrics/eval_output.py`. Its
+`detection3d` part holds one `Detection3DEvalFrame` per sample with the decoded predictions, the
+ground truth boxes and labels, the optional point count per box and the padding flag. Its
+`segmentation3d` part holds one `Segmentation3DEvalFrame` per sample with the point coordinates,
+predicted and target labels, the optional per-class scores and the optional detection ground
+truth. Both frame types carry the frame's `FrameMetaSample` (ego pose, scene token, lanelet map
+path) when the dataset attaches it. `requirements()` declares what the configuration demands: a
+detection suite with a collision provider or a region filter requires the frame metadata, a
+ground-truth point filter requires the point counts, and the point cloud suite requires the
+scores.
 
 A metric records its values under bare names such as `mAP_car` in a `MetricReport`. Every
 value travels with a typed `MetricKey` that names the suite `prefix`, the taxonomy `view`, the
@@ -141,7 +146,7 @@ classDiagram
     class MetricSuite {
         +prefix : str
         +components : list[Metric]
-        +required_keys()
+        +requirements()
         +update(eval_out)*
         +state_for(range, filter)*
         +compute()
@@ -167,7 +172,7 @@ Method marks:
 | `*`  | abstract, the subclass implements it |
 | none | concrete, provided by the base       |
 
-A suite implements `update` and `state_for` and declares its `prefix` and required keys. A metric
+A suite implements `update`, `state_for` and `requirements` and declares its `prefix`. A metric
 implements `evaluate` and declares `stages` and an optional `filter`. The suite holds a list of
 metrics it was given and runs each one against the state its filter selects. Adding a metric
 means adding a `Metric` subclass and listing it in config, never editing the suite.
@@ -177,23 +182,23 @@ means adding a `Metric` subclass and listing it in config, never editing the sui
 The baseline metrics need nothing beyond the model's predictions and the ground truth. Each
 optional capability adds a concrete requirement, checked loud at the first batch.
 
-| Capability                                       | Eval-output keys                           | External data              |
-| ------------------------------------------------ | ------------------------------------------ | -------------------------- |
-| detection metrics                                | `predictions`, `gt_boxes`, `gt_labels`     | none                       |
-| segmentation metrics                             | `seg3d_frames`                             | none                       |
-| ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)      | none                       |
-| corridor filter (straight strip)                 | none                                       | none                       |
-| region filters and collision filter              | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
-| collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
-| velocity error (TP errors, NDS)                  | boxes with velocity components             | none                       |
-| partial-detection score                          | ground-truth boxes inside `seg3d_frames`   | none                       |
+| Capability                                       | Eval-output part                                      | External data              |
+| ------------------------------------------------ | ----------------------------------------------------- | -------------------------- |
+| detection metrics                                | `detection3d` frames                                  | none                       |
+| segmentation metrics                             | `segmentation3d` frames, point metrics their `scores` | none                       |
+| ground-truth point filter, occlusion split       | `gt_num_points` on the detection frames               | none                       |
+| corridor filter (straight strip)                 | none                                                  | none                       |
+| region filters and collision filter              | `frame_meta` (ego pose, lanelet map path) per frame   | one lanelet2 map per scene |
+| collision metrics (critical FP/FN, weighted mAP) | `frame_meta` (ego pose, lanelet map path) per frame   | one lanelet2 map per scene |
+| velocity error (TP errors, NDS)                  | boxes with velocity components                        | none                       |
+| partial-detection score                          | `gt_boxes` on the segmentation frames                 | none                       |
 
 The map-based features never read a map path directly. They pass the frame's `scene_token` to a
 map provider, and an injected resolver turns that identifier into the scene's `lanelet2_map.osm`.
 Any data source that can name a map file per scene and attach a per-frame ego pose in the map
 frame can use them.
 
-A missing eval-output key fails loud at the first batch, naming the suite and the key. A missing
+A missing part of the eval output fails loud at the first batch, naming the suite and the part. A missing
 map is the one tolerated absence: the scene is excluded from the map-based slices and the
 collision metrics, kept in the whole-scene and corridor metrics, and the per-filter coverage is
 logged every epoch (see Coverage below). Boxes without velocity components score the worst-case
@@ -1326,17 +1331,19 @@ The same component listed once more with a filter is one more reported slice.
 
 ## What a model provides
 
-One method. It maps the typed forward outputs and model inputs to the flat dict the suites read.
-Model-specific work like box decoding happens here, and per-frame metadata the dataset supplies
-(ego pose, scene token) is passed through.
+One method. It maps the typed forward outputs and model inputs to the `EvalOutput` the suites
+read. Model-specific work like box decoding happens here, and the per-frame metadata the dataset
+supplies (ego pose, scene token, lanelet map path) is passed through by the shared builders.
 
 ```python
 class ModelA(ModuleBaseModel):
     def build_eval_output(self, batch, outputs):
-        return detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
+        return EvalOutput(
+            detection3d=detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
+        )
 ```
 
-The mixin feeds this dict into every attached suite. The model never calls `update`, `compute`,
+The mixin feeds this output into every attached suite. The model never calls `update`, `compute`,
 or `result`.
 
 ## Writing a custom metric
