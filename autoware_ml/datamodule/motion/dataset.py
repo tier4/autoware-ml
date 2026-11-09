@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dataset of the prediction task."""
+"""Dataset of the motion task."""
 
 from __future__ import annotations
 
@@ -22,12 +22,12 @@ import polars as pl
 import torch
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.schemas.prediction import (
-    PredictionDataModel,
-    PredictionDatasetSchema,
+from autoware_ml.databases.schemas.motion import (
+    MotionDataModel,
+    MotionDatasetSchema,
 )
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
-from autoware_ml.dataclasses.batch.prediction import PredictionSourceSample
+from autoware_ml.dataclasses.batch.motion import MotionSourceSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.datamodule.base_dataset import BaseDataset
 from autoware_ml.transforms.base import TransformsCompose
@@ -35,12 +35,12 @@ from autoware_ml.transforms.base import TransformsCompose
 logger = logging.getLogger(__name__)
 
 
-class PredictionDataset(BaseDataset):
+class MotionDataset(BaseDataset):
     """
-    Dataset serving the scenarios of a prediction database, one sample per record.
+    Dataset serving the scenarios of a motion database, one sample per record.
 
     A record names the source of its scenario, its files relative to the database root; the
-    dataset joins them onto its own root into a PredictionSourceSample, and the loading
+    dataset joins them onto its own root into a MotionSourceSample, and the loading
     transforms of the pipeline read the agent tracks and the vector map from it. The samples
     carry no sensor data and no box or mask annotations.
     """
@@ -48,7 +48,7 @@ class PredictionDataset(BaseDataset):
     _SERVED_COLUMNS = (
         DatasetTableSchema.SCENARIO_ID.name,
         DatasetTableSchema.TIMESTAMP_SECONDS.name,
-        DatasetTableSchema.PREDICTION.name,
+        DatasetTableSchema.MOTION.name,
     )
 
     def __init__(
@@ -67,7 +67,7 @@ class PredictionDataset(BaseDataset):
         Args:
           database_root_path: Root directory of the database the dataset reads.
           transforms: Transforms applied to every sample, starting with the loading transforms
-            of the prediction task.
+            of the motion task.
           dataset_records_dataframe: Records of the corpus. None until bound to records.
         """
 
@@ -90,23 +90,23 @@ class PredictionDataset(BaseDataset):
           dataset_records_dataframe: Records of the corpus.
 
         Raises:
-          ValueError: If a record carries no prediction column, so the table was not built by
-            a prediction database.
+          ValueError: If a record carries no motion column, so the table was not built by
+            a motion database.
         """
 
         records = dataset_records_dataframe.select(self._SERVED_COLUMNS)
-        prediction = pl.col(DatasetTableSchema.PREDICTION.name)
+        motion = pl.col(DatasetTableSchema.MOTION.name)
         # A null struct may be read back as a struct of null fields, and the tracks path is
-        # never null in a prediction record
+        # never null in a motion record
         absent = (
-            prediction.is_null()
-            | prediction.struct.field(PredictionDatasetSchema.tracks_relative_path.name).is_null()
+            motion.is_null()
+            | motion.struct.field(MotionDatasetSchema.tracks_relative_path.name).is_null()
         )
         num_absent = records.select(absent.sum()).item()
         if num_absent:
             raise ValueError(
-                f"{num_absent} of {len(records)} records carry no prediction scenario, the "
-                "record table was not built by a prediction database."
+                f"{num_absent} of {len(records)} records carry no motion scenario, the "
+                "record table was not built by a motion database."
             )
         self.dataset_records_dataframe = records
 
@@ -125,28 +125,26 @@ class PredictionDataset(BaseDataset):
         row = self.dataset_records_dataframe.row(index, named=True)
         scenario_id = row[DatasetTableSchema.SCENARIO_ID.name]
         timestamp_seconds = row[DatasetTableSchema.TIMESTAMP_SECONDS.name]
-        prediction = PredictionDataModel.load_from_dictionary(
-            row[DatasetTableSchema.PREDICTION.name]
-        )
-        source = PredictionSourceSample(
-            dataset_format=prediction.dataset_format,
+        motion = MotionDataModel.load_from_dictionary(row[DatasetTableSchema.MOTION.name])
+        source = MotionSourceSample(
+            dataset_format=motion.dataset_format,
             tracks_path=(
-                str(self.database_root_path / prediction.tracks_relative_path)
-                if prediction.tracks_relative_path is not None
+                str(self.database_root_path / motion.tracks_relative_path)
+                if motion.tracks_relative_path is not None
                 else None
             ),
             map_path=(
-                str(self.database_root_path / prediction.map_relative_path)
-                if prediction.map_relative_path is not None
+                str(self.database_root_path / motion.map_relative_path)
+                if motion.map_relative_path is not None
                 else None
             ),
-            scenario_key=prediction.scenario_key,
-            focal_track_id=prediction.focal_track_id,
-            first_step_index=prediction.first_step_index,
-            current_step_index=prediction.current_step_index,
-            num_steps=prediction.num_steps,
-            step_seconds=prediction.step_seconds,
-            num_tracks=prediction.num_tracks,
+            scenario_key=motion.scenario_key,
+            focal_track_id=motion.focal_track_id,
+            first_step_index=motion.first_step_index,
+            current_step_index=motion.current_step_index,
+            num_steps=motion.num_steps,
+            step_seconds=motion.step_seconds,
+            num_tracks=motion.num_tracks,
         )
         # The tracks are served in the frame of their source, so the frame of the sample is
         # the global frame itself
@@ -164,5 +162,5 @@ class PredictionDataset(BaseDataset):
             detection3d_gt_bboxes_3d=None,
             segmentation3d_gt_sample=None,
             frame_meta=frame_meta,
-            prediction_source_sample=source,
+            motion_source_sample=source,
         )
