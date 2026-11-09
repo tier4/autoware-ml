@@ -22,7 +22,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.backbones.ptv3 import PTv3SparseBackbone
+from autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder import PTv3MiddleEncoder
 from autoware_ml.models.detection3d.heads.sparse4d import TEMPORAL_STATE_INPUT_NAMES
 from autoware_ml.models.detection3d.main_modules.sparse4d import Sparse4DDetectionModel
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
@@ -52,7 +52,7 @@ def _build_lidar_network() -> Sparse4DLidar:
     """Build a small lidar branch whose neck returns the stage the deepest one fuses into."""
     return Sparse4DLidar(
         pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        pts_backbone=PTv3SparseBackbone(
+        pts_middle_encoder=PTv3MiddleEncoder(
             encoder=build_ptv3_encoder(), grid_size=1.0, point_cloud_range=POINT_CLOUD_RANGE
         ),
         pts_neck=PTv3Det3DFeaturePyramid(stage_channels=(8, 16), out_channels=32),
@@ -109,7 +109,7 @@ def test_lidar_branch_and_head_must_agree_on_the_sampled_levels(tmp_path: Path) 
         )
 
 
-def test_optimizer_groups_cover_the_backbone_and_the_detection_branch(tmp_path: Path) -> None:
+def test_optimizer_groups_cover_the_encoder_and_the_detection_branch(tmp_path: Path) -> None:
     model = _build_model(tmp_path)
 
     groups = model.build_optimizer_groups()

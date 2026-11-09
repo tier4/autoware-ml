@@ -2,7 +2,7 @@
 # Temporal Sparse4D detection on the sparse PTv3 encoder stages.
 defaults:
   - /tasks/default_task
-  - /tasks/segmentation3d/ptv3/encoder@model.lidar_network.pts_backbone.encoder
+  - /tasks/segmentation3d/ptv3/encoder@model.lidar_network.pts_middle_encoder.encoder
   - /tasks/segmentation3d/ptv3/voxel_encoder@model.lidar_network.pts_voxel_encoder
   - _self_
 
@@ -68,9 +68,9 @@ deploy:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
           serialization_orders: [z, z-trans]
-          pooling_strides: ${model.lidar_network.pts_backbone.encoder.stride}
-          enc_channels: ${model.lidar_network.pts_backbone.encoder.enc_channels}
-          patch_sizes: ${model.lidar_network.pts_backbone.encoder.enc_patch_size}
+          pooling_strides: ${model.lidar_network.pts_middle_encoder.encoder.stride}
+          enc_channels: ${model.lidar_network.pts_middle_encoder.encoder.enc_channels}
+          patch_sizes: ${model.lidar_network.pts_middle_encoder.encoder.enc_patch_size}
       ptv3_det3d_head:
         metainfo:
           class_names: ${taxonomy.detection3d.class_names}
@@ -101,20 +101,20 @@ model:
     prog_bar: true
     sync_dist: true
 
-  # Lidar branch: voxel encoder -> PTv3 backbone -> feature pyramid neck. The neck fuses the
-  # deepest backbone stage top-down into the stages the head samples.
+  # Lidar branch: voxel encoder -> PTv3 middle encoder -> feature pyramid neck. The neck fuses
+  # the deepest encoder stage top-down into the stages the head samples.
   lidar_network:
     _target_: autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar.Sparse4DLidar
-    pts_backbone:
-      _target_: autoware_ml.models.detection3d.backbones.ptv3.PTv3SparseBackbone
+    pts_middle_encoder:
+      _target_: autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder.PTv3MiddleEncoder
       grid_size: ${grid_size}
       point_cloud_range: ${point_cloud_range}
       freeze_encoder: false
     pts_neck:
       _target_: autoware_ml.models.detection3d.ptv3.PTv3Det3DFeaturePyramid
       stage_channels:
-        - ${model.lidar_network.pts_backbone.encoder.enc_channels[3]}
-        - ${model.lidar_network.pts_backbone.encoder.enc_channels[4]}
+        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[3]}
+        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[4]}
       out_channels: 256
 
   # Camera branch is not supported yet.

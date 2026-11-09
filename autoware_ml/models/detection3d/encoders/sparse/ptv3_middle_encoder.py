@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The PTv3 encoder as the sparse backbone of a detection lidar branch."""
+"""The PTv3 encoder as the sparse middle encoder of a detection lidar branch."""
 
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ from autoware_ml.utils.point_cloud.batching import batch_to_offset
 from autoware_ml.utils.point_cloud.structures import Point, bit_length_tensor
 
 
-class PTv3SparseBackbone(nn.Module):
+class PTv3MiddleEncoder(nn.Module):
     """Run the PTv3 encoder on voxel features and return its deepest stage with the pooling chain.
 
-    The backbone owns what the PTv3 task models keep on themselves: the serialization geometry
+    The middle encoder owns what the PTv3 task models keep on themselves: the serialization geometry
     the encoder is checked against and the exports bake in, the optionally frozen encoder and
     the optimizer groups of its pretrained blocks, see
     :class:`autoware_ml.models.segmentation3d.ptv3_base.PTv3BaseModel`.
@@ -55,7 +55,7 @@ class PTv3SparseBackbone(nn.Module):
         point_cloud_range: Sequence[float],
         freeze_encoder: bool = False,
     ) -> None:
-        """Initialize the backbone.
+        """Initialize the middle encoder.
 
         Args:
             encoder: PTv3 encoder module.
@@ -78,14 +78,15 @@ class PTv3SparseBackbone(nn.Module):
             self.encoder.requires_grad_(False)
             self.encoder.eval()
 
-    def train(self, mode: bool = True) -> PTv3SparseBackbone:
+    def train(self, mode: bool = True) -> PTv3MiddleEncoder:
         """Keep the frozen encoder in eval mode during training.
 
         Args:
-            mode: When ``True``, set the backbone to training mode; otherwise to evaluation mode.
+            mode: When ``True``, set the middle encoder to training mode; otherwise to
+                evaluation mode.
 
         Returns:
-            This backbone.
+            This middle encoder.
         """
         super().train(mode)
         if self.freeze_encoder:

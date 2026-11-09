@@ -23,36 +23,37 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.models.detection3d.heads.sparse4d import SparseStage
-from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 
 
 class Sparse4DLidar(nn.Module):
     """Encode voxelized lidar points into the sparse stages the Sparse4D head samples.
 
-    The branch owns the whole lidar path: the voxel encoder, the sparse backbone and the neck
-    that turns the backbone stages into the levels the head samples. That mirrors the BEVFusion
+    The branch owns the whole lidar path: the voxel encoder, the sparse middle encoder and the
+    neck that turns the encoder stages into the levels the head samples. That mirrors the BEVFusion
     lidar branch, so the detector only runs the head and a camera branch can join with its own
     path.
     """
 
     def __init__(
         self,
-        pts_voxel_encoder: VoxelFeatureEncoder,
-        pts_backbone: nn.Module,
+        pts_voxel_encoder: nn.Module,
+        pts_middle_encoder: nn.Module,
         pts_neck: nn.Module,
     ) -> None:
         """Initialize the lidar branch.
 
         Args:
-            pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
-            pts_backbone: Sparse backbone encoding the voxel features and their coordinates into
-                a hierarchy of stages, grouping its parameters with ``build_optimizer_groups``.
-            pts_neck: Neck turning the backbone stages into the ``num_levels`` levels the head
+            pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector
+                and checking the point layout with ``check_points``.
+            pts_middle_encoder: Sparse middle encoder encoding the voxel features and their
+                coordinates into a hierarchy of stages, grouping its parameters with
+                ``build_optimizer_groups``.
+            pts_neck: Neck turning the encoder stages into the ``num_levels`` levels the head
                 samples.
         """
         super().__init__()
         self.pts_voxel_encoder = pts_voxel_encoder
-        self.pts_backbone = pts_backbone
+        self.pts_middle_encoder = pts_middle_encoder
         self.pts_neck = pts_neck
 
     @property
@@ -61,12 +62,13 @@ class Sparse4DLidar(nn.Module):
         return self.pts_neck.num_levels
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the backbone parameters apart from the newly initialized neck.
+        """Group the middle encoder parameters apart from the newly initialized neck.
 
         Returns:
-            The optimizer groups of the backbone and ``pts_neck``, the trainable neck parameters.
+            The optimizer groups of the middle encoder and ``pts_neck``, the trainable neck
+            parameters.
         """
-        groups = dict(self.pts_backbone.build_optimizer_groups())
+        groups = dict(self.pts_middle_encoder.build_optimizer_groups())
         groups["pts_neck"] = [
             parameter for parameter in self.pts_neck.parameters() if parameter.requires_grad
         ]
@@ -83,8 +85,8 @@ class Sparse4DLidar(nn.Module):
 
         Args:
             voxels: Lidar voxel features, the padded points of every voxel.
-            coords: Voxel coordinates in ``(batch, x, y, z)`` order, as the sparse backbone
-                consumes them, with the voxels grouped by batch index.
+            coords: Voxel coordinates in ``(batch, x, y, z)`` order, as the sparse middle
+                encoder consumes them, with the voxels grouped by batch index.
             num_points: Number of points in each voxel.
             time_lag_column: Point column holding the time lag, ``-1`` when the points have
                 none; the voxel encoder checks it against the layout it reads.
@@ -98,5 +100,5 @@ class Sparse4DLidar(nn.Module):
         """
         self.pts_voxel_encoder.check_points(voxels, time_lag_column)
         voxel_features = self.pts_voxel_encoder(voxels, num_points)
-        point = self.pts_backbone(voxel_features=voxel_features, coords=coords)
+        point = self.pts_middle_encoder(voxel_features=voxel_features, coords=coords)
         return self.pts_neck(point)

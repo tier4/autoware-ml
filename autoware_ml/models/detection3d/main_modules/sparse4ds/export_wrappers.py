@@ -14,7 +14,7 @@
 
 """Export wrappers of the Sparse4D detection graph.
 
-The lidar branch exports as two graphs: the PTv3 backbone returning the stage features, and
+The lidar branch exports as two graphs: the PTv3 encoder returning the stage features, and
 the detection graph, which takes the stages the neck fuses and the instance bank state of the
 last frame, and returns the frame outputs with the bank state of the next frame.
 """
@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.models.detection3d.backbones.ptv3 import PTv3SparseBackbone
+from autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder import PTv3MiddleEncoder
 from autoware_ml.models.detection3d.heads.sparse4d import (
     TEMPORAL_QUERY_INDEX_OUTPUT_NAME,
     TEMPORAL_STATE_INPUT_NAMES,
@@ -60,25 +60,25 @@ SPARSE4D_EXPORT_OUTPUT_NAMES = (
 def build_lidar_export_context(
     lidar_network: Sparse4DLidar, batch_inputs: ModelBatchInputs
 ) -> PTv3ExportContext:
-    """Serialize an example batch and run the export-ready backbone of the lidar branch once.
+    """Serialize an example batch and run the export-ready encoder of the lidar branch once.
 
     Args:
         lidar_network: Lidar branch of the detector.
         batch_inputs: Example preprocessed batch with the voxels of one sample.
 
     Returns:
-        The shared front half of the split exports: the backbone graph and its stage features.
+        The shared front half of the split exports: the encoder graph and its stage features.
 
     Raises:
-        NotImplementedError: If the backbone of the branch is not the PTv3 encoder, the only
-            one with a split export.
+        NotImplementedError: If the middle encoder of the branch is not the PTv3 encoder, the
+            only one with a split export.
     """
-    backbone = lidar_network.pts_backbone
-    if not isinstance(backbone, PTv3SparseBackbone):
+    middle_encoder = lidar_network.pts_middle_encoder
+    if not isinstance(middle_encoder, PTv3MiddleEncoder):
         raise NotImplementedError(
-            f"The Sparse4D export reads a PTv3SparseBackbone, got {type(backbone).__name__}."
+            f"The Sparse4D export reads a PTv3MiddleEncoder, got {type(middle_encoder).__name__}."
         )
-    return backbone.build_export_context(lidar_network.pts_voxel_encoder, batch_inputs)
+    return middle_encoder.build_export_context(lidar_network.pts_voxel_encoder, batch_inputs)
 
 
 def fuse_export_stages(

@@ -132,10 +132,10 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             )
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the pretrained backbone parameters apart from the newly initialized branch.
+        """Group the pretrained encoder parameters apart from the newly initialized branch.
 
         Returns:
-            The backbone groups of the lidar branch and ``det3d_branch``, the neck and the head.
+            The encoder groups of the lidar branch and ``det3d_branch``, the neck and the head.
         """
         groups = dict(self.lidar_network.build_optimizer_groups())
         neck_params = groups.pop("pts_neck")
@@ -261,7 +261,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
                 "voxel is kept."
             )
         # Call the module rather than its forward so module hooks (model summary sizes and
-        # FLOP counting) see the branch. The sparse backbone consumes ``(batch, x, y, z)``
+        # FLOP counting) see the branch. The sparse middle encoder consumes ``(batch, x, y, z)``
         # coordinates.
         return self.lidar_network(
             voxels=voxels_data.voxels,
@@ -406,10 +406,10 @@ class Sparse4DDetectionModel(ModuleBaseModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        """Build the split ONNX export specs of the backbone and the detection graph.
+        """Build the split ONNX export specs of the encoder and the detection graph.
 
-        The backbone of the lidar branch exports the ``ptv3_lidar_encoder`` graph returning the
-        stage features. The ``ptv3_det3d_head`` graph fuses the stages with the neck, takes the
+        The middle encoder of the lidar branch exports the ``ptv3_lidar_encoder`` graph returning
+        the stage features. The ``ptv3_det3d_head`` graph fuses the stages with the neck, takes the
         instance bank state of the last frame and returns the outputs of the frame with the
         state of the next one.
 

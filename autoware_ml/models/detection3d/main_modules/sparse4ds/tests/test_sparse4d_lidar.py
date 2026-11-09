@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from autoware_ml.models.detection3d.backbones.ptv3 import PTv3SparseBackbone
+from autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder import PTv3MiddleEncoder
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
 from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
@@ -36,9 +36,9 @@ requires_cuda_spconv = pytest.mark.skipif(
 )
 
 
-def _build_backbone() -> PTv3SparseBackbone:
-    """Build the two stage test backbone."""
-    return PTv3SparseBackbone(
+def _build_middle_encoder() -> PTv3MiddleEncoder:
+    """Build the two stage test middle encoder."""
+    return PTv3MiddleEncoder(
         encoder=build_ptv3_encoder(), grid_size=1.0, point_cloud_range=POINT_CLOUD_RANGE
     )
 
@@ -51,10 +51,10 @@ def _build_neck(keep_deepest: bool = False) -> PTv3Det3DFeaturePyramid:
 
 
 def _build_branch(keep_deepest: bool = False) -> Sparse4DLidar:
-    """Build a small branch over the two stage test backbone."""
+    """Build a small branch over the two stage test middle encoder."""
     return Sparse4DLidar(
         pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        pts_backbone=_build_backbone(),
+        pts_middle_encoder=_build_middle_encoder(),
         pts_neck=_build_neck(keep_deepest=keep_deepest),
     )
 
@@ -64,7 +64,7 @@ def test_num_levels_follows_the_neck() -> None:
     assert _build_branch(keep_deepest=True).num_levels == 2
 
 
-def test_optimizer_groups_split_the_backbone_from_the_neck() -> None:
+def test_optimizer_groups_split_the_middle_encoder_from_the_neck() -> None:
     branch = _build_branch()
 
     groups = branch.build_optimizer_groups()

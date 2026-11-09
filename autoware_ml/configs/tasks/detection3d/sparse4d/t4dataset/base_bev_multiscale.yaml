@@ -12,8 +12,8 @@ model:
   lidar_network:
     pts_neck:
       stage_channels:
-        - ${model.lidar_network.pts_backbone.encoder.enc_channels[2]}
-        - ${model.lidar_network.pts_backbone.encoder.enc_channels[3]}
-        - ${model.lidar_network.pts_backbone.encoder.enc_channels[4]}
+        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[2]}
+        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[3]}
+        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[4]}
   bbox_head:
     lidar_sampling: bev
