@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the CPFPN neck."""
+"""Unit tests for the FinestLevelRefinedFPN neck."""
 
 from __future__ import annotations
 
@@ -20,12 +20,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from autoware_ml.models.common.necks.fpn import CPFPN
+from autoware_ml.models.common.necks.fpn import FinestLevelRefinedFPN
 
 
-def test_cpfpn_outputs_match_input_levels_and_channels() -> None:
+def test_finest_level_refined_fpn_outputs_match_input_levels_and_channels() -> None:
     """One map of ``out_channels`` per input level, at the resolution of that level."""
-    neck = CPFPN(in_channels=[24, 40], out_channels=16)
+    neck = FinestLevelRefinedFPN(in_channels=[24, 40], out_channels=16)
     high = torch.randn(2, 24, 12, 20)
     low = torch.randn(2, 40, 6, 10)
     outputs = neck((high, low))
@@ -34,9 +34,9 @@ def test_cpfpn_outputs_match_input_levels_and_channels() -> None:
     assert outputs[1].shape == (2, 16, 6, 10)
 
 
-def test_cpfpn_has_one_lateral_per_level_and_one_output_convolution() -> None:
+def test_finest_level_refined_fpn_has_one_lateral_per_level_and_one_output_convolution() -> None:
     """A 1x1 lateral convolution per level and a single 3x3 convolution for the finest level."""
-    neck = CPFPN(in_channels=[24, 40], out_channels=16)
+    neck = FinestLevelRefinedFPN(in_channels=[24, 40], out_channels=16)
 
     assert [conv.kernel_size for conv in neck.lateral_convs] == [(1, 1), (1, 1)]
     assert neck.lateral_convs[1].weight.shape == (16, 40, 1, 1)
@@ -51,13 +51,13 @@ def test_cpfpn_has_one_lateral_per_level_and_one_output_convolution() -> None:
     ]
 
 
-def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None:
+def test_finest_level_refined_fpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None:
     """The finest output is the 3x3 convolution of the fused map; the coarse one is left as is.
 
     The fused map adds the nearest-upsampled coarse lateral to the fine one. The 3x3 kernel
     is not an identity, so a bypassed or 1x1 output convolution fails the check.
     """
-    neck = CPFPN(in_channels=[1, 1], out_channels=1)
+    neck = FinestLevelRefinedFPN(in_channels=[1, 1], out_channels=1)
     # Unit laterals, the coarse one adding 0.5, and a 3x3 convolution of distinct taps.
     kernel = torch.arange(1.0, 10.0).reshape(1, 1, 3, 3) / 10.0
     with torch.no_grad():
@@ -78,9 +78,9 @@ def test_cpfpn_adds_the_coarse_level_and_refines_the_finest_level_only() -> None
     assert not torch.allclose(fine, fused)
 
 
-def test_cpfpn_rejects_another_number_of_levels() -> None:
+def test_finest_level_refined_fpn_rejects_another_number_of_levels() -> None:
     """Every level has its own lateral convolution, so another number of levels is refused."""
-    neck = CPFPN(in_channels=[24, 40], out_channels=16)
+    neck = FinestLevelRefinedFPN(in_channels=[24, 40], out_channels=16)
 
     with pytest.raises(ValueError, match="Expected 2 inputs, got 1"):
         neck((torch.randn(1, 24, 12, 20),))

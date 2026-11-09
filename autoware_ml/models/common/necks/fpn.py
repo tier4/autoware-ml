@@ -12,14 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The feature pyramid necks: the FPN of Lin et al. and the CPFPN of StreamPETR.
+"""The feature pyramid necks.
 
 :class:`BaseFPN` holds the lateral projection and top-down fusion that both share. :class:`FPN`
-follows mmdetection's ``FPN``; :class:`CPFPN` is a native port of the StreamPETR reference neck.
+follows mmdetection's ``FPN`` and refines every level; :class:`FinestLevelRefinedFPN` refines the
+finest level only.
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Literal
 
@@ -34,13 +36,14 @@ ExtraConvsSource = Literal["on_input", "on_lateral", "on_output"]
 EXTRA_CONVS_SOURCES: tuple[ExtraConvsSource, ...] = ("on_input", "on_lateral", "on_output")
 
 
-class BaseFPN(nn.Module):
+class BaseFPN(ABC, nn.Module):
     """Lateral projection and top-down fusion shared by the feature pyramid necks.
 
     Every used input level is projected to ``out_channels`` by a 1x1 lateral convolution and
     the deeper levels are upsampled and added top-down. The subclasses decide which fused
     levels pass an output convolution and whether extra levels are appended, and they call
-    :meth:`init_weights` once their convolutions exist.
+    :meth:`init_weights` once their convolutions exist. The class is abstract: a neck is one
+    of its subclasses, which implements :meth:`forward` on top of :meth:`fuse_levels`.
     """
 
     def __init__(
@@ -107,6 +110,12 @@ class BaseFPN(nn.Module):
                 laterals[level], size=laterals[level - 1].shape[-2:], mode=self.upsample_mode
             )
         return laterals
+
+    @abstractmethod
+    def forward(
+        self, inputs: Sequence[Float[torch.Tensor, "batch_size channels height width"]]
+    ) -> tuple[Float[torch.Tensor, "batch_size out_channels height width"], ...]:
+        """Build the pyramid from the input levels; every subclass defines its own."""
 
 
 class FPN(BaseFPN):
@@ -219,12 +228,24 @@ class FPN(BaseFPN):
         return tuple(outputs)
 
 
-class CPFPN(BaseFPN):
-    """StreamPETR feature pyramid with per-level laterals and top-down adds.
+class FinestLevelRefinedFPN(BaseFPN):
+    """Feature pyramid that refines the finest level only.
 
-    Outputs one feature map per input level; only the first (highest resolution) level passes
-    through a 3x3 refinement convolution, matching the reference implementation. The
-    convolutions carry no normalization and no activation.
+    Every input level is projected to ``out_channels`` by a 1x1 lateral convolution and the
+    deeper levels are upsampled and added top-down, as in :class:`FPN`. The difference is the
+    output side: :class:`FPN` smooths every fused level with its own 3x3 convolution, while
+    this neck smooths the finest level only and returns the other fused levels as they are::
+
+        FPN                                    FinestLevelRefinedFPN
+
+        input[2] --1x1--> fused[2] --3x3--> out[2]   input[2] --1x1--> fused[2] --------> out[2]
+                          | upsample, add                              | upsample, add
+        input[1] --1x1--> fused[1] --3x3--> out[1]   input[1] --1x1--> fused[1] --------> out[1]
+                          | upsample, add                              | upsample, add
+        input[0] --1x1--> fused[0] --3x3--> out[0]   input[0] --1x1--> fused[0] --3x3--> out[0]
+
+    The convolutions carry no normalization and no activation. This is the layout of the
+    ``CPFPN`` neck of the StreamPETR code base, kept so its weights load one to one.
     """
 
     def __init__(self, in_channels: Sequence[int], out_channels: int) -> None:
@@ -252,5 +273,6 @@ class CPFPN(BaseFPN):
         Raises:
             ValueError: If the number of inputs differs from ``in_channels``.
         """
-        laterals = self.fuse_levels(inputs)
-        return (self.fpn_conv(laterals[0]), *laterals[1:])
+        outputs = self.fuse_levels(inputs)
+        outputs[0] = self.fpn_conv(outputs[0])
+        return tuple(outputs)
