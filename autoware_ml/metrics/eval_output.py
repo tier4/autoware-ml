@@ -227,7 +227,13 @@ class MetricRequirements(BaseModel):
             missing.append("detection3d frames")
         if self.segmentation3d and segmentation is None:
             missing.append("segmentation3d frames")
-        if self.frame_meta and not _check_all(detection, segmentation, "check_all_frame_meta"):
+        # The metadata counts as present when every part the output holds carries it.
+        has_frame_meta = (
+            (detection is not None or segmentation is not None)
+            and (detection is None or detection.check_all_frame_meta)
+            and (segmentation is None or segmentation.check_all_frame_meta)
+        )
+        if self.frame_meta and not has_frame_meta:
             missing.append("frame_meta (ego pose, scene token and lanelet map path per frame)")
         if self.gt_num_points and not (detection is not None and detection.check_all_gt_num_points):
             missing.append("gt_num_points (lidar points per ground truth box)")
@@ -236,13 +242,3 @@ class MetricRequirements(BaseModel):
         if self.gt_boxes and not (segmentation is not None and segmentation.check_all_gt_boxes):
             missing.append("gt_boxes (detection ground truth inside the segmentation frames)")
         return tuple(missing)
-
-
-def _check_all(
-    detection: Detection3DEvalOutput | None,
-    segmentation: Segmentation3DEvalOutput | None,
-    attribute: str,
-) -> bool:
-    """Whether every present part carries the attribute, and at least one part is present."""
-    parts = [part for part in (detection, segmentation) if part is not None]
-    return bool(parts) and all(getattr(part, attribute) for part in parts)
