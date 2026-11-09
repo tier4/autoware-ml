@@ -150,6 +150,10 @@ class LidarBBoxes3D(BaseBBoxes3D):
         """
         Mark the points inside every 3D bounding box, the surface included.
 
+        The boxes are visited in a Python loop over slices of the sorted points, which suits
+        the CPU callers (the dataloader filters and the database build). A CUDA caller would
+        pay a host sync and a few kernel launches per box.
+
         Args:
             points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 

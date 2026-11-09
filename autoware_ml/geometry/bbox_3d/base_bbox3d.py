@@ -346,13 +346,13 @@ class BaseBBoxes3D(ABC):
         self, points: Float32[Tensor, "num_points 3"]
     ) -> Bool[Tensor, "num_bboxes num_points"]:
         """
-        Compute the number of points inside each 3D bounding box.
+        Mark the points inside every 3D bounding box, the surface included.
 
         Args:
             points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
 
         Returns:
-            Float32[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
+            Bool[Tensor, "num_bboxes num_points"]: A tensor mask indicating which points are
             inside each bounding box.
         """
         raise NotImplementedError(
