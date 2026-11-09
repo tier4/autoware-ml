@@ -2,7 +2,7 @@ name: build-and-test
 
 on:
   pull_request:
-    types: [labeled, synchronize]
+    types: [opened, reopened, synchronize, labeled, unlabeled]
   push:
     branches:
       - main
@@ -10,17 +10,16 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  IMAGE_TAG: ghcr.io/tier4/autoware-ml:ci-${{ github.run_id }}
-  IMAGE_ARTIFACT_NAME: docker-image-${{ github.run_id }}
+  IMAGE: ghcr.io/tier4/autoware-ml
 
 jobs:
-  build:
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run:build-and-test')) }}
+  build-and-test:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run:build-and-test')) }}
     runs-on: ubuntu-22.04-m
-    timeout-minutes: 240
+    timeout-minutes: 30
 
     permissions:
       contents: read
@@ -33,106 +32,97 @@ jobs:
           repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.12.0
       - name: Build Docker image
-        uses: docker/build-push-action@v6.19.2
-        with:
-          context: .
-          file: ./docker/Dockerfile
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: ${{ env.IMAGE_TAG }}
-          outputs: type=docker,dest=/tmp/image.tar
-
-      - name: Save image artifact
-        uses: actions/upload-artifact@v6.0.0
-        with:
-          name: ${{ env.IMAGE_ARTIFACT_NAME }}
-          path: /tmp/image.tar
-          retention-days: 1
-
-  test:
-    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run:build-and-test')) }}
-    needs: build
-    runs-on: ubuntu-22.04-m
-    timeout-minutes: 60
-
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6.1.0
-        with:
-          persist-credentials: false
-          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-
-      - name: Load image artifact
-        uses: actions/download-artifact@v7.0.0
-        with:
-          name: ${{ env.IMAGE_ARTIFACT_NAME }}
-
-      - name: Load Docker image
         run: |
-          docker load -i image.tar
+          docker build --file docker/Dockerfile --tag "$IMAGE:ci" .
 
       - name: Run unit tests
+        id: tests
+        shell: bash
         run: |
-          docker run --rm \
-            "$IMAGE_TAG" \
-            pytest autoware_ml/ -v
+          docker run --rm "$IMAGE:ci" pytest autoware_ml/ -v --durations=20 | tee pytest.log
 
-  required:
-    name: build-and-test-required
-    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run:build-and-test'))) }}
-    needs: [build, test]
-    runs-on: ubuntu-22.04-m
-    timeout-minutes: 10
+      - name: Write test summary
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          {
+            echo '```'
+            sed -n '/slowest 20 durations/,$p' pytest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-    permissions:
-      contents: read
+  build-and-test-required:
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    permissions: {}
 
     steps:
-      - name: Validate build-and-test results
+      - name: Require the run:build-and-test label
+        env:
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'run:build-and-test') }}
         run: |
-          test "${{ needs.build.result }}" = "success"
-          test "${{ needs.test.result }}" = "success"
+          if [ "$HAS_LABEL" != "true" ]; then
+            echo "Add the run:build-and-test label to build and test this pull request." >&2
+            exit 1
+          fi
 
-  publish:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-    needs: required
+      - name: Require a passing build and test
+        env:
+          RESULT: ${{ needs.build-and-test.result }}
+        run: |
+          test "$RESULT" = "success"
+
+  build-test-and-publish:
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-22.04-m
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Load image artifact
-        uses: actions/download-artifact@v7.0.0
+      - name: Checkout code
+        uses: actions/checkout@v6.1.0
         with:
-          name: ${{ env.IMAGE_ARTIFACT_NAME }}
+          persist-credentials: false
 
-      - name: Load Docker image
+      - name: Build Docker image
+        env:
+          SHA: ${{ github.sha }}
         run: |
-          docker load -i image.tar
+          docker build --file docker/Dockerfile --tag "$IMAGE:main-$SHA" --tag "$IMAGE:latest" .
+
+      - name: Run unit tests
+        id: tests
+        shell: bash
+        run: |
+          docker run --rm "$IMAGE:latest" pytest autoware_ml/ -v --durations=20 | tee pytest.log
+
+      - name: Write test summary
+        if: ${{ !cancelled() && steps.tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          {
+            echo '```'
+            sed -n '/slowest 20 durations/,$p' pytest.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3.7.0
         with:
-          logout: false
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Tag Docker image
-        run: |
-          docker tag "${IMAGE_TAG}" ghcr.io/tier4/autoware-ml:latest
-
       - name: Push Docker image
+        env:
+          SHA: ${{ github.sha }}
         run: |
-          docker push ghcr.io/tier4/autoware-ml:latest
+          docker push "$IMAGE:main-$SHA"
+          docker push "$IMAGE:latest"
