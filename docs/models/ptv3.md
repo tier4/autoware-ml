@@ -23,8 +23,8 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
   head on the BEVFusion lidar network instead: its lidar branch `Sparse4DLidar`
   holds the sin/cos voxel encoder, the sparse encoder, the SECOND backbone and
   FPN of `BEVFusionLidar`, reading single frames without a time lag, and the
-  queries sample the BEV map of the neck and its halving (`BEVMapPyramid`). The
-  detector has a camera branch slot that is not supported yet.
+  queries sample the BEV map of the neck, placed on the voxel grid with its
+  cell size. The detector has a camera branch slot that is not supported yet.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -99,7 +99,7 @@ experiment_name: my_experiment_bev
 
 The detection only experiments bind `detection3d/sparse4d/t4dataset/base_voxel0170_122m`, the
 dynamic classes of BEVFusion on its lidar network, and take no add-on: the head samples the BEV
-map of the neck and its halving.
+map of the neck as it is.
 
 ## Training
 
@@ -322,7 +322,6 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
 | `autoware_ml/models/detection3d/main_modules/sparse4d.py`               | Sparse4D detector wrapper                          |
 | `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch and export wrapper           |
-| `autoware_ml/models/detection3d/necks/bev_map_pyramid.py`               | BEV levels of a dense map for the Sparse4D head    |
 | `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
 | `autoware_ml/scripts/generate_anchors.py`                               | Sparse4D anchors from the training boxes           |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |

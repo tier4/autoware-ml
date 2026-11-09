@@ -14,8 +14,8 @@ max_voxels: 120000
 eval_max_voxels: 160000
 
 num_anchor: 900
-# The head samples the neck map and this many halvings of it.
-num_bev_downsampled: 1
+# Metric cell size of the neck map the head samples, voxel_size times out_size_factor.
+bev_cell_size: ???
 
 # K-means settings of autoware_ml/scripts/generate_anchors.py
 anchors:
@@ -133,10 +133,11 @@ model:
       layer_nums: [5, 5]
       layer_strides: [1, 2]
       activation_checkpointing: false
+    # The neck map carries the embed_dims of the head, which samples it as it is.
     pts_neck:
       _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
       in_channels: [128, 256]
-      out_channels: [256, 256]
+      out_channels: [128, 128]
       upsample_strides: [1, 2]
       activation_checkpointing: false
 
@@ -155,17 +156,10 @@ model:
     grid_size: ${voxel_size.0}
     feature_strides:
       - ${out_size_factor}
+    # The keypoints sample the neck map, placed on the voxel grid with its cell size.
     lidar_sampling: bev
+    bev_cell_size: ${bev_cell_size}
     bev_channels: 256
-    # The neck map projected to bev_channels and its halvings, placed on the metric grid.
-    bev:
-      _target_: autoware_ml.models.detection3d.necks.bev_map_pyramid.BEVMapPyramid
-      point_cloud_range: ${point_cloud_range}
-      voxel_size: ${voxel_size}
-      out_size_factor: ${out_size_factor}
-      in_channels: 512
-      channels: ${model.bbox_head.bev_channels}
-      num_downsampled: ${num_bev_downsampled}
     num_decoder: 6
     num_heads: 8
     num_groups: 8

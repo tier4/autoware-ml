@@ -1455,6 +1455,7 @@ class SparseQueryHead(nn.Module):
         kps_generator: Callable[[], KeyPointsGenerator],
         refine: Callable[[], nn.Module],
         bev: nn.Module | None = None,
+        bev_cell_size: float | None = None,
         bev_aggregation: Callable[[], BEVDeformableAggregation | None] = lambda: None,
         sample_sparse: bool = True,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
@@ -1476,7 +1477,10 @@ class SparseQueryHead(nn.Module):
             anchor_encoder: Embedding of the anchors.
             kps_generator: Builds the keypoint generator of one block.
             refine: Builds the refinement of one block.
-            bev: Builds the BEV levels of a frame from the stages, None without BEV maps.
+            bev: Builds the BEV levels of a frame from the stages, None without one.
+            bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features,
+                which it places on the grid of ``point_cloud_range`` as its one BEV level. None
+                without one.
             bev_aggregation: Builds the BEV sampling of one block, None without BEV maps.
             sample_sparse: Whether the blocks sample the sparse voxels.
             aggregation: Builds the deformable aggregation of one block from its keyword
@@ -1484,6 +1488,8 @@ class SparseQueryHead(nn.Module):
         """
         self.num_decoder = num_decoder
         self.bev = bev
+        self.bev_cell_size = None if bev_cell_size is None else float(bev_cell_size)
+        self.bev_grid_origin = (float(point_cloud_range[0]), float(point_cloud_range[1]))
         self.sample_sparse = sample_sparse
         self.anchor_encoder = anchor_encoder
         self.gnn = nn.ModuleList(
@@ -1576,8 +1582,21 @@ class SparseQueryHead(nn.Module):
         return [grid(*stage) for grid, stage in zip(self.level_grids, lidar_features, strict=True)]
 
     def bev_levels(self, lidar_features: LidarFeatures) -> list[BEVLevel]:
-        """Build the BEV levels of the frame once, none for a head without them."""
-        return [] if self.bev is None else self.bev(lidar_features)
+        """Build the BEV levels of the frame once, none for a head without them.
+
+        The levels come from the ``bev`` module over the stages, or the lidar features are one
+        BEV map placed on the voxel grid with ``bev_cell_size``.
+
+        Raises:
+            ValueError: If a head placing a BEV map gets the sparse stages.
+        """
+        if self.bev is not None:
+            return self.bev(lidar_features)
+        if self.bev_cell_size is None:
+            return []
+        if not isinstance(lidar_features, torch.Tensor):
+            raise ValueError("A head sampling a BEV map needs the map as its lidar features.")
+        return [BEVLevel(lidar_features, self.bev_grid_origin, self.bev_cell_size)]
 
     @staticmethod
     def _batch_size(lidar_features: LidarFeatures) -> int:
@@ -1885,6 +1904,7 @@ class Sparse4DHead(SparseQueryHead):
         dn_noise_velocity: float = 1.0,
         lidar_sampling: str = "sparse",
         bev: nn.Module | None = None,
+        bev_cell_size: float | None = None,
         bev_channels: int = 0,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
         yaw_free_classes: Sequence[str] = (),
@@ -1948,8 +1968,11 @@ class Sparse4DHead(SparseQueryHead):
             dn_noise_yaw: Half range of the uniform heading rotation in radians.
             dn_noise_velocity: Half range of the uniform velocity jitter in m/s.
             lidar_sampling: ``sparse`` samples the sparse voxels, ``sparse_bev`` adds the BEV
-                maps of ``bev`` and ``bev`` samples the BEV maps alone.
-            bev: Builds the BEV levels of a frame from the stages, exactly for BEV sampling.
+                maps and ``bev`` samples the BEV maps alone.
+            bev: Builds the BEV levels of a frame from the stages. BEV sampling takes exactly
+                one of ``bev`` and ``bev_cell_size``.
+            bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features
+                in place of the stages, placed on the grid of ``point_cloud_range``.
             bev_channels: Feature dimension of the BEV maps.
             aggregation: Builds the deformable aggregation of one decoder block from its keyword
                 arguments.
@@ -1965,9 +1988,11 @@ class Sparse4DHead(SparseQueryHead):
             raise ValueError(
                 f"lidar_sampling must be sparse, sparse_bev or bev, got {lidar_sampling}."
             )
-        if (bev is None) != (lidar_sampling == "sparse"):
+        num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
+        if num_bev_sources != int(lidar_sampling != "sparse"):
             raise ValueError(
-                f"lidar_sampling {lidar_sampling} needs BEV levels exactly with BEV maps."
+                f"lidar_sampling {lidar_sampling} samples BEV maps with exactly one of bev and "
+                "bev_cell_size, and none without."
             )
         if len(reg_weights) != ANCHOR_DIM or len(match_reg_weights) != ANCHOR_DIM:
             raise ValueError(
@@ -2081,13 +2106,14 @@ class Sparse4DHead(SparseQueryHead):
                 embed_dims=embed_dims, num_classes=num_classes
             ),
             bev=bev,
+            bev_cell_size=bev_cell_size,
             bev_aggregation=lambda: None
-            if bev is None
+            if lidar_sampling == "sparse"
             else BEVDeformableAggregation(
                 embed_dims=embed_dims,
                 bev_channels=bev_channels,
                 num_groups=num_groups,
-                num_levels=bev.num_levels,
+                num_levels=1 if bev is None else bev.num_levels,
                 num_points=len(fix_scale) + num_learnable_pts,
                 attn_drop=attn_drop,
             ),

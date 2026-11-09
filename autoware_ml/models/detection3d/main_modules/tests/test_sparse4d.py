@@ -31,11 +31,7 @@ from autoware_ml.models.detection3d.main_modules.sparse4ds.tests.lidar_fixtures 
     NECK_CHANNELS,
     build_lidar_network,
 )
-from autoware_ml.models.detection3d.necks.bev_map_pyramid import BEVMapPyramid
-from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
-    POINT_CLOUD_RANGE,
-    build_inputs,
-)
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import build_inputs
 from autoware_ml.models.detection3d.tests.sparse4d_fixtures import (
     build_sparse4d_head,
     make_anchor_file,
@@ -44,27 +40,18 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.multi.tests.test_ptv3_det3d_seg3d_sparse4d import frame_inputs
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
-BEV_CHANNELS = 32
-
 
 def _build_head(
     tmp_path: Path, num_temp_instances: int = 0, dn_query_budget: int = 0
 ) -> Sparse4DHead:
-    """Build a small head sampling the neck map and its halving at the keypoints."""
+    """Build a small head sampling the one metre cells of the neck map at the keypoints."""
     return build_sparse4d_head(
         make_anchor_file(tmp_path),
         num_temp_instances=num_temp_instances,
         dn_query_budget=dn_query_budget,
         lidar_sampling="bev",
-        bev_channels=BEV_CHANNELS,
-        bev=BEVMapPyramid(
-            point_cloud_range=POINT_CLOUD_RANGE,
-            voxel_size=[1.0, 1.0, 4.0],
-            out_size_factor=1,
-            in_channels=NECK_CHANNELS,
-            channels=BEV_CHANNELS,
-            num_downsampled=1,
-        ),
+        bev_cell_size=1.0,
+        bev_channels=NECK_CHANNELS,
     )
 
 
