@@ -29,9 +29,8 @@ from autoware_ml.datamodule.tests.test_data_module import (
     EmptyValidationSplitter,
     FakeDatabase,
     build_source,
-    build_taxonomy,
 )
-from autoware_ml.scripts.measure_ptv3_neighbors import measure_neighbors
+from autoware_ml.scripts.tools.measure_ptv3_neighbors import measure_neighbors
 
 
 class TestMeasureNeighbors(unittest.TestCase):
@@ -48,14 +47,11 @@ class TestMeasureNeighbors(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            main = FakeDatabase(
-                root / "main", write_corpus(root / "main", num_records=3), "main", build_taxonomy()
-            )
+            main = FakeDatabase(root / "main", write_corpus(root / "main", num_records=3), "main")
             small = FakeDatabase(
                 root / "small",
                 write_corpus(root / "small", num_records=1),
                 "small",
-                build_taxonomy(),
             )
             datamodule = DataModule(
                 splitter=EmptyValidationSplitter(),
@@ -83,12 +79,12 @@ class TestEntrypoint(unittest.TestCase):
 
     def test_module_runs_hydra_main(self) -> None:
         """
-        Input: ``python -m autoware_ml.scripts.measure_ptv3_neighbors --help``.
+        Input: ``python -m autoware_ml.scripts.tools.measure_ptv3_neighbors --help``.
         Expected: the module starts its Hydra main.
         Check: exit code 0 and Hydra's help text.
         """
         result = subprocess.run(
-            [sys.executable, "-m", "autoware_ml.scripts.measure_ptv3_neighbors", "--help"],
+            [sys.executable, "-m", "autoware_ml.scripts.tools.measure_ptv3_neighbors", "--help"],
             capture_output=True,
             text=True,
             check=False,
