@@ -24,10 +24,10 @@ import torch
 from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
-from autoware_ml.dataclasses.batch.prediction import (
+from autoware_ml.dataclasses.batch.motion import (
     AgentTracksSample,
-    PredictionGTBatch,
-    PredictionGTSample,
+    MotionGTBatch,
+    MotionGTSample,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.dataclasses.batch.segmentation3d import (
@@ -469,15 +469,15 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
         self.assertEqual(moved.batch_indices.device.type, "cpu")
 
 
-class TestModelGTBatchPredictionCollation(unittest.TestCase):
-    """Collation of the scenarios of the prediction task into the batch."""
+class TestModelGTBatchMotionCollation(unittest.TestCase):
+    """Collation of the scenarios of the motion task into the batch."""
 
     def _build_sample(self, num_agents: int | None) -> ModelGTSample:
         """Build a sample holding the agent tracks of a scenario, or no scenario."""
-        prediction_gt_sample = (
+        motion_gt_sample = (
             None
             if num_agents is None
-            else PredictionGTSample(
+            else MotionGTSample(
                 agents=AgentTracksSample(
                     positions=torch.zeros(num_agents, 3, 3),
                     headings=torch.zeros(num_agents, 3),
@@ -499,20 +499,20 @@ class TestModelGTBatchPredictionCollation(unittest.TestCase):
             camera_image_data=None,
             detection3d_gt_bboxes_3d=None,
             segmentation3d_gt_sample=None,
-            prediction_gt_sample=prediction_gt_sample,
+            motion_gt_sample=motion_gt_sample,
         )
 
-    def _collate(self, samples: Sequence[ModelGTSample]) -> PredictionGTBatch | None:
+    def _collate(self, samples: Sequence[ModelGTSample]) -> MotionGTBatch | None:
         batch = ModelGTBatch.collate_gt_samples(
             gt_samples=samples, max_num_3d_gt_bboxes=None, max_num_2d_gt_bboxes=None
         )
-        return batch.prediction_gt_batch
+        return batch.motion_gt_batch
 
     def test_sample_defaults_to_no_scenario(self) -> None:
         sample = self._build_sample(None)
 
-        self.assertIsNone(sample.prediction_source_sample)
-        self.assertIsNone(sample.prediction_gt_sample)
+        self.assertIsNone(sample.motion_source_sample)
+        self.assertIsNone(sample.motion_gt_sample)
 
     def test_collate_pads_the_scenarios_in_batch_order(self) -> None:
         batch = self._collate([self._build_sample(1), self._build_sample(2)])
@@ -536,14 +536,14 @@ class TestModelGTBatchPredictionCollation(unittest.TestCase):
             gt_samples=[self._build_sample(1)], max_num_3d_gt_bboxes=None, max_num_2d_gt_bboxes=None
         )
         moved = batch.to_device(torch.device("cpu"))
-        self.assertEqual(moved.prediction_gt_batch.agent_positions.device.type, "cpu")
+        self.assertEqual(moved.motion_gt_batch.agent_positions.device.type, "cpu")
 
         empty = ModelGTBatch.collate_gt_samples(
             gt_samples=[self._build_sample(None)],
             max_num_3d_gt_bboxes=None,
             max_num_2d_gt_bboxes=None,
         )
-        self.assertIsNone(empty.to_device(torch.device("cpu")).prediction_gt_batch)
+        self.assertIsNone(empty.to_device(torch.device("cpu")).motion_gt_batch)
 
 
 class TestModelGTBatchPaddingMask(unittest.TestCase):

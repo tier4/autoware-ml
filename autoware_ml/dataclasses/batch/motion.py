@@ -111,11 +111,11 @@ class MapPolylinesSample(NamedTuple):
         return self.points.shape[1]
 
 
-class PredictionSourceSample(NamedTuple):
+class MotionSourceSample(NamedTuple):
     """
     Named tuple to represent the source of one scenario, its file paths resolved against the
-    root of the dataset serving it: the analog of LiDARPointCloudSample for the prediction
-    task. The loading transforms turn it into a PredictionGTSample.
+    root of the dataset serving it: the analog of LiDARPointCloudSample for the motion
+    task. The loading transforms turn it into a MotionGTSample.
     """
 
     # Dataset family of the scenario, picks the readers
@@ -140,8 +140,8 @@ class PredictionSourceSample(NamedTuple):
     num_tracks: int
 
 
-class PredictionGTSample(NamedTuple):
-    """Named tuple to represent the ground truth of the prediction task for one scenario."""
+class MotionGTSample(NamedTuple):
+    """Named tuple to represent the ground truth of the motion task for one scenario."""
 
     # The agent tracks over the window of the scenario
     agents: AgentTracksSample
@@ -169,9 +169,9 @@ def _pad_rows(tensor: Tensor, num_rows: int, fill: float | int | bool) -> Tensor
     return torch.cat([tensor, pad], dim=0)
 
 
-class PredictionGTBatch(NamedTuple):
+class MotionGTBatch(NamedTuple):
     """
-    Named tuple to represent the ground truth of the prediction task for a batch of scenarios.
+    Named tuple to represent the ground truth of the motion task for a batch of scenarios.
 
     The agents are padded to the largest agent count of the batch and the polylines to the
     largest polyline count, with one mask each naming the real slots. A padded agent carries
@@ -229,26 +229,26 @@ class PredictionGTBatch(NamedTuple):
 
     @staticmethod
     def collate_gt_samples(
-        prediction_gt_samples: Sequence[PredictionGTSample],
-    ) -> PredictionGTBatch | None:
+        motion_gt_samples: Sequence[MotionGTSample],
+    ) -> MotionGTBatch | None:
         """
-        Collate a sequence of prediction GT samples into a single PredictionGTBatch.
+        Collate a sequence of motion GT samples into a single MotionGTBatch.
 
         Args:
-          prediction_gt_samples: Sequence of PredictionGTSample to be collated.
+          motion_gt_samples: Sequence of MotionGTSample to be collated.
 
         Returns:
-          PredictionGTBatch: Collated prediction GT batch, None for an empty sequence.
+          MotionGTBatch: Collated motion GT batch, None for an empty sequence.
 
         Raises:
           ValueError: If the samples disagree on the window shape, the ignore index, the
             presence of sizes or of a map, or the points per polyline.
         """
 
-        if len(prediction_gt_samples) == 0:
+        if len(motion_gt_samples) == 0:
             return None
 
-        agents = [sample.agents for sample in prediction_gt_samples]
+        agents = [sample.agents for sample in motion_gt_samples]
         first = agents[0]
         for index, sample_agents in enumerate(agents):
             window = (
@@ -272,7 +272,7 @@ class PredictionGTBatch(NamedTuple):
             raise ValueError("Either every sample carries agent sizes or none does.")
 
         num_agents = max(sample_agents.num_agents for sample_agents in agents)
-        batch = PredictionGTBatch(
+        batch = MotionGTBatch(
             agent_positions=torch.stack([_pad_rows(a.positions, num_agents, 0.0) for a in agents]),
             agent_headings=torch.stack([_pad_rows(a.headings, num_agents, 0.0) for a in agents]),
             agent_velocities=torch.stack(
@@ -302,7 +302,7 @@ class PredictionGTBatch(NamedTuple):
             ),
         )
 
-        maps = [sample.map_polylines for sample in prediction_gt_samples]
+        maps = [sample.map_polylines for sample in motion_gt_samples]
         with_map = [polylines is not None for polylines in maps]
         if not any(with_map):
             return batch
@@ -334,15 +334,15 @@ class PredictionGTBatch(NamedTuple):
             element_ids=[list(m.element_ids) for m in maps],
         )
 
-    def to_device(self, device: torch.device) -> PredictionGTBatch:
+    def to_device(self, device: torch.device) -> MotionGTBatch:
         """
-        Move the PredictionGTBatch to the specified device.
+        Move the MotionGTBatch to the specified device.
 
         Args:
           device: The target device to move the batch to.
 
         Returns:
-          PredictionGTBatch: The batch moved to the specified device.
+          MotionGTBatch: The batch moved to the specified device.
         """
 
         def move(tensor: Tensor | None) -> Tensor | None:

@@ -10,10 +10,10 @@ from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch, Detect
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
-from autoware_ml.dataclasses.batch.prediction import (
-    PredictionGTBatch,
-    PredictionGTSample,
-    PredictionSourceSample,
+from autoware_ml.dataclasses.batch.motion import (
+    MotionGTBatch,
+    MotionGTSample,
+    MotionSourceSample,
 )
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
 from autoware_ml.dataclasses.batch.segmentation3d import (
@@ -74,14 +74,14 @@ class ModelGTSample(NamedTuple):
     # the dataset, see ModelGTBatch.padding_mask.
     is_padding: bool = False
 
-    # File references of the scenario of the prediction task, resolved against the dataset
-    # root; the loading transforms read them into prediction_gt_sample. None when the sample
+    # File references of the scenario of the motion task, resolved against the dataset
+    # root; the loading transforms read them into motion_gt_sample. None when the sample
     # carries no scenario.
-    prediction_source_sample: PredictionSourceSample | None = None
+    motion_source_sample: MotionSourceSample | None = None
 
-    # Ground truth of the prediction task: the agent tracks and the vector map of the
+    # Ground truth of the motion task: the agent tracks and the vector map of the
     # scenario. None when the sample carries none.
-    prediction_gt_sample: PredictionGTSample | None = None
+    motion_gt_sample: MotionGTSample | None = None
 
     def keep_points(self, keep_mask: Bool[Tensor, " num_points"]) -> ModelGTSample:
         """
@@ -138,7 +138,7 @@ class ModelGTBatch(NamedTuple):
     detection2d_gt_batch: Detection2DGTBatch | None = None
 
     # Agent tracks and vector maps of every scenario, None when the samples carry none.
-    prediction_gt_batch: PredictionGTBatch | None = None
+    motion_gt_batch: MotionGTBatch | None = None
 
     def to_device(self, device: torch.device) -> ModelGTBatch:
         """
@@ -171,8 +171,8 @@ class ModelGTBatch(NamedTuple):
             if self.detection2d_gt_batch is not None
             else None,
             padding_mask=self.padding_mask.to(device),
-            prediction_gt_batch=self.prediction_gt_batch.to_device(device)
-            if self.prediction_gt_batch is not None
+            motion_gt_batch=self.motion_gt_batch.to_device(device)
+            if self.motion_gt_batch is not None
             else None,
         )
 
@@ -396,35 +396,33 @@ class ModelGTBatch(NamedTuple):
         )
 
     @staticmethod
-    def collate_prediction_gt_samples(
+    def collate_motion_gt_samples(
         gt_samples: Sequence[ModelGTSample],
-    ) -> PredictionGTBatch | None:
+    ) -> MotionGTBatch | None:
         """
-        Collate the prediction ground truth of a sequence of ModelGTSample into a
-        PredictionGTBatch.
+        Collate the motion ground truth of a sequence of ModelGTSample into a
+        MotionGTBatch.
 
         Args:
           gt_samples: Sequence of ModelGTSample to be collated.
 
         Returns:
-          PredictionGTBatch: Collated prediction GT batch, None when no sample carries a
+          MotionGTBatch: Collated motion GT batch, None when no sample carries a
             scenario.
 
         Raises:
-          ValueError: If only some of the samples carry prediction ground truth.
+          ValueError: If only some of the samples carry motion ground truth.
         """
-        prediction_gt_samples = [
-            sample.prediction_gt_sample
-            for sample in gt_samples
-            if sample.prediction_gt_sample is not None
+        motion_gt_samples = [
+            sample.motion_gt_sample for sample in gt_samples if sample.motion_gt_sample is not None
         ]
-        if not len(prediction_gt_samples):
+        if not len(motion_gt_samples):
             return None
 
-        if len(prediction_gt_samples) != len(gt_samples):
-            raise ValueError("All samples must have prediction_gt_sample for collating.")
+        if len(motion_gt_samples) != len(gt_samples):
+            raise ValueError("All samples must have motion_gt_sample for collating.")
 
-        return PredictionGTBatch.collate_gt_samples(prediction_gt_samples)
+        return MotionGTBatch.collate_gt_samples(motion_gt_samples)
 
     @staticmethod
     def collate_frame_meta_samples(gt_samples: Sequence[ModelGTSample]) -> FrameMetaBatch | None:
@@ -506,8 +504,8 @@ class ModelGTBatch(NamedTuple):
             gt_samples=gt_samples, max_num_2d_gt_bboxes=max_num_2d_gt_bboxes
         )
 
-        # Collate the scenarios of the prediction task
-        prediction_gt_batch = ModelGTBatch.collate_prediction_gt_samples(gt_samples=gt_samples)
+        # Collate the scenarios of the motion task
+        motion_gt_batch = ModelGTBatch.collate_motion_gt_samples(gt_samples=gt_samples)
 
         return ModelGTBatch(
             point_cloud_gt_batch=point_cloud_gt_batch,
@@ -520,5 +518,5 @@ class ModelGTBatch(NamedTuple):
             padding_mask=torch.tensor(
                 [sample.is_padding for sample in gt_samples], dtype=torch.bool
             ),
-            prediction_gt_batch=prediction_gt_batch,
+            motion_gt_batch=motion_gt_batch,
         )
