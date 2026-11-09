@@ -17,108 +17,54 @@
 from __future__ import annotations
 
 import pytest
-import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder import PTv3MiddleEncoder
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DFeaturePyramid
-from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
-    POINT_CLOUD_RANGE,
-    build_inputs,
-    build_ptv3_encoder,
+from autoware_ml.models.detection3d.main_modules.sparse4ds.tests.lidar_fixtures import (
+    BEV_SHAPE,
+    MIDDLE_CHANNELS,
+    NECK_CHANNELS,
+    POINT_CHANNELS,
+    StubMiddleEncoder,
+    StubVoxelEncoder,
+    build_lidar_network,
 )
-from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
-from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.utils.point_cloud.structures import Point
-
-requires_cuda_spconv = pytest.mark.skipif(
-    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
-    reason="PTv3 sparse-convolution tests require CUDA spconv",
-)
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import build_inputs
 
 
-def _build_middle_encoder() -> PTv3MiddleEncoder:
-    """Build the two stage test middle encoder."""
-    return PTv3MiddleEncoder(
-        encoder=build_ptv3_encoder(), grid_size=1.0, point_cloud_range=POINT_CLOUD_RANGE
-    )
+def test_middle_encoder_must_be_a_bev_middle_encoder() -> None:
+    with pytest.raises(TypeError, match="BEVMiddleEncoder"):
+        Sparse4DLidar(
+            pts_voxel_encoder=StubVoxelEncoder(POINT_CHANNELS, MIDDLE_CHANNELS),
+            pts_middle_encoder=nn.Identity(),
+            pts_backbone=nn.Identity(),
+            pts_neck=nn.Identity(),
+        )
 
 
-def _build_neck(keep_deepest: bool = False) -> PTv3Det3DFeaturePyramid:
-    """Build the pyramid fusing the two test stages."""
-    return PTv3Det3DFeaturePyramid(
-        stage_channels=(8, 16), out_channels=32, keep_deepest=keep_deepest
-    )
+def test_expected_bev_shape_is_the_one_of_the_middle_encoder() -> None:
+    assert build_lidar_network().expected_bev_shape == BEV_SHAPE
 
 
-class _ScalingBackbone(nn.Module):
-    """Scale the deepest stage features by one learnable factor."""
+def test_forward_returns_the_bev_map_of_the_neck() -> None:
+    branch = build_lidar_network()
+    voxels_data = build_inputs().voxels_data
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.scale = nn.Parameter(torch.tensor(2.0))
-
-    def forward(self, point: Point) -> Point:
-        point.feat = point.feat * self.scale
-        return point
-
-
-def _build_branch(
-    keep_deepest: bool = False, pts_backbone: nn.Module | None = None
-) -> Sparse4DLidar:
-    """Build a small branch over the two stage test middle encoder, identity backbone by default."""
-    return Sparse4DLidar(
-        pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        pts_middle_encoder=_build_middle_encoder(),
-        pts_backbone=nn.Identity() if pts_backbone is None else pts_backbone,
-        pts_neck=_build_neck(keep_deepest=keep_deepest),
-    )
-
-
-@requires_cuda_spconv
-def test_forward_returns_one_stage_per_level_finest_first() -> None:
-    device = torch.device("cuda")
-    branch = _build_branch(keep_deepest=True).to(device)
-    voxels_data = build_inputs(device=device).voxels_data
-
-    stages = branch(
+    bev_map = branch(
         voxels=voxels_data.voxels,
-        coords=voxels_data.batch_xyz_coords(),
+        coords=voxels_data.batch_zyx_coords(),
         num_points=voxels_data.num_points,
         batch_size=1,
     )
 
-    assert len(stages) == 2
-    fused_feat, fused_grid_coord, fused_offset = stages[0]
-    deepest_feat, deepest_grid_coord, deepest_offset = stages[1]
-    assert fused_feat.shape[1] == 32 and deepest_feat.shape[1] == 32
-    assert fused_feat.shape[0] == fused_grid_coord.shape[0] == voxels_data.voxels.shape[0]
-    assert deepest_feat.shape[0] == deepest_grid_coord.shape[0] <= fused_feat.shape[0]
-    assert fused_offset.tolist() == [fused_feat.shape[0]]
-    assert deepest_offset.tolist() == [deepest_feat.shape[0]]
+    assert bev_map.shape == (1, NECK_CHANNELS, BEV_SHAPE[0], BEV_SHAPE[1])
 
 
-@requires_cuda_spconv
-def test_backbone_refines_the_encoder_stages_before_the_neck() -> None:
-    device = torch.device("cuda")
-    torch.manual_seed(0)
-    plain = _build_branch().to(device).eval()
-    torch.manual_seed(0)
-    refined = _build_branch(pts_backbone=_ScalingBackbone()).to(device).eval()
-    voxels_data = build_inputs(device=device).voxels_data
+def test_prepare_for_export_swaps_the_middle_encoder_in_place() -> None:
+    branch = build_lidar_network()
 
-    with torch.no_grad():
-        outputs = [
-            branch(
-                voxels=voxels_data.voxels,
-                coords=voxels_data.batch_xyz_coords(),
-                num_points=voxels_data.num_points,
-                batch_size=1,
-            )[0]
-            for branch in (plain, refined)
-        ]
+    exportable = branch.prepare_for_export()
 
-    (plain_feat, _, _), (refined_feat, _, _) = outputs
-    assert plain_feat.shape == refined_feat.shape
-    assert not torch.allclose(plain_feat, refined_feat)
+    assert isinstance(exportable, StubMiddleEncoder)
+    assert exportable.exportable
+    assert branch.pts_middle_encoder is exportable

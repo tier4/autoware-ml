@@ -13,17 +13,18 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
 - Detection: `PTv3Det3DBEVNeck` fuses the two coarsest encoder stages
   (`PTv3Det3DFeatureFusion`), scatters them onto a dense BEV canvas at the
   detection-head resolution, and feeds a `TransFusionHead`.
-- Temporal detection (experimental): `Sparse4DDetectionModel` runs the lidar
-  branch `Sparse4DLidar`, laid out like the BEVFusion one: a voxel encoder, the
-  PTv3 encoder as the sparse middle encoder (`PTv3MiddleEncoder`), a backbone
-  refining its stages, the identity so far, and a feature pyramid neck that
-  fuses the deepest stage top-down into finer ones (`PTv3Det3DFeaturePyramid`). It feeds a `Sparse4DHead`, whose queries sample
-  the sparse voxels at keypoints around their anchors with no BEV canvas, and
-  carry the most confident instances from one frame of a scenario to the next.
-  The keypoints sample the sparse voxels, dense BEV maps, or both. The detector
-  has a camera branch slot that is not supported yet.
-  `PTv3Det3DSeg3DSparse4DModel` adds the segmentation head on the shared
-  encoder.
+- Temporal detection (experimental): `PTv3Det3DSeg3DSparse4DModel` runs a
+  feature pyramid that fuses the deepest encoder stage top-down into finer ones
+  (`PTv3Det3DFeaturePyramid`) next to the segmentation head, and feeds a
+  `Sparse4DHead`, whose queries sample the sparse voxels at keypoints around
+  their anchors with no BEV canvas, and carry the most confident instances from
+  one frame of a scenario to the next. The keypoints sample the sparse voxels,
+  dense BEV maps of the stages, or both. `Sparse4DDetectionModel` runs the same
+  head on the BEVFusion lidar network instead: its lidar branch `Sparse4DLidar`
+  holds the sin/cos voxel encoder, the sparse encoder, the SECOND backbone and
+  FPN of `BEVFusionLidar`, reading single frames without a time lag, and the
+  queries sample the BEV map of the neck and its halving (`BEVMapPyramid`). The
+  detector has a camera branch slot that is not supported yet.
 
 The models read single lidar frames, every point as `(x, y, z, intensity)`. The voxel feature
 encoder turns each voxel into the mean x, y, z and intensity of its points, 4 features per voxel,
@@ -63,7 +64,7 @@ implementation so ONNX export remains supported.
 | `detection3d/ptv3/t4dataset/base_voxel012_122m`              | detection3d                  | T4Dataset | TransFusion | 122 m | T4Dataset detection                                      |
 | `multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m`         | segmentation3d + detection3d | nuScenes  | TransFusion | 51 m  | Joint segmentation + detection                           |
 | `multi/ptv3/t4dataset/base_voxel012_122m`                    | segmentation3d + detection3d | T4Dataset | TransFusion | 122 m | Joint segmentation + detection                           |
-| `detection3d/sparse4d/t4dataset/base_voxel012_122m`          | detection3d                  | T4Dataset | Sparse4D    | 122 m | Temporal detection on 10 Hz streams                      |
+| `detection3d/sparse4d/t4dataset/base_voxel0170_122m`         | detection3d                  | T4Dataset | Sparse4D    | 122 m | Temporal detection on the BEVFusion lidar network        |
 | `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`           | segmentation3d + detection3d | T4Dataset | Sparse4D    | 122 m | Joint segmentation + temporal detection on 10 Hz streams |
 
 The T4Dataset rows are bases. They declare the classes the model trains and require the taxonomy
@@ -73,10 +74,8 @@ an external config root, see
 
 ### Sparse4D configurations
 
-Every Sparse4D experiment binds the base `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`,
-or `detection3d/sparse4d/t4dataset/base_voxel012_122m` for detection alone on the dynamic
-classes of BEVFusion, and adds features with these configs under the `t4dataset/` directory of
-its base:
+Every joint Sparse4D experiment binds the base `multi/ptv3_sparse4d/t4dataset/base_voxel012_122m`
+and adds features with these configs under its `t4dataset/` directory:
 
 | Add-on                       | Adds                                                              |
 | ---------------------------- | ----------------------------------------------------------------- |
@@ -84,8 +83,8 @@ its base:
 | `base_sparse_bev_multiscale` | A three scale BEV pyramid (0.48, 0.96, 1.92 m) next to the voxels |
 | `base_bev_multiscale`        | The three scale BEV pyramid in place of the sparse voxels         |
 
-Every lidar experiment comes in four samplings, named by the suffix of its config: none for
-the sparse voxels, `_sparse_bev`, `_sparse_bev_multiscale` and `_bev`. The experiment and its
+Every joint lidar experiment comes in four samplings, named by the suffix of its config: none
+for the sparse voxels, `_sparse_bev`, `_sparse_bev_multiscale` and `_bev`. The experiment and its
 three variants live in the external config root, each variant binds the experiment and one add-on:
 
 ```yaml title="/path/to/configs/tasks/multi/ptv3_sparse4d/t4dataset/my_experiment_bev.yaml"
@@ -97,6 +96,10 @@ defaults:
 
 experiment_name: my_experiment_bev
 ```
+
+The detection only experiments bind `detection3d/sparse4d/t4dataset/base_voxel0170_122m`, the
+dynamic classes of BEVFusion on its lidar network, and take no add-on: the head samples the BEV
+map of the neck and its halving.
 
 ## Training
 
@@ -302,6 +305,11 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   `autoware::SparseDeformableAggregation` node, which reads the keypoints, the
   sampling weights and the padded features and dense voxel lookups of every
   stage, and is served by the TensorRT plugin of the same name.
+- `sparse4d_lidar` - the detection only Sparse4D model exports one graph
+  instead: the single-sample voxel inputs of `bevfusion_lidar` (`voxels`,
+  `coors`, `num_points_per_voxel`) followed by the instance memory inputs
+  above, returning the frame outputs and the memory of the next frame. The BEV
+  maps are sampled with plain `GridSample` nodes.
 
 ## Implementation
 
@@ -313,8 +321,8 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/detection3d/heads/transfusions/transfusion_head.py` | TransFusion detection head                         |
 | `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
 | `autoware_ml/models/detection3d/main_modules/sparse4d.py`               | Sparse4D detector wrapper                          |
-| `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch and export wrappers          |
-| `autoware_ml/models/detection3d/encoders/sparse/ptv3_middle_encoder.py` | PTv3 encoder as the middle encoder of a branch     |
+| `autoware_ml/models/detection3d/main_modules/sparse4ds/`                | Sparse4D lidar branch and export wrapper           |
+| `autoware_ml/models/detection3d/necks/bev_map_pyramid.py`               | BEV levels of a dense map for the Sparse4D head    |
 | `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
 | `autoware_ml/scripts/generate_anchors.py`                               | Sparse4D anchors from the training boxes           |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |

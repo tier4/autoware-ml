@@ -19,8 +19,9 @@ PTV3_CONFIGS = [
     "tasks/segmentation3d/ptv3/nuscenes/voxel005_b16_50e_nuscenes_51m",
     "tasks/detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m",
     "tasks/multi/ptv3_sparse4d/t4dataset/voxel012_b8_24e_t4dataset_122m",
-    "tasks/detection3d/sparse4d/t4dataset/voxel012_b8_24e_t4dataset_122m",
 ]
+# The Sparse4D detector on the BEVFusion lidar network exports one graph with the bank state.
+SPARSE4D_CONFIGS = ["tasks/detection3d/sparse4d/t4dataset/voxel0170_b8_24e_t4dataset_122m"]
 # The TransFusion det heads, a Sparse4D head exports no BEV grid.
 DET3D_CONFIGS = [
     name for name in PTV3_CONFIGS if "segmentation3d" not in name and "sparse4d" not in name
@@ -36,7 +37,7 @@ def test_encoder_metainfo_serialization_orders_match_export_order(config_name: s
     assert list(module_cfg.metainfo.serialization_orders) == list(PTv3BaseModel.EXPORT_ORDER)
 
 
-@pytest.mark.parametrize("config_name", PTV3_CONFIGS)
+@pytest.mark.parametrize("config_name", PTV3_CONFIGS + SPARSE4D_CONFIGS)
 def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> None:
     # Every metainfo value must resolve through the production merge path; a
     # broken interpolation must fail at composition, not at deploy time.
@@ -45,7 +46,7 @@ def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> N
         module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, module_name)
         metainfo = OmegaConf.to_container(module_cfg.metainfo, resolve=True)
         assert metainfo, f"{config_name}: {module_name} has an empty metainfo block"
-        if module_name in ("ptv3_seg3d_head", "ptv3_det3d_head"):
+        if module_name in ("ptv3_seg3d_head", "ptv3_det3d_head", "sparse4d_lidar"):
             assert len(metainfo["class_names"]) > 0
 
 
@@ -77,11 +78,7 @@ def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None
     cfg = compose_task(config_name)
     module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_lidar_encoder")
     patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
-    # The PTv3 models own their encoder, the Sparse4D detector keeps it on the middle encoder
-    # of its lidar branch
-    encoder = (
-        OmegaConf.select(cfg, "model.lidar_network.pts_middle_encoder.encoder") or cfg.model.encoder
-    )
+    encoder = cfg.model.encoder
     assert patch_sizes == list(encoder.enc_patch_size)
     assert len(patch_sizes) == len(encoder.stride) + 1
     assert all(isinstance(size, int) and size > 0 for size in patch_sizes)

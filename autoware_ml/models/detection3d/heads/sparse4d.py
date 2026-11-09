@@ -804,6 +804,8 @@ class SparseBox3DKeyPointsGenerator(nn.Module):
 
 # Features, voxel coordinates and batch offsets of one sparse encoder stage
 SparseStage = tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+# The lidar features a head samples: the sparse stages, or the dense BEV map of a BEV only head
+LidarFeatures = Sequence[SparseStage] | torch.Tensor
 # Below this occupied weight the aggregated features fade to zero instead of amplifying a sliver
 MIN_OCCUPANCY = 0.05
 
@@ -1561,15 +1563,28 @@ class SparseQueryHead(nn.Module):
         """Frame context the blocks read for the current anchors, the head context as given."""
         return context
 
-    def levels(self, stages: Sequence[SparseStage]) -> list[SparseLevel]:
-        """Look up the voxels of every sampled stage once per frame, none for a BEV only head."""
+    def levels(self, lidar_features: LidarFeatures) -> list[SparseLevel]:
+        """Look up the voxels of every sampled stage once per frame, none for a BEV only head.
+
+        Raises:
+            ValueError: If a head sampling the sparse voxels gets a BEV map.
+        """
         if not self.sample_sparse:
             return []
-        return [grid(*stage) for grid, stage in zip(self.level_grids, stages, strict=True)]
+        if isinstance(lidar_features, torch.Tensor):
+            raise ValueError("A head sampling the sparse voxels needs the sparse stages.")
+        return [grid(*stage) for grid, stage in zip(self.level_grids, lidar_features, strict=True)]
 
-    def bev_levels(self, stages: Sequence[SparseStage]) -> list[BEVLevel]:
-        """Build the BEV maps of the stages once per frame, none for a head without them."""
-        return [] if self.bev is None else self.bev(stages)
+    def bev_levels(self, lidar_features: LidarFeatures) -> list[BEVLevel]:
+        """Build the BEV levels of the frame once, none for a head without them."""
+        return [] if self.bev is None else self.bev(lidar_features)
+
+    @staticmethod
+    def _batch_size(lidar_features: LidarFeatures) -> int:
+        """Batch size of the lidar features, from the BEV map or the offsets of the first stage."""
+        if isinstance(lidar_features, torch.Tensor):
+            return lidar_features.shape[0]
+        return lidar_features[0][2].shape[0]
 
     def _decode(
         self,
@@ -1677,7 +1692,7 @@ class SparseQueryHead(nn.Module):
 
     def forward_temporal_export(
         self,
-        stages: Sequence[SparseStage],
+        lidar_features: LidarFeatures,
         temp_instance_feature: torch.Tensor,
         temp_anchor: torch.Tensor,
         temp_confidence: torch.Tensor,
@@ -1692,8 +1707,8 @@ class SparseQueryHead(nn.Module):
         The query index of every state slot lets the runtime carry its track ids into the slots.
 
         Args:
-            stages: Features, voxel coordinates and batch offsets of the sampled stages, from
-                the finest to the coarsest.
+            lidar_features: Features, voxel coordinates and batch offsets of the sampled stages,
+                from the finest to the coarsest, or the dense BEV map of a BEV only head.
             temp_instance_feature: Cached instance features ``(B, K, C)``.
             temp_anchor: Cached anchors ``(B, K, D)`` in the previous frame.
             temp_confidence: Cached instance confidences ``(B, K)``.
@@ -1715,7 +1730,7 @@ class SparseQueryHead(nn.Module):
             raise ValueError(
                 "forward_temporal_export needs a temporal head (num_temp_instances > 0)."
             )
-        batch_size = stages[0][2].shape[0]
+        batch_size = self._batch_size(lidar_features)
         instance_feature = bank.instance_feature[None].expand(batch_size, -1, -1)
         anchor = bank.anchor[None].expand(batch_size, -1, -1)
 
@@ -1739,7 +1754,7 @@ class SparseQueryHead(nn.Module):
             )
 
         decoded = self._decode(
-            self.levels(stages),
+            self.levels(lidar_features),
             instance_feature,
             anchor,
             time_interval,
@@ -1747,7 +1762,7 @@ class SparseQueryHead(nn.Module):
             temp_anchor,
             merge,
             context=context,
-            bev_levels=self.bev_levels(stages),
+            bev_levels=self.bev_levels(lidar_features),
         )
         state_feature, state_anchor, state_confidence, query_index = bank.select_temporal_state(
             decoded.instance_feature,
@@ -1814,7 +1829,7 @@ class SparseQueryHead(nn.Module):
 
 
 class Sparse4DHead(SparseQueryHead):
-    """Sparse4D query head sampling one sparse PTv3 encoder stage."""
+    """Sparse4D query head sampling the sparse stages or the BEV map of a lidar branch."""
 
     def __init__(
         self,
@@ -2085,7 +2100,7 @@ class Sparse4DHead(SparseQueryHead):
 
     def forward(
         self,
-        stages: Sequence[SparseStage],
+        lidar_features: LidarFeatures,
         timestamps_seconds: torch.Tensor | None = None,
         lidar2global: torch.Tensor | None = None,
         scene_tokens: Sequence[str] | None = None,
@@ -2095,14 +2110,14 @@ class Sparse4DHead(SparseQueryHead):
         gt_num_points: Sequence[torch.Tensor] | None = None,
         context: Any = None,
     ) -> Sparse4DHeadOutputs:
-        """Run the decoder over the sampled sparse encoder stages.
+        """Run the decoder over the sampled lidar features.
 
         A temporal head also advances its tracks. With the ground truth it records which boxes
         were observed in the stream so far, only those feed the denoising queries and the loss.
 
         Args:
-            stages: Features, voxel coordinates and batch offsets of the sampled stages, from
-                the finest to the coarsest.
+            lidar_features: Features, voxel coordinates and batch offsets of the sampled stages,
+                from the finest to the coarsest, or the dense BEV map of a BEV only head.
             timestamps_seconds: Frame timestamps ``(B,)`` in seconds, temporal
                 mode only.
             lidar2global: Poses ``(B, 4, 4)`` with the augmentations folded in,
@@ -2123,7 +2138,7 @@ class Sparse4DHead(SparseQueryHead):
         Raises:
             ValueError: If a denoising training step misses the ground truth.
         """
-        batch_size = stages[0][2].shape[0]
+        batch_size = self._batch_size(lidar_features)
         instance_feature, anchor, time_interval, temp_feature, temp_anchor = self.instance_bank.get(
             batch_size, timestamps_seconds, lidar2global, scene_tokens
         )
@@ -2157,7 +2172,7 @@ class Sparse4DHead(SparseQueryHead):
 
         merge = self.instance_bank.update if temp_feature is not None else None
         decoded = self._decode(
-            self.levels(stages),
+            self.levels(lidar_features),
             instance_feature,
             anchor,
             time_interval,
@@ -2166,7 +2181,7 @@ class Sparse4DHead(SparseQueryHead):
             merge,
             denoising,
             context,
-            self.bev_levels(stages),
+            self.bev_levels(lidar_features),
         )
         if temp_feature is not None:
             self.instance_bank.cache(

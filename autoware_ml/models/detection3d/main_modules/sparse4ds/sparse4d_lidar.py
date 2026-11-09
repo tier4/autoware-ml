@@ -16,65 +16,89 @@
 
 from __future__ import annotations
 
-from jaxtyping import Float32, Int
+from jaxtyping import Float32, Int32
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.detection3d.heads.sparse4d import SparseStage
+from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 
 
 class Sparse4DLidar(nn.Module):
-    """Encode voxelized lidar points into the sparse stages the Sparse4D head samples.
+    """Encode voxelized lidar points into the BEV feature map the Sparse4D head samples.
 
-    The branch owns the whole lidar path: the voxel encoder, the sparse middle encoder, the
-    backbone refining its stages and the neck that turns them into the levels the head samples. That mirrors the BEVFusion lidar branch, so the detector only runs the head and a
-    camera branch can join with its own path.
+    The branch owns the whole lidar path: the voxel encoder, the BEV middle encoder, and the BEV
+    backbone and neck that refine the resulting map. That mirrors the BEVFusion lidar branch, so
+    the detector only runs the head and a camera branch can join with its own path.
     """
 
     def __init__(
         self,
         pts_voxel_encoder: nn.Module,
-        pts_middle_encoder: nn.Module,
+        pts_middle_encoder: BEVMiddleEncoder,
         pts_backbone: nn.Module,
         pts_neck: nn.Module,
     ) -> None:
         """Initialize the lidar branch.
 
         Args:
-            pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
-            pts_middle_encoder: Sparse middle encoder encoding the voxel features and their
-                coordinates into a hierarchy of stages.
-            pts_backbone: Sparse backbone refining the encoder stages before the neck.
-            pts_neck: Neck turning the stages into the levels the head samples.
+            pts_voxel_encoder: Lidar voxel encoder.
+            pts_middle_encoder: Lidar BEV middle encoder.
+            pts_backbone: BEV backbone applied to the encoded map.
+            pts_neck: BEV neck applied after the backbone.
+
+        Raises:
+            TypeError: If the middle encoder does not implement :class:`BEVMiddleEncoder`.
         """
         super().__init__()
+        if not isinstance(pts_middle_encoder, BEVMiddleEncoder):
+            raise TypeError(
+                "The lidar middle encoder must be a BEVMiddleEncoder, got "
+                f"{type(pts_middle_encoder).__name__}."
+            )
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
         self.pts_backbone = pts_backbone
         self.pts_neck = pts_neck
 
+    @property
+    def expected_bev_shape(self) -> tuple[int, int]:
+        """Return the expected ``(height, width)`` of the lidar BEV features."""
+        return self.pts_middle_encoder.bev_output_shape
+
     def forward(
         self,
         voxels: Float32[torch.Tensor, "num_voxels max_num_points C"],
-        coords: Int[torch.Tensor, "num_voxels 4"],
-        num_points: Int[torch.Tensor, " num_voxels"],
+        coords: Int32[torch.Tensor, "num_voxels 4"],
+        num_points: Int32[torch.Tensor, " num_voxels"],
         batch_size: int,
-    ) -> list[SparseStage]:
-        """Encode lidar voxels into the sparse levels the head samples.
+    ) -> Float32[torch.Tensor, "batch_size channels height width"]:
+        """Encode lidar voxels into a BEV feature map.
 
         Args:
-            voxels: Lidar voxel features, the padded points of every voxel.
-            coords: Voxel coordinates in ``(batch, x, y, z)`` order, as the sparse middle
-                encoder consumes them, with the voxels grouped by batch index.
+            voxels: Lidar voxel features.
+            coords: Voxel coordinates in ``(batch, z, y, x)`` order, as the sparse middle
+                encoder consumes them.
             num_points: Number of points in each voxel.
             batch_size: Explicit batch size.
 
         Returns:
-            Features, voxel coordinates and batch offsets of every level, from the finest to the
-            coarsest.
+            BEV feature map of the lidar branch.
         """
-        voxel_features = self.pts_voxel_encoder(voxels, num_points)
-        point = self.pts_middle_encoder(
+        voxel_features = self.pts_voxel_encoder(
+            voxels=voxels,
+            num_points=num_points,
+            coords=coords,
+        )
+        bev_features = self.pts_middle_encoder(
             voxel_features=voxel_features, coords=coords, batch_size=batch_size
         )
-        return self.pts_neck(self.pts_backbone(point))
+        return self.pts_neck(self.pts_backbone(bev_features))
+
+    def prepare_for_export(self) -> BEVMiddleEncoder:
+        """Swap the middle encoder for its ONNX-exportable variant, in place.
+
+        Returns:
+            The exportable middle encoder that replaced the original.
+        """
+        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
+        return self.pts_middle_encoder

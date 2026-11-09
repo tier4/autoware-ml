@@ -16,12 +16,13 @@
 
 This module contains the high-level Sparse4D detector wrapper. A temporal head needs scenario
 streams, see ``DataModule(streaming=True)``. Its export carries the instance bank state through
-the inputs and the outputs of the detection graph.
+the inputs and the outputs of the graph.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 import torch
@@ -39,14 +40,9 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
-from autoware_ml.models.detection3d.heads.sparse4d import (
-    Sparse4DHead,
-    SparseStage,
-)
+from autoware_ml.models.detection3d.heads.sparse4d import Sparse4DHead
 from autoware_ml.models.detection3d.main_modules.sparse4ds.export_wrappers import (
-    Sparse4DHeadExportWrapper,
-    build_lidar_export_context,
-    build_sparse4d_head_export_spec,
+    build_sparse4d_lidar_export_spec,
 )
 from autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar import Sparse4DLidar
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -55,7 +51,6 @@ from autoware_ml.models.multi.ptv3_det3d_seg3d import (
     detection3d_gt_batch,
     empty_unsupervised_predictions,
 )
-from autoware_ml.models.segmentation3d.ptv3_base import build_encoder_export_spec
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.deploy import ExportSpec
 
@@ -63,9 +58,9 @@ from autoware_ml.utils.deploy import ExportSpec
 class Sparse4DDetectionModel(ModuleBaseModel):
     """Compose a Sparse4D detector with lidar and camera branches.
 
-    The head samples the sparse stages of the lidar branch at keypoints around its anchors and
-    carries the most confident instances from one frame of a scenario to the next. Only the
-    lidar branch exists so far, the camera branch is a placeholder of the signature.
+    The head samples the BEV map of the lidar branch at keypoints around its anchors and carries
+    the most confident instances from one frame of a scenario to the next. Only the lidar branch
+    exists so far, the camera branch is a placeholder of the signature.
     """
 
     def __init__(
@@ -85,7 +80,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
 
         Args:
             data_preprocessor: Preprocessor for the model inputs.
-            lidar_network: Lidar branch returning the sparse stages the head samples.
+            lidar_network: Lidar branch returning the BEV map the head samples.
             camera_network: Camera branch, not supported yet.
             bbox_head: Sparse4D query head.
             log_dict_configs: Logging configuration for training and validation.
@@ -109,7 +104,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             log_dict_configs=log_dict_configs,
         )
         if lidar_network is None:
-            raise ValueError("Sparse4D needs a lidar_network, the head samples its stages.")
+            raise ValueError("Sparse4D needs a lidar_network, the head samples its BEV map.")
         if camera_network is not None:
             raise NotImplementedError("Sparse4D supports no camera_network yet, set it to null.")
         self.lidar_network = lidar_network
@@ -125,8 +120,13 @@ class Sparse4DDetectionModel(ModuleBaseModel):
 
         Returns:
             The Sparse4D head outputs.
+
+        Raises:
+            ValueError: If the batch carries no frame metadata or no voxels.
         """
-        _, det3d_outputs = self._forward_stages(multi_task_batch_inputs)
+        frame_meta = self._frame_meta(multi_task_batch_inputs)
+        bev_map = self._lidar_bev(multi_task_batch_inputs)
+        det3d_outputs = self._run_head(bev_map, multi_task_batch_inputs, frame_meta)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(
                 center_head_outputs=None,
@@ -134,26 +134,6 @@ class Sparse4DDetectionModel(ModuleBaseModel):
                 sparse4d_head_outputs=det3d_outputs,
             )
         )
-
-    def _forward_stages(
-        self, multi_task_batch_inputs: ModelBatchInputs
-    ) -> tuple[list[SparseStage], Sparse4DHeadOutputs]:
-        """Encode the batch with the lidar branch and run the head on the fused stages.
-
-        Args:
-            multi_task_batch_inputs: Model inputs with the voxels, the frame metadata and the
-                detection ground truth.
-
-        Returns:
-            The fused stages the head sampled and its outputs.
-
-        Raises:
-            ValueError: If the batch carries no frame metadata, no points or no voxels.
-        """
-        frame_meta = self._frame_meta(multi_task_batch_inputs)
-        stages = self._lidar_stages(multi_task_batch_inputs)
-        det3d_outputs = self._run_head(stages, multi_task_batch_inputs, frame_meta)
-        return stages, det3d_outputs
 
     @staticmethod
     def _frame_meta(multi_task_batch_inputs: ModelBatchInputs) -> FrameMetaBatch:
@@ -173,19 +153,44 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             raise ValueError("The Sparse4D head needs the frame metadata of every sample.")
         return frame_meta
 
+    def _lidar_bev(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:
+        """Run the lidar branch on the voxels of the batch.
+
+        Args:
+            multi_task_batch_inputs: Model inputs with the voxels.
+
+        Returns:
+            The BEV map the head samples.
+
+        Raises:
+            ValueError: If the batch carries no voxels.
+        """
+        voxels_data = multi_task_batch_inputs.voxels_data
+        if voxels_data is None:
+            raise ValueError("Sparse4D needs the voxels of a voxelizer in the model inputs.")
+        # Call the module rather than its forward so module hooks (model summary sizes and
+        # FLOP counting) see the branch. The sparse middle encoder consumes ``(batch, z, y, x)``
+        # coordinates.
+        return self.lidar_network(
+            voxels=voxels_data.voxels,
+            coords=voxels_data.batch_zyx_coords(),
+            num_points=voxels_data.num_points,
+            batch_size=multi_task_batch_inputs.multi_task_gt_batch.batch_size,
+        )
+
     def _run_head(
         self,
-        stages: Sequence[SparseStage],
+        bev_map: torch.Tensor,
         multi_task_batch_inputs: ModelBatchInputs,
         frame_meta: FrameMetaBatch,
     ) -> Sparse4DHeadOutputs:
-        """Run the head over the fused stages of a batch.
+        """Run the head over the BEV map of a batch.
 
         The frame metadata places every frame of a stream for the temporal head, the boxes feed
         the denoising queries and their instance ids and point counts the tracks.
 
         Args:
-            stages: Fused encoder stages the head samples.
+            bev_map: BEV map of the lidar branch the head samples.
             multi_task_batch_inputs: Model inputs with the detection ground truth.
             frame_meta: Frame metadata of every sample, see :meth:`_frame_meta`.
 
@@ -194,7 +199,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         """
         gt_detections = detection3d_gt_batch(multi_task_batch_inputs)
         return self.bbox_head(
-            stages,
+            bev_map,
             timestamps_seconds=frame_meta.timestamps,
             lidar2global=frame_meta.ego2globals,
             scene_tokens=frame_meta.scene_tokens,
@@ -203,42 +208,6 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             gt_instance_ids=gt_detections.valid_bboxes_instance_ids(),
             gt_num_points=gt_detections.valid_bboxes_num_points(),
             context=self.head_context(multi_task_batch_inputs),
-        )
-
-    def _lidar_stages(self, multi_task_batch_inputs: ModelBatchInputs) -> list[SparseStage]:
-        """Run the lidar branch on the voxels of the batch.
-
-        Args:
-            multi_task_batch_inputs: Model inputs with the points and their voxels.
-
-        Returns:
-            The fused stages the head samples.
-
-        Raises:
-            ValueError: If the batch carries no points or no voxels.
-            RuntimeError: If the voxelizer dropped occupied voxels, which the head would never
-                sample.
-        """
-        point_batch = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
-        if point_batch is None:
-            raise ValueError("Sparse4D needs the points of the batch.")
-        voxels_data = multi_task_batch_inputs.voxels_data
-        if voxels_data is None:
-            raise ValueError("Sparse4D needs the voxels of a voxelizer in the model inputs.")
-        if int(voxels_data.num_dropped_voxels) > 0:
-            raise RuntimeError(
-                f"The voxelizer dropped {int(voxels_data.num_dropped_voxels)} occupied voxels. "
-                "Increase 'max_voxels' and 'eval_max_voxels' of the data preprocessing so every "
-                "voxel is kept."
-            )
-        # Call the module rather than its forward so module hooks (model summary sizes and
-        # FLOP counting) see the branch. The sparse middle encoder consumes ``(batch, x, y, z)``
-        # coordinates.
-        return self.lidar_network(
-            voxels=voxels_data.voxels,
-            coords=voxels_data.batch_xyz_coords(),
-            num_points=voxels_data.num_points,
-            batch_size=multi_task_batch_inputs.multi_task_gt_batch.batch_size,
         )
 
     def head_context(self, multi_task_batch_inputs: ModelBatchInputs) -> Any:
@@ -357,28 +326,25 @@ class Sparse4DDetectionModel(ModuleBaseModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        """Build the split ONNX export specs of the encoder and the detection graph.
+        """Build the ONNX export specification of the lidar graph.
 
-        The middle encoder of the lidar branch exports the ``ptv3_lidar_encoder`` graph returning
-        the stage features. The ``ptv3_det3d_head`` graph fuses the stages with the neck, takes the
-        instance bank state of the last frame and returns the outputs of the frame with the
-        state of the next one.
+        The ``sparse4d_lidar`` graph takes the voxels of one frame like ``bevfusion_lidar``,
+        followed by the instance bank state of the last frame, and returns the outputs of the
+        frame with the state of the next one.
 
         Args:
-            multi_task_batch_inputs: Example preprocessed batch with the voxels.
+            multi_task_batch_inputs: Batched model inputs used to derive the export tensors.
 
         Returns:
             Ordered mapping of module name to export specification.
         """
-        context = build_lidar_export_context(self.lidar_network, multi_task_batch_inputs)
+        export_model = deepcopy(self).eval()
+        export_model.lidar_network.prepare_for_export()
+        bbox_head = export_model.bbox_head.prepare_for_export()
         return {
-            "ptv3_lidar_encoder": build_encoder_export_spec(context),
-            "ptv3_det3d_head": build_sparse4d_head_export_spec(
-                context,
-                Sparse4DHeadExportWrapper(
-                    self.lidar_network.pts_neck, self.bbox_head.prepare_for_export()
-                ),
-            ),
+            "sparse4d_lidar": build_sparse4d_lidar_export_spec(
+                export_model.lidar_network, bbox_head, multi_task_batch_inputs
+            )
         }
 
 

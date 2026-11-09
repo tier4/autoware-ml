@@ -1,0 +1,22 @@
+# @package _global_
+# The BEVFusion lidar network on a 17 cm grid, Sparse4D sampling its 1.36 m map and a 2.72 m halving.
+defaults:
+  - base_122m
+  - _self_
+
+voxel_size: [0.17, 0.17, 0.2]
+# 244.8 m / 0.17 m = 1440 voxels per BEV axis, reduced to 180 by the three stride-2 stages of the
+# sparse encoder, so the head samples a 180x180 map at out_size_factor 8.
+out_size_factor: 8
+
+# Dense scenes hold up to a few hundred boxes, so the queries and outputs are sized above them.
+num_anchor: 1800
+
+model:
+  lidar_network:
+    pts_middle_encoder:
+      # (Y, X, Z) voxel grid and dense (Y, X, Z) output of the sparse encoder.
+      sparse_shape: [1440, 1440, 41]
+      dense_output_shapes: [180, 180, 2]
+  bbox_head:
+    num_output: 500

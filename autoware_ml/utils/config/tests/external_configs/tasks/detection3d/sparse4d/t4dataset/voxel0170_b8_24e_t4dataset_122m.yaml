@@ -1,7 +1,7 @@
 # @package _global_
 # Temporal Sparse4D detection on the 10 Hz streams of the test database.
 defaults:
-  - base_voxel012_122m
+  - base_voxel0170_122m
   - /database@database: t4dataset/t4dataset_base
   - override /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: default_dynamic
   - override /ego@ego: default_t4dataset
@@ -10,7 +10,7 @@ defaults:
 batch_size: 8
 num_workers: 8
 experiment_group_name: sparse4d/${database.version}/t4dataset
-experiment_name: voxel012_b8_24e_t4dataset_122m
+experiment_name: voxel0170_b8_24e_t4dataset_122m
 
 # 20 s train streams, 4 s val streams, whole test scenarios.
 datamodule:

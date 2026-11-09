@@ -1,20 +1,21 @@
 # @package _global_
-# Temporal Sparse4D detection on the sparse PTv3 encoder stages.
+# Temporal Sparse4D detection on the BEV map of the BEVFusion lidar network.
 defaults:
   - /tasks/default_task
-  - /tasks/segmentation3d/ptv3/encoder@model.lidar_network.pts_middle_encoder.encoder
-  - /tasks/segmentation3d/ptv3/voxel_encoder@model.lidar_network.pts_voxel_encoder
   - _self_
 
 database: ???
 point_cloud_range: ???
-# Edge of the cubic voxels the encoder serializes, in meters.
-grid_size: ???
-max_voxels: ???
+voxel_size: ???
+# BEV downsampling factor between the voxel grid and the map the head samples.
+out_size_factor: ???
+max_num_points: 32
+max_voxels: 120000
+eval_max_voxels: 160000
 
 num_anchor: 900
-# Pooling strides of the encoder stages the head samples, from the finest to the coarsest.
-det_feature_strides: [8]
+# The head samples the neck map and this many halvings of it.
+num_bev_downsampled: 1
 
 # K-means settings of autoware_ml/scripts/generate_anchors.py
 anchors:
@@ -31,11 +32,11 @@ optimizer:
 data_preprocessor:
   preprocessor_modules:
     - _target_: autoware_ml.preprocessing.detection3d.point_pillar_preprocessor.PointPillarPreprocessor
-      voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
+      voxel_size: ${voxel_size}
       point_cloud_range: ${point_cloud_range}
-      max_num_points: 32
+      max_num_points: ${max_num_points}
       max_voxels: ${max_voxels}
-      eval_max_voxels: ${max_voxels}
+      eval_max_voxels: ${eval_max_voxels}
 
 trainer:
   max_epochs: ???
@@ -55,7 +56,8 @@ callbacks:
     patience: 20
     mode: max
 
-# The det head graph takes the instance bank state of the last frame and returns the next one.
+# The graph takes the voxels of one frame like bevfusion_lidar, then the instance bank state of
+# the last frame, and returns the frame outputs with the state of the next one.
 deploy:
   onnx:
     enabled: true
@@ -63,17 +65,15 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      ptv3_lidar_encoder:
-        metainfo:
-          point_cloud_range: ${point_cloud_range}
-          voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
-          serialization_orders: [z, z-trans]
-          pooling_strides: ${model.lidar_network.pts_middle_encoder.encoder.stride}
-          enc_channels: ${model.lidar_network.pts_middle_encoder.encoder.enc_channels}
-          patch_sizes: ${model.lidar_network.pts_middle_encoder.encoder.enc_patch_size}
-      ptv3_det3d_head:
+      sparse4d_lidar:
+        dynamic_axes:
+          voxels: { 0: voxels_num }
+          coors: { 0: voxels_num }
+          num_points_per_voxel: { 0: voxels_num }
         metainfo:
           class_names: ${taxonomy.detection3d.class_names}
+          point_cloud_range: ${point_cloud_range}
+          voxel_size: ${voxel_size}
           box_layout: [x, y, z, ln_l, ln_w, ln_h, sin_yaw, cos_yaw, vx, vy]
           quality_layout: [centerness, yawness]
           num_anchor: ${num_anchor}
@@ -101,24 +101,44 @@ model:
     prog_bar: true
     sync_dist: true
 
-  # Lidar branch: voxel encoder -> PTv3 middle encoder -> backbone -> feature pyramid neck. The
-  # neck fuses the deepest encoder stage top-down into the stages the head samples. The backbone
-  # is the identity, the encoder stages reach the neck as they are.
+  # Lidar branch: voxel encoder -> sparse middle encoder -> BEV backbone and neck, the BEVFusion
+  # lidar network reading single frames without a time lag.
   lidar_network:
     _target_: autoware_ml.models.detection3d.main_modules.sparse4ds.sparse4d_lidar.Sparse4DLidar
+    pts_voxel_encoder:
+      _target_: autoware_ml.models.detection3d.encoders.voxel.HardSimpleVoxelSinCosEncoder
+      in_channels: 4
+      # Normalization ranges for (x, y, z, intensity), the loader scales the intensity to [0, 1].
+      min_norm_values:
+        - ${point_cloud_range.0}
+        - ${point_cloud_range.1}
+        - ${point_cloud_range.2}
+        - 0.0
+      max_norm_values:
+        - ${point_cloud_range.3}
+        - ${point_cloud_range.4}
+        - ${point_cloud_range.5}
+        - 1.0
     pts_middle_encoder:
-      _target_: autoware_ml.models.detection3d.encoders.sparse.ptv3_middle_encoder.PTv3MiddleEncoder
-      grid_size: ${grid_size}
-      point_cloud_range: ${point_cloud_range}
-      freeze_encoder: false
+      _target_: autoware_ml.models.detection3d.encoders.sparse.sparse_encoder.SparseEncoder
+      # The sin/cos encoder emits 2 * in_channels ** 2 features.
+      in_channels: 32
+      sparse_shape: ???
+      output_channels: 128
+      dense_output_shapes: ???
     pts_backbone:
-      _target_: torch.nn.Identity
+      _target_: autoware_ml.models.detection3d.backbones.second.SECONDBackbone
+      in_channels: 256
+      out_channels: [128, 256]
+      layer_nums: [5, 5]
+      layer_strides: [1, 2]
+      activation_checkpointing: false
     pts_neck:
-      _target_: autoware_ml.models.detection3d.ptv3.PTv3Det3DFeaturePyramid
-      stage_channels:
-        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[3]}
-        - ${model.lidar_network.pts_middle_encoder.encoder.enc_channels[4]}
-      out_channels: 256
+      _target_: autoware_ml.models.detection3d.necks.second_fpn.SECONDFPN
+      in_channels: [128, 256]
+      out_channels: [256, 256]
+      upsample_strides: [1, 2]
+      activation_checkpointing: false
 
   # Camera branch is not supported yet.
   camera_network: null
@@ -127,12 +147,25 @@ model:
     _target_: autoware_ml.models.detection3d.heads.sparse4d.Sparse4DHead
     num_classes: ${class_count:${taxonomy.detection3d.class_names}}
     class_names: ${taxonomy.detection3d.class_names}
-    embed_dims: ${model.lidar_network.pts_neck.out_channels}
+    embed_dims: 256
     anchor_file: ???
     num_anchor: ${num_anchor}
     point_cloud_range: ${point_cloud_range}
-    grid_size: ${grid_size}
-    feature_strides: ${det_feature_strides}
+    # The head samples no sparse voxels, the grid and the strides only size its voxel lookup.
+    grid_size: ${voxel_size.0}
+    feature_strides:
+      - ${out_size_factor}
+    lidar_sampling: bev
+    bev_channels: 256
+    # The neck map projected to bev_channels and its halvings, placed on the metric grid.
+    bev:
+      _target_: autoware_ml.models.detection3d.necks.bev_map_pyramid.BEVMapPyramid
+      point_cloud_range: ${point_cloud_range}
+      voxel_size: ${voxel_size}
+      out_size_factor: ${out_size_factor}
+      in_channels: 512
+      channels: ${model.bbox_head.bev_channels}
+      num_downsampled: ${num_bev_downsampled}
     num_decoder: 6
     num_heads: 8
     num_groups: 8
