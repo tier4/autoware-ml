@@ -14,7 +14,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     build_serialized_pooling_metadata,
 )
-from autoware_ml.scripts.synthetic_inputs import (
+from autoware_ml.scripts.tools.synthetic_inputs import (
     REAL_NEIGHBORS,
     mean_neighbors,
     voxel_layout,
@@ -92,7 +92,7 @@ def test_write_export_inputs_writes_raw_tensors_and_trtexec_shapes(tmp_path: Pat
 
 def test_module_entrypoint_runs_hydra_main() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "autoware_ml.scripts.synthetic_inputs", "--help"],
+        [sys.executable, "-m", "autoware_ml.scripts.tools.synthetic_inputs", "--help"],
         capture_output=True,
         text=True,
         check=False,
