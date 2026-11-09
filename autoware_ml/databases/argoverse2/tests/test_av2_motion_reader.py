@@ -36,7 +36,7 @@ from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: E402
 from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
     CITY,
     FOCAL_TRACK_ID,
-    av2_prediction_taxonomy,
+    av2_motion_taxonomy,
     write_scenario,
 )
 from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary  # noqa: E402
@@ -101,13 +101,13 @@ class TestAgentTracks(AV2MotionReaderTestCase):
 
     def test_agent_tracks_shapes_and_focal_first(self) -> None:
         """
-        Input: the synthetic scenario read with the prediction taxonomy at current step 49.
+        Input: the synthetic scenario read with the motion taxonomy at current step 49.
         Expected: the three tracks are padded to the 110 steps in float32 / int64 / bool
         tensors, the focal track comes first, and Argoverse 2 records no box size.
         Check: the agent and step counts, the tensor shapes and dtypes, the track id order,
         the current step, the period, the ignore index and the absent sizes.
         """
-        tracks = read_agent_tracks(_tracks_file(self.scenario_path), av2_prediction_taxonomy(), 49)
+        tracks = read_agent_tracks(_tracks_file(self.scenario_path), av2_motion_taxonomy(), 49)
 
         self.assertEqual(tracks.num_agents, 3)
         self.assertEqual(tracks.num_steps, 110)
@@ -137,7 +137,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         Check: the valid masks, sampled positions, velocities and headings, and the type and
         role of every track.
         """
-        tracks = read_agent_tracks(_tracks_file(self.scenario_path), av2_prediction_taxonomy(), 49)
+        tracks = read_agent_tracks(_tracks_file(self.scenario_path), av2_motion_taxonomy(), 49)
         walker = tracks.track_ids.index("walker")
         cone = tracks.track_ids.index("cone")
 
@@ -167,7 +167,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         """
         scenario_path = write_scenario(self.tmp_path / "test", "t00", num_steps=50)
 
-        tracks = read_agent_tracks(_tracks_file(scenario_path), av2_prediction_taxonomy(), 49)
+        tracks = read_agent_tracks(_tracks_file(scenario_path), av2_motion_taxonomy(), 49)
 
         self.assertEqual(tracks.num_steps, 50)
         self.assertTrue(tracks.valid[0].all().item())
@@ -179,7 +179,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         Check: ValueError naming the window bounds.
         """
         with self.assertRaisesRegex(ValueError, "current_step_index must lie in \\[0, 110\\)"):
-            read_agent_tracks(_tracks_file(self.scenario_path), av2_prediction_taxonomy(), 110)
+            read_agent_tracks(_tracks_file(self.scenario_path), av2_motion_taxonomy(), 110)
 
     def test_agent_tracks_rejects_an_unlisted_object_type(self) -> None:
         """
@@ -192,7 +192,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         scenario_path = write_scenario(
             self.tmp_path / "train", "odd", object_types={FOCAL_TRACK_ID: "bus"}
         )
-        taxonomy = av2_prediction_taxonomy()
+        taxonomy = av2_motion_taxonomy()
         vocabulary = dict(taxonomy.vocabulary.class_renaming)
         vocabulary.pop("bus")
         narrowed = LabelTaxonomy(
