@@ -27,8 +27,7 @@ class Sparse4DLidar(nn.Module):
     """Encode voxelized lidar points into the sparse stages the Sparse4D head samples.
 
     The branch owns the whole lidar path: the voxel encoder, the sparse middle encoder, the
-    optional backbone refining its stages and the neck that turns them into the levels the head
-    samples. That mirrors the BEVFusion lidar branch, so the detector only runs the head and a
+    backbone refining its stages and the neck that turns them into the levels the head samples. That mirrors the BEVFusion lidar branch, so the detector only runs the head and a
     camera branch can join with its own path.
     """
 
@@ -36,7 +35,7 @@ class Sparse4DLidar(nn.Module):
         self,
         pts_voxel_encoder: nn.Module,
         pts_middle_encoder: nn.Module,
-        pts_backbone: nn.Module | None,
+        pts_backbone: nn.Module,
         pts_neck: nn.Module,
     ) -> None:
         """Initialize the lidar branch.
@@ -45,8 +44,7 @@ class Sparse4DLidar(nn.Module):
             pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
             pts_middle_encoder: Sparse middle encoder encoding the voxel features and their
                 coordinates into a hierarchy of stages.
-            pts_backbone: Optional sparse backbone refining the encoder stages before the neck,
-                the stages go straight to the neck without one.
+            pts_backbone: Sparse backbone refining the encoder stages before the neck.
             pts_neck: Neck turning the stages into the levels the head samples.
         """
         super().__init__()
@@ -79,6 +77,4 @@ class Sparse4DLidar(nn.Module):
         point = self.pts_middle_encoder(
             voxel_features=voxel_features, coords=coords, batch_size=batch_size
         )
-        if self.pts_backbone is not None:
-            point = self.pts_backbone(point)
-        return self.pts_neck(point)
+        return self.pts_neck(self.pts_backbone(point))

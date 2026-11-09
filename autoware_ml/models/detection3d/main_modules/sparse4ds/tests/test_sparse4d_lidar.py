@@ -67,11 +67,11 @@ class _ScalingBackbone(nn.Module):
 def _build_branch(
     keep_deepest: bool = False, pts_backbone: nn.Module | None = None
 ) -> Sparse4DLidar:
-    """Build a small branch over the two stage test middle encoder."""
+    """Build a small branch over the two stage test middle encoder, identity backbone by default."""
     return Sparse4DLidar(
         pts_voxel_encoder=SweepSplitVoxelFeatureEncoder(),
         pts_middle_encoder=_build_middle_encoder(),
-        pts_backbone=pts_backbone,
+        pts_backbone=nn.Identity() if pts_backbone is None else pts_backbone,
         pts_neck=_build_neck(keep_deepest=keep_deepest),
     )
 

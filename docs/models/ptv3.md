@@ -15,8 +15,8 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
   detection-head resolution, and feeds a `TransFusionHead`.
 - Temporal detection (experimental): `Sparse4DDetectionModel` runs the lidar
   branch `Sparse4DLidar`, laid out like the BEVFusion one: a voxel encoder, the
-  PTv3 encoder as the sparse middle encoder (`PTv3MiddleEncoder`), an optional
-  backbone refining its stages, unused so far, and a feature pyramid neck that
+  PTv3 encoder as the sparse middle encoder (`PTv3MiddleEncoder`), a backbone
+  refining its stages, the identity so far, and a feature pyramid neck that
   fuses the deepest stage top-down into finer ones (`PTv3Det3DFeaturePyramid`). It feeds a `Sparse4DHead`, whose queries sample
   the sparse voxels at keypoints around their anchors with no BEV canvas, and
   carry the most confident instances from one frame of a scenario to the next.

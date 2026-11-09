@@ -55,7 +55,7 @@ def _build_lidar_network() -> Sparse4DLidar:
         pts_middle_encoder=PTv3MiddleEncoder(
             encoder=build_ptv3_encoder(), grid_size=1.0, point_cloud_range=POINT_CLOUD_RANGE
         ),
-        pts_backbone=None,
+        pts_backbone=nn.Identity(),
         pts_neck=PTv3Det3DFeaturePyramid(stage_channels=(8, 16), out_channels=32),
     )
 

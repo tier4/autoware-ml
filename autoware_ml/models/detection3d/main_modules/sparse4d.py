@@ -144,7 +144,6 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         groups["det3d_branch"] = [
             parameter
             for module in fresh_modules
-            if module is not None
             for parameter in module.parameters()
             if parameter.requires_grad
         ]
