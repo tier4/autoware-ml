@@ -30,11 +30,11 @@ from autoware_ml.metrics.detection3d.matching import (
     Detection3DState,
     clip_to_range,
     gt_keep_mask,
-    resolve_match_cost,
 )
 from autoware_ml.metrics.detection3d.naming import metric_token
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.report import MetricReport
+from autoware_ml.types.metrics import MatchCost
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         ),
         max_distances: dict[str, float] | None = None,
         min_num_points: int = 0,
-        match_cost: str = "center",
+        match_cost: MatchCost | str = MatchCost.CENTER,
         class_groups: dict[str, list[str]] | None = None,
         collision: Any = None,
         **kwargs: Any,
@@ -89,7 +89,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 filter at accumulation.
             min_num_points: Minimum LiDAR points a GT box needs to count, 0 disables the
                 filter.
-            match_cost: Matching cost name, ``center`` or ``corner``.
+            match_cost: Cost the matching pairs boxes by, or its name (``center`` or
+                ``corner``) as a config spells it.
             class_groups: Group name to member class names. When set, labels are folded onto
                 the group taxonomy at state build, so matching happens between grouped classes.
             collision: Optional collision TTC provider. When set, the per-box
@@ -102,8 +103,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         _validate_name_tokens(self.class_names)
         self.max_distances = max_distances
         self.min_num_points = int(min_num_points)
-        self.match_cost = str(match_cost)
-        resolve_match_cost(self.match_cost)  # a config typo must fail at build, not after the epoch
+        # A config typo must fail at build, not after the epoch.
+        self.match_cost = MatchCost(match_cost)
         self.collision = collision
         # When class_groups is set, GT/pred labels are folded onto the behaviour
         # taxonomy at state build (after the per-class GT filters), so matching

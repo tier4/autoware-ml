@@ -2,8 +2,10 @@
 
 ``Detection3DSample`` is the per-frame input. ``MatchCurve`` carries one
 class's score-ordered matching results and ``CurveMetrics`` its AP-style
-summary. The memoizing ``Detection3DState`` that orchestrates the matching lives
-in :mod:`autoware_ml.metrics.detection3d.matching`.
+summary. ``TpErrorSet`` holds the nuScenes true-positive errors of one selection
+of matches and ``RecallTarget`` names a recall operating point to select them at.
+The memoizing ``Detection3DState`` that orchestrates the matching lives in
+:mod:`autoware_ml.metrics.detection3d.matching`.
 """
 
 from __future__ import annotations
@@ -12,8 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-
-ERROR_NAMES = ("ATE", "AOE", "ASE", "AVE", "AAE")
+from pydantic import BaseModel, ConfigDict, model_validator
 
 # nuScenes center-distance AP thresholds (meters). The AP-family metrics own this
 # set. Metrics that need a single operating point share DEFAULT_TP_THRESHOLD (the
@@ -108,9 +109,88 @@ class CurveMetrics:
     optimal_precision: float
 
 
-@dataclass(frozen=True)
-class SelectedTpErrors:
-    """True-positive error values selected at one operating point."""
+class TpErrorSet(BaseModel):
+    """
+    The nuScenes true-positive errors of one selection of matches.
+
+    Attributes:
+      ate: Average translation error, the BEV center distance in meters.
+      aoe: Average orientation error, the absolute yaw gap in radians.
+      ase: Average scale error, one minus the aligned 3D IoU.
+      ave: Average velocity error in meters per second.
+      aae: Average attribute error, the neutral 1.0 while attributes are not evaluated.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    ate: float
+    aoe: float
+    ase: float
+    ave: float
+    aae: float
+
+    @classmethod
+    def nan(cls) -> TpErrorSet:
+        """
+        The error set of a selection without a measurable match.
+
+        Returns:
+          TpErrorSet: Every error NaN.
+        """
+        nan = float("nan")
+        return cls(ate=nan, aoe=nan, ase=nan, ave=nan, aae=nan)
+
+    def named(self) -> tuple[tuple[str, float], ...]:
+        """
+        The errors with their nuScenes names, in the nuScenes order.
+
+        Returns:
+          tuple[tuple[str, float], ...]: ``(name, value)`` pairs, ``ATE`` first.
+        """
+        return (
+            ("ATE", self.ate),
+            ("AOE", self.aoe),
+            ("ASE", self.ase),
+            ("AVE", self.ave),
+            ("AAE", self.aae),
+        )
+
+
+class SelectedTpErrors(BaseModel):
+    """
+    True-positive errors selected at one operating point.
+
+    Attributes:
+      count: Number of true positives the errors are averaged over.
+      errors: The mean errors over them, every error 1.0 when no true positive was selected.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
 
     count: int
-    errors: dict[str, float]
+    errors: TpErrorSet
+
+
+class RecallTarget(BaseModel):
+    """
+    A recall operating point the true-positive errors are selected up to.
+
+    Attributes:
+      name: Variant name carried by the metric keys, for example ``default``. ``optimal`` is
+        reserved for the max-F1 operating point that is always reported.
+      recall: Recall level in ``[0, 1]`` up to which the matches are pooled.
+    """
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    name: str
+    recall: float
+
+    @model_validator(mode="after")
+    def _check_name_and_range(self) -> RecallTarget:
+        """Reject the reserved name and a recall outside the unit range."""
+        if self.name == "optimal":
+            raise ValueError('"optimal" is the reserved max-F1 operating point, pick another name.')
+        if not 0.0 <= self.recall <= 1.0:
+            raise ValueError(f"recall target {self.name!r} must be in [0, 1], got {self.recall}.")
+        return self
