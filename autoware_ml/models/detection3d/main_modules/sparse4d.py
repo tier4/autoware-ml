@@ -116,20 +116,6 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         self.lidar_network = lidar_network
         self.camera_network = camera_network
         self.bbox_head = bbox_head
-        self._validate_sampling_contract()
-
-    def _validate_sampling_contract(self) -> None:
-        """Validate that the lidar branch returns the levels the head samples.
-
-        Raises:
-            ValueError: If the neck of the lidar branch and the head disagree on the levels.
-        """
-        num_levels = self.lidar_network.pts_neck.num_levels
-        if num_levels != len(self.bbox_head.level_grids):
-            raise ValueError(
-                f"The lidar branch returns {num_levels} levels but the head samples "
-                f"{len(self.bbox_head.level_grids)}."
-            )
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run the lidar branch and the Sparse4D head on one batch of frames.

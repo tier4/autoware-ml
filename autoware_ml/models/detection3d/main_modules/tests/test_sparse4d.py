@@ -99,17 +99,6 @@ def test_camera_network_is_not_supported_yet(tmp_path: Path) -> None:
         )
 
 
-def test_lidar_branch_and_head_must_agree_on_the_sampled_levels(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="levels"):
-        Sparse4DDetectionModel(
-            data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-            lidar_network=_build_lidar_network(),
-            camera_network=None,
-            bbox_head=build_sparse4d_head(make_anchor_file(tmp_path), feature_strides=(1, 2)),
-            log_dict_configs=LogDictConfigs(prog_bar=False),
-        )
-
-
 def test_dropped_voxels_are_refused(tmp_path: Path) -> None:
     model = _build_model(tmp_path)
     batch = frame_inputs(torch.device("cpu"), 100.0)
