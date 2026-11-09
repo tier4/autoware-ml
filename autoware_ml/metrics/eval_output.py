@@ -210,7 +210,7 @@ class MetricRequirements(BaseModel):
     scores: bool = False
     gt_boxes: bool = False
 
-    def unmet(self, eval_output: EvalOutput) -> tuple[str, ...]:
+    def check_requirements(self, eval_output: EvalOutput) -> tuple[str, ...]:
         """
         Name what the eval output fails to provide.
 
