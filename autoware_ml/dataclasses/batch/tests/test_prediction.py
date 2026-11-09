@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Tests for the prediction samples."""
+
 from __future__ import annotations
+
+import unittest
 
 import torch
 
@@ -20,6 +24,7 @@ from autoware_ml.dataclasses.batch.prediction import AgentTracksSample
 
 
 def _tracks(num_agents: int = 2, num_steps: int = 5, **kwargs) -> AgentTracksSample:
+    """Build a zero filled agent tracks sample with the given fields overridden."""
     return AgentTracksSample(
         positions=torch.zeros(num_agents, num_steps, 3),
         headings=torch.zeros(num_agents, num_steps),
@@ -35,20 +40,34 @@ def _tracks(num_agents: int = 2, num_steps: int = 5, **kwargs) -> AgentTracksSam
     )
 
 
-def test_agent_tracks_sizes_default_to_none() -> None:
-    tracks = _tracks()
+class TestAgentTracksSample(unittest.TestCase):
+    """The agent tracks sample counts its agents and steps and carries optional sizes."""
 
-    assert tracks.num_agents == 2
-    assert tracks.num_steps == 5
-    assert tracks.sizes is None
+    def test_agent_tracks_sizes_default_to_none(self) -> None:
+        """
+        Input: a sample of two agents over five steps built without sizes.
+        Expected: the counts follow the tensor shapes and the sizes default to None, since
+        not every dataset records a box size.
+        Check: num_agents, num_steps and sizes.
+        """
+        tracks = _tracks()
 
+        self.assertEqual(tracks.num_agents, 2)
+        self.assertEqual(tracks.num_steps, 5)
+        self.assertIsNone(tracks.sizes)
 
-def test_agent_tracks_carry_one_size_per_agent() -> None:
-    sizes = torch.tensor([[4.5, 1.8, 1.5], [0.6, 0.6, 1.7]])
+    def test_agent_tracks_carry_one_size_per_agent(self) -> None:
+        """
+        Input: the sample built with a float32 size per agent.
+        Expected: the sizes are stored as given, one row per agent, and can be dropped again
+        through _replace.
+        Check: the presence, shape and dtype of sizes and the sizes of the replaced sample.
+        """
+        sizes = torch.tensor([[4.5, 1.8, 1.5], [0.6, 0.6, 1.7]])
 
-    tracks = _tracks(sizes=sizes)
+        tracks = _tracks(sizes=sizes)
 
-    assert tracks.sizes is not None
-    assert tracks.sizes.shape == (tracks.num_agents, 3)
-    assert tracks.sizes.dtype == torch.float32
-    assert tracks._replace(sizes=None).sizes is None
+        self.assertIsNotNone(tracks.sizes)
+        self.assertEqual(tracks.sizes.shape, (tracks.num_agents, 3))
+        self.assertEqual(tracks.sizes.dtype, torch.float32)
+        self.assertIsNone(tracks._replace(sizes=None).sizes)
