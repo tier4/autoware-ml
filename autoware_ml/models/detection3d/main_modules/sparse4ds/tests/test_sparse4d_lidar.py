@@ -76,32 +76,6 @@ def _build_branch(
     )
 
 
-def test_num_levels_follows_the_neck() -> None:
-    assert _build_branch().num_levels == 1
-    assert _build_branch(keep_deepest=True).num_levels == 2
-
-
-def test_optimizer_groups_split_the_middle_encoder_from_the_neck() -> None:
-    branch = _build_branch()
-
-    groups = branch.build_optimizer_groups()
-
-    assert set(groups) == {"encoder_default", "encoder_block", "pts_backbone_neck"}
-    grouped = sum(len(parameters) for parameters in groups.values())
-    assert grouped == sum(1 for parameter in branch.parameters() if parameter.requires_grad)
-    assert len(groups["pts_backbone_neck"]) == sum(1 for _ in branch.pts_neck.parameters())
-
-
-def test_optimizer_groups_place_the_backbone_with_the_neck() -> None:
-    branch = _build_branch(pts_backbone=_ScalingBackbone())
-
-    groups = branch.build_optimizer_groups()
-
-    neck_count = sum(1 for _ in branch.pts_neck.parameters())
-    assert len(groups["pts_backbone_neck"]) == neck_count + 1
-    assert groups["pts_backbone_neck"][0] is branch.pts_backbone.scale
-
-
 @requires_cuda_spconv
 def test_forward_returns_one_stage_per_level_finest_first() -> None:
     device = torch.device("cuda")

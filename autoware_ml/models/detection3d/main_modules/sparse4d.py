@@ -124,7 +124,7 @@ class Sparse4DDetectionModel(ModuleBaseModel):
         Raises:
             ValueError: If the neck of the lidar branch and the head disagree on the levels.
         """
-        num_levels = self.lidar_network.num_levels
+        num_levels = self.lidar_network.pts_neck.num_levels
         if num_levels != len(self.bbox_head.level_grids):
             raise ValueError(
                 f"The lidar branch returns {num_levels} levels but the head samples "
@@ -132,18 +132,22 @@ class Sparse4DDetectionModel(ModuleBaseModel):
             )
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the pretrained encoder parameters apart from the newly initialized branch.
+        """Group the pretrained middle encoder parameters apart from the newly initialized ones.
 
         Returns:
-            The encoder groups of the lidar branch and ``det3d_branch``, the backbone, the neck
-            and the head.
+            The optimizer groups of the middle encoder and ``det3d_branch``, the trainable
+            parameters of the lidar backbone, the lidar neck and the head.
         """
-        groups = dict(self.lidar_network.build_optimizer_groups())
-        branch_params = groups.pop("pts_backbone_neck")
-        head_params = [
-            parameter for parameter in self.bbox_head.parameters() if parameter.requires_grad
+        groups = dict(self.lidar_network.pts_middle_encoder.build_optimizer_groups())
+        lidar_network = self.lidar_network
+        fresh_modules = [lidar_network.pts_backbone, lidar_network.pts_neck, self.bbox_head]
+        groups["det3d_branch"] = [
+            parameter
+            for module in fresh_modules
+            if module is not None
+            for parameter in module.parameters()
+            if parameter.requires_grad
         ]
-        groups["det3d_branch"] = [*branch_params, *head_params]
         return groups
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:

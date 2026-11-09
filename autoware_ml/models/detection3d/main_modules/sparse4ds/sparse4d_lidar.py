@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-
 from jaxtyping import Float32, Int
 import torch
 import torch.nn as nn
@@ -46,41 +44,16 @@ class Sparse4DLidar(nn.Module):
         Args:
             pts_voxel_encoder: Lidar voxel encoder describing every voxel with one feature vector.
             pts_middle_encoder: Sparse middle encoder encoding the voxel features and their
-                coordinates into a hierarchy of stages, grouping its parameters with
-                ``build_optimizer_groups``.
+                coordinates into a hierarchy of stages.
             pts_backbone: Optional sparse backbone refining the encoder stages before the neck,
                 the stages go straight to the neck without one.
-            pts_neck: Neck turning the stages into the ``num_levels`` levels the head samples.
+            pts_neck: Neck turning the stages into the levels the head samples.
         """
         super().__init__()
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
         self.pts_backbone = pts_backbone
         self.pts_neck = pts_neck
-
-    @property
-    def num_levels(self) -> int:
-        """Return the number of levels the branch returns, which the head samples."""
-        return self.pts_neck.num_levels
-
-    def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
-        """Group the middle encoder parameters apart from the newly initialized backbone and neck.
-
-        Returns:
-            The optimizer groups of the middle encoder and ``pts_backbone_neck``, the trainable
-            parameters of the backbone and the neck.
-        """
-        groups = dict(self.pts_middle_encoder.build_optimizer_groups())
-        refining = (
-            [self.pts_neck] if self.pts_backbone is None else [self.pts_backbone, self.pts_neck]
-        )
-        groups["pts_backbone_neck"] = [
-            parameter
-            for module in refining
-            for parameter in module.parameters()
-            if parameter.requires_grad
-        ]
-        return groups
 
     def forward(
         self,
