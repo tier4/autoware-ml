@@ -111,6 +111,22 @@ class FrameMetaBatch(NamedTuple):
             lanelet_map_paths=[frame_meta.lanelet_map_path for frame_meta in frame_meta_samples],
         )
 
+    def sample(self, index: int) -> FrameMetaSample:
+        """Read the metadata of one frame of the batch back out.
+
+        Args:
+            index: Position of the frame in the batch.
+
+        Returns:
+            The frame's metadata, the inverse of :meth:`collate_gt_samples` for that frame.
+        """
+        return FrameMetaSample(
+            ego2global=self.ego2globals[index],
+            scene_token=self.scene_tokens[index],
+            timestamp=float(self.timestamps[index]),
+            lanelet_map_path=self.lanelet_map_paths[index],
+        )
+
     def to_device(self, device: torch.device) -> FrameMetaBatch:
         """Move the transforms and the timestamps to ``device``.
 

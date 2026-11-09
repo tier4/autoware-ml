@@ -22,6 +22,11 @@ from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.box_counts import BoxCounts
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    prediction,
+)
 
 _CLASS_NAMES = ("car", "pedestrian")
 
@@ -46,23 +51,23 @@ class TestBoxCounts(unittest.TestCase):
     def _update(self, suite: Detection3DMetricSuite) -> None:
         """Accumulate one frame: 3 GT (one below min_num_points) and 3 predictions."""
         suite.update(
-            {
-                "predictions": [
-                    {
-                        "bboxes_3d": torch.tensor(
-                            [_box(10.0), _box(20.0), _box(60.0)], dtype=torch.float32
+            detection_eval_output(
+                [
+                    detection_frame(
+                        predictions=prediction(
+                            torch.tensor([_box(10.0), _box(20.0), _box(60.0)], dtype=torch.float32),
+                            torch.tensor([0.9, 0.8, 0.7], dtype=torch.float32),
+                            torch.tensor([0, 1, 0], dtype=torch.long),
                         ),
-                        "scores_3d": torch.tensor([0.9, 0.8, 0.7], dtype=torch.float32),
-                        "labels_3d": torch.tensor([0, 1, 0], dtype=torch.long),
-                    }
-                ],
-                "gt_boxes": [
-                    torch.tensor([_box(10.0), _box(30.0), _box(70.0)], dtype=torch.float32)
-                ],
-                "gt_labels": [torch.tensor([0, 1, 0], dtype=torch.long)],
-                # The pedestrian at 30m has too few points and must not be counted
-                "gt_num_points": [torch.tensor([5, 1, 4], dtype=torch.long)],
-            }
+                        gt_boxes=torch.tensor(
+                            [_box(10.0), _box(30.0), _box(70.0)], dtype=torch.float32
+                        ),
+                        gt_labels=torch.tensor([0, 1, 0], dtype=torch.long),
+                        # The pedestrian at 30m has too few points and must not be counted
+                        gt_num_points=torch.tensor([5, 1, 4], dtype=torch.long),
+                    )
+                ]
+            )
         )
 
     def test_counts_exclude_gt_below_min_num_points(self) -> None:

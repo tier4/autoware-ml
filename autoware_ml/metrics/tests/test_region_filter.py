@@ -28,6 +28,17 @@ from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCl
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.metrics.tests.conftest import STUB_MAP_PATH, serve_lanelet_map
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.metrics.eval_output import Detection3DEvalFrame, Segmentation3DEvalFrame
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    empty_prediction,
+    frame_meta,
+    prediction,
+    segmentation_eval_output,
+    segmentation_frame,
+)
 
 # Ego body in vehicle description terms, measured from the rear axle: 2.0 m wide,
 # 3.79 m ahead of the reference point and 1.1 m behind it.
@@ -306,17 +317,16 @@ def test_confusion_suite_region_filter_buckets() -> None:
         ranges=(),
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "pred": torch.tensor([0, 1]),
-                    "target": torch.tensor([0, 0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": STUB_MAP_PATH,
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    pred=torch.tensor([0, 1]),
+                    target=torch.tensor([0, 0]),
+                    coord=torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
+                    meta=frame_meta(STUB_MAP_PATH),
+                )
             ]
-        }
+        )
     )
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="acc")) == pytest.approx(0.5)
@@ -327,6 +337,49 @@ def test_confusion_suite_region_filter_buckets() -> None:
 
 def _box(x: float) -> list[float]:
     return [x, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]
+
+
+def _car_at(x: float) -> Detection3DSamplePredictions:
+    """One confident car prediction at distance ``x``."""
+    return prediction(torch.tensor([_box(x)]), torch.tensor([0.9]), torch.tensor([0]))
+
+
+def _mapped_and_unmapped_points() -> list[Segmentation3DEvalFrame]:
+    """Two one-point frames on the road, the second in a scene without a lanelet map."""
+    return [
+        segmentation_frame(
+            pred=torch.tensor([0]),
+            target=torch.tensor([0]),
+            coord=torch.tensor([[10.0, 0.0, 0.0]]),
+            scores=torch.tensor([[1.0, 0.0]]),
+            meta=frame_meta(STUB_MAP_PATH),
+        ),
+        segmentation_frame(
+            pred=torch.tensor([1]),
+            target=torch.tensor([0]),
+            coord=torch.tensor([[10.0, 0.0, 0.0]]),
+            scores=torch.tensor([[0.0, 1.0]]),
+            meta=frame_meta(None),
+        ),
+    ]
+
+
+def _mapped_and_unmapped_cars() -> list[Detection3DEvalFrame]:
+    """Two frames with one car ground truth each, the second in a scene without a map."""
+    return [
+        detection_frame(
+            predictions=_car_at(10.0),
+            gt_boxes=torch.tensor([_box(10.0)]),
+            gt_labels=torch.tensor([0]),
+            meta=frame_meta(STUB_MAP_PATH),
+        ),
+        detection_frame(
+            predictions=empty_prediction(),
+            gt_boxes=torch.tensor([_box(10.0)]),
+            gt_labels=torch.tensor([0]),
+            meta=frame_meta(None),
+        ),
+    ]
 
 
 def test_detection3d_suite_region_filter_restricts_gt() -> None:
@@ -343,19 +396,16 @@ def test_detection3d_suite_region_filter_restricts_gt() -> None:
     )
     gt = torch.tensor([_box(10.0), _box(100.0)])
     suite.update(
-        {
-            "predictions": [
-                {
-                    "bboxes_3d": torch.tensor([_box(10.0)]),
-                    "scores_3d": torch.tensor([0.9]),
-                    "labels_3d": torch.tensor([0]),
-                }
-            ],
-            "gt_boxes": [gt],
-            "gt_labels": [torch.tensor([0, 0])],
-            "ego2global": [np.eye(4)],
-            "lanelet_map_path": [STUB_MAP_PATH],
-        }
+        detection_eval_output(
+            [
+                detection_frame(
+                    predictions=_car_at(10.0),
+                    gt_boxes=gt,
+                    gt_labels=torch.tensor([0, 0]),
+                    meta=frame_meta(STUB_MAP_PATH),
+                )
+            ]
+        )
     )
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="gt_count_car")) == pytest.approx(2.0)
@@ -424,24 +474,22 @@ def test_confusion_suite_excludes_scene_without_lanelet_map() -> None:
         ranges=(),
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "pred": torch.tensor([0, 1]),
-                    "target": torch.tensor([0, 0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": STUB_MAP_PATH,
-                },
-                {
-                    "pred": torch.tensor([1]),
-                    "target": torch.tensor([0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": None,
-                },
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    pred=torch.tensor([0, 1]),
+                    target=torch.tensor([0, 0]),
+                    coord=torch.tensor([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]]),
+                    meta=frame_meta(STUB_MAP_PATH),
+                ),
+                segmentation_frame(
+                    pred=torch.tensor([1]),
+                    target=torch.tensor([0]),
+                    coord=torch.tensor([[10.0, 0.0, 0.0]]),
+                    meta=frame_meta(None),
+                ),
             ]
-        }
+        )
     )
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="acc")) == pytest.approx(
@@ -463,26 +511,7 @@ def test_confusion_suite_frame_count_follows_filter_coverage() -> None:
         num_classes=2,
         ranges=(),
     )
-    suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "pred": torch.tensor([0]),
-                    "target": torch.tensor([0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": STUB_MAP_PATH,
-                },
-                {
-                    "pred": torch.tensor([1]),
-                    "target": torch.tensor([0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": None,
-                },
-            ]
-        }
-    )
+    suite.update(segmentation_eval_output(_mapped_and_unmapped_points()))
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="num_frames")) == 2.0
     assert report.metric_value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
@@ -497,28 +526,7 @@ def test_point_cloud_suite_frame_count_follows_filter_coverage() -> None:
         num_classes=2,
         ranges=(),
     )
-    suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "pred": torch.tensor([0]),
-                    "target": torch.tensor([0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "scores": torch.tensor([[1.0, 0.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": STUB_MAP_PATH,
-                },
-                {
-                    "pred": torch.tensor([1]),
-                    "target": torch.tensor([0]),
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "scores": torch.tensor([[0.0, 1.0]]),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": None,
-                },
-            ]
-        }
-    )
+    suite.update(segmentation_eval_output(_mapped_and_unmapped_points()))
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="num_frames")) == 2.0
     assert report.metric_value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
@@ -537,26 +545,7 @@ def test_detection3d_suite_frame_count_follows_filter_coverage() -> None:
         class_names=("car",),
         ranges=(),
     )
-    suite.update(
-        {
-            "predictions": [
-                {
-                    "bboxes_3d": torch.tensor([_box(10.0)]),
-                    "scores_3d": torch.tensor([0.9]),
-                    "labels_3d": torch.tensor([0]),
-                },
-                {
-                    "bboxes_3d": torch.zeros((0, 9)),
-                    "scores_3d": torch.zeros((0,)),
-                    "labels_3d": torch.zeros((0,), dtype=torch.long),
-                },
-            ],
-            "gt_boxes": [torch.tensor([_box(10.0)]), torch.tensor([_box(10.0)])],
-            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
-            "ego2global": [np.eye(4), np.eye(4)],
-            "lanelet_map_path": [STUB_MAP_PATH, None],
-        }
-    )
+    suite.update(detection_eval_output(_mapped_and_unmapped_cars()))
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="num_frames")) == 2.0
     assert report.metric_value(MetricKey(name="num_frames", filter_name="region_road")) == 1.0
@@ -573,26 +562,7 @@ def test_detection3d_suite_excludes_scene_without_lanelet_map() -> None:
         class_names=("car",),
         ranges=(),
     )
-    suite.update(
-        {
-            "predictions": [
-                {
-                    "bboxes_3d": torch.tensor([_box(10.0)]),
-                    "scores_3d": torch.tensor([0.9]),
-                    "labels_3d": torch.tensor([0]),
-                },
-                {
-                    "bboxes_3d": torch.zeros((0, 9)),
-                    "scores_3d": torch.zeros((0,)),
-                    "labels_3d": torch.zeros((0,), dtype=torch.long),
-                },
-            ],
-            "gt_boxes": [torch.tensor([_box(10.0)]), torch.tensor([_box(10.0)])],
-            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
-            "ego2global": [np.eye(4), np.eye(4)],
-            "lanelet_map_path": [STUB_MAP_PATH, None],
-        }
-    )
+    suite.update(detection_eval_output(_mapped_and_unmapped_cars()))
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="gt_count_car")) == pytest.approx(2.0)
     assert report.metric_value(
@@ -616,26 +586,24 @@ def test_point_cloud_suite_excludes_scene_without_lanelet_map() -> None:
         ranges=(),
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "coord": torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]),
-                    "pred": torch.tensor([0, 0]),
-                    "target": torch.tensor([0, 0]),
-                    "scores": torch.full((2, 2), 0.5),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": STUB_MAP_PATH,
-                },
-                {
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "pred": torch.tensor([1]),
-                    "target": torch.tensor([0]),
-                    "scores": torch.full((1, 2), 0.5),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": None,
-                },
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    coord=torch.tensor([[10.0, 0.0, 0.0], [20.0, 0.0, 0.0]]),
+                    pred=torch.tensor([0, 0]),
+                    target=torch.tensor([0, 0]),
+                    scores=torch.full((2, 2), 0.5),
+                    meta=frame_meta(STUB_MAP_PATH),
+                ),
+                segmentation_frame(
+                    coord=torch.tensor([[10.0, 0.0, 0.0]]),
+                    pred=torch.tensor([1]),
+                    target=torch.tensor([0]),
+                    scores=torch.full((1, 2), 0.5),
+                    meta=frame_meta(None),
+                ),
             ]
-        }
+        )
     )
     report = suite.result(EvalStage.TEST)
     assert report.metric_value(MetricKey(name="error_rate")) == pytest.approx(
@@ -661,20 +629,19 @@ def test_point_cloud_suite_region_filter_clips_boxes() -> None:
         ranges=(),
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "coord": torch.tensor([[10.0, 0.0, 0.0]]),
-                    "pred": torch.tensor([0]),
-                    "target": torch.tensor([0]),
-                    "scores": torch.full((1, 2), 0.5),
-                    "ego2global": np.eye(4),
-                    "lanelet_map_path": STUB_MAP_PATH,
-                    "gt_boxes": torch.tensor([_box(10.0), _box(100.0)]),
-                    "gt_box_labels": torch.tensor([0, 0]),
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    coord=torch.tensor([[10.0, 0.0, 0.0]]),
+                    pred=torch.tensor([0]),
+                    target=torch.tensor([0]),
+                    scores=torch.full((1, 2), 0.5),
+                    meta=frame_meta(STUB_MAP_PATH),
+                    gt_boxes=torch.tensor([_box(10.0), _box(100.0)]),
+                    gt_box_labels=torch.tensor([0, 0]),
+                )
             ]
-        }
+        )
     )
     assert suite.state_for(None, region).frames[0].gt_boxes.shape[0] == 1
     assert suite.state_for(None).frames[0].gt_boxes.shape[0] == 2

@@ -26,6 +26,13 @@ from autoware_ml.metrics.tests.conftest import (
     serve_fake_map,
 )
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    empty_prediction,
+    frame_meta,
+    prediction,
+)
 
 MOTION_MODELS = {
     "car": "wheeled",
@@ -75,22 +82,25 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
     )
     gt_labels = torch.tensor([0, 8], dtype=torch.long)  # car, barrier
     # Preds: match both GT + a phantom barrier in the path (critical FP).
-    preds = {
-        "bboxes_3d": torch.tensor(
+    preds = prediction(
+        torch.tensor(
             [collision_box(25.0, 0.0), collision_box(30.0, 0.0), collision_box(18.0, 0.0)],
             dtype=torch.float32,
         ),
-        "scores_3d": torch.tensor([0.9, 0.9, 0.9], dtype=torch.float32),
-        "labels_3d": torch.tensor([0, 8, 8], dtype=torch.long),  # car, barrier, phantom barrier
-    }
+        torch.tensor([0.9, 0.9, 0.9], dtype=torch.float32),
+        torch.tensor([0, 8, 8], dtype=torch.long),  # car, barrier, phantom barrier
+    )
     suite.update(
-        {
-            "predictions": [preds],
-            "gt_boxes": [gt_boxes],
-            "gt_labels": [gt_labels],
-            "ego2global": [np.eye(4)],
-            "lanelet_map_path": [STUB_MAP_PATH],
-        }
+        detection_eval_output(
+            [
+                detection_frame(
+                    predictions=preds,
+                    gt_boxes=gt_boxes,
+                    gt_labels=gt_labels,
+                    meta=frame_meta(STUB_MAP_PATH),
+                )
+            ]
+        )
     )
 
     state = suite.state_for(None)
@@ -131,20 +141,24 @@ def test_a_padding_frame_takes_no_part_in_the_metrics() -> None:
         ),
     )
     gt_boxes = torch.tensor([collision_box(25.0, 0.0)], dtype=torch.float32)
-    preds = {
-        "bboxes_3d": gt_boxes.clone(),
-        "scores_3d": torch.tensor([0.9], dtype=torch.float32),
-        "labels_3d": torch.tensor([0], dtype=torch.long),
-    }
+    preds = prediction(
+        gt_boxes.clone(),
+        torch.tensor([0.9], dtype=torch.float32),
+        torch.tensor([0], dtype=torch.long),
+    )
     suite.update(
-        {
-            "predictions": [preds, preds],
-            "gt_boxes": [gt_boxes, gt_boxes],
-            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
-            "ego2global": [np.eye(4), np.eye(4)],
-            "lanelet_map_path": [STUB_MAP_PATH, STUB_MAP_PATH],
-            "padding_mask": [False, True],
-        }
+        detection_eval_output(
+            [
+                detection_frame(
+                    predictions=preds,
+                    gt_boxes=gt_boxes,
+                    gt_labels=torch.tensor([0]),
+                    is_padding=is_padding,
+                    meta=frame_meta(STUB_MAP_PATH),
+                )
+                for is_padding in (False, True)
+            ]
+        )
     )
 
     assert len(suite.gt_boxes) == 2
@@ -153,9 +167,9 @@ def test_a_padding_frame_takes_no_part_in_the_metrics() -> None:
     assert int(suite.ttc_frames_covered) == 1
 
 
-def test_collision_provider_declares_context_keys() -> None:
-    # The provider's frame context is part of the fail-loud required-keys chain,
-    # exactly like the region filters' keys.
+def test_collision_provider_requires_the_frame_meta() -> None:
+    # The provider's frame context is part of the fail-loud requirements, exactly
+    # like the region filters' metadata.
     suite = Detection3DMetricSuite(
         components=[CriticalFPFN(confidences=(0.5,))],
         class_names=CLASS_NAMES,
@@ -167,8 +181,8 @@ def test_collision_provider_declares_context_keys() -> None:
             params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         ),
     )
-    keys = suite.required_keys()
-    assert "ego2global" in keys and "lanelet_map_path" in keys
+    assert suite.requirements().frame_meta is True
+    assert suite.requirements().detection3d is True
 
 
 def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
@@ -184,27 +198,29 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
         max_speed_mps=10.0,
     )
     # The floor is CriticalFPFN's lowest confidence, 0.5: a score on the floor is still read.
-    eval_out = {
-        "predictions": [
-            {
-                "bboxes_3d": torch.tensor(
-                    [
-                        collision_box(10.0, 0.0),
-                        collision_box(12.0, 0.0),
-                        collision_box(14.0, 0.0),
-                        collision_box(16.0, 0.0),
-                    ]
+    eval_out = detection_eval_output(
+        [
+            detection_frame(
+                predictions=prediction(
+                    torch.tensor(
+                        [
+                            collision_box(10.0, 0.0),
+                            collision_box(12.0, 0.0),
+                            collision_box(14.0, 0.0),
+                            collision_box(16.0, 0.0),
+                        ]
+                    ),
+                    torch.tensor([0.9, 0.5, 0.49, 0.1]),
+                    torch.tensor([0, 0, 0, 0]),
                 ),
-                "scores_3d": torch.tensor([0.9, 0.5, 0.49, 0.1]),
-                "labels_3d": torch.tensor([0, 0, 0, 0]),
-            }
-        ],
-        # The on-floor prediction matches a ground truth so it is read without being a critical FP.
-        "gt_boxes": [torch.tensor([collision_box(10.0, 0.0), collision_box(12.0, 0.0)])],
-        "gt_labels": [torch.tensor([0, 0])],
-        "ego2global": [np.eye(4)],
-        "lanelet_map_path": [STUB_MAP_PATH],
-    }
+                # The on-floor prediction matches a ground truth so it is read without being a
+                # critical FP.
+                gt_boxes=torch.tensor([collision_box(10.0, 0.0), collision_box(12.0, 0.0)]),
+                gt_labels=torch.tensor([0, 0]),
+                meta=frame_meta(STUB_MAP_PATH),
+            )
+        ]
+    )
     suite = Detection3DMetricSuite(
         components=[CriticalFPFN(confidences=(0.5,))], class_names=CLASS_NAMES, collision=collision
     )
@@ -253,15 +269,13 @@ def test_min_num_points_without_counts_raises() -> None:
     )
     with pytest.raises(ValueError, match="gt_num_points"):
         suite.update(
-            {
-                "predictions": [
-                    {
-                        "bboxes_3d": torch.zeros((0, 9)),
-                        "scores_3d": torch.zeros(0),
-                        "labels_3d": torch.zeros(0, dtype=torch.long),
-                    }
-                ],
-                "gt_boxes": [torch.zeros((0, 9))],
-                "gt_labels": [torch.zeros(0, dtype=torch.long)],
-            }
+            detection_eval_output(
+                [
+                    detection_frame(
+                        predictions=empty_prediction(),
+                        gt_boxes=torch.zeros((0, 9)),
+                        gt_labels=torch.zeros(0, dtype=torch.long),
+                    )
+                ]
+            )
         )

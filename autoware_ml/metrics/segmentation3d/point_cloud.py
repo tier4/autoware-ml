@@ -20,14 +20,18 @@ Test only and single process, the cache is CPU held. Validation uses the confusi
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 
 from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.metrics.class_groups import fold_labels, fold_labels_tensor, resolve_class_groups
+from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
+
+if TYPE_CHECKING:
+    from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 
 
 def _reduce_scores(scores: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -95,7 +99,6 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
     """
 
     prefix = "seg3d_pt"
-    _required_keys = ("seg3d_frames",)
 
     _FRAME_FIELDS = (
         "coord",
@@ -213,22 +216,18 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             stage in component.stages for component in self._grouped_components
         )
 
-    def required_keys(self) -> tuple[str, ...]:
-        """``seg3d_frames`` plus any component-declared eval-output keys.
-
-        Filter context keys (ego pose, scene token) live *inside* each frame
-        entry, not at the eval-output top level, so they are validated per frame
-        in ``update`` instead. Component-level keys stay in the batch-0 check.
+    def requirements(self) -> MetricRequirements:
+        """The segmentation frames with their scores, plus what the config reads.
 
         Returns:
-            The required eval-output key names.
+            The requirements at this suite instance's stage.
         """
-        extra = tuple(
-            key
-            for component in (*self.active_components(), *self._active_grouped_components())
-            for key in component.required_eval_keys
+        return MetricRequirements(
+            segmentation3d=True,
+            scores=True,
+            frame_meta=self._filters_need_frame_meta(),
+            gt_boxes=self._needs_boxes(),
         )
-        return tuple(dict.fromkeys(type(self)._required_keys + extra))
 
     @staticmethod
     def _require_single_process() -> None:
@@ -265,35 +264,35 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             )
         return report
 
-    def update(self, eval_out: dict[str, Any]) -> None:
+    def update(self, eval_output: EvalOutput) -> None:
         """Append one batch of per-frame point data to the cache.
 
         The softmax is reduced on its own device, so only the per-point scalars cross to
         the CPU.
 
         Args:
-            eval_out: Flat eval-output dict with the per-frame ``seg3d_frames``.
+            eval_output: The typed eval output the model built for one batch.
         """
         self._require_single_process()
+        output = eval_output.segmentation3d
+        if output is None:
+            raise ValueError(
+                "The point cloud suite needs the segmentation3d frames, the eval output "
+                "carries none."
+            )
         active = self._stage_filter_keys()
         needs_boxes = self._needs_boxes()
-        for frame in eval_out["seg3d_frames"]:
-            missing = [key for key in ("coord", "pred", "target", "scores") if key not in frame]
-            if missing:
+        for frame in output.frames:
+            if frame.scores is None:
                 raise ValueError(
-                    f"seg3d_frames entries need {missing}, the model's build_eval_output "
-                    "must supply them."
+                    "The point cloud suite reads the per-class scores of every point, the "
+                    "model's build_eval_output must attach them to the segmentation frames."
                 )
-            coord = frame["coord"].detach().to(dtype=torch.float32)
-            pred = frame["pred"].detach().reshape(-1).to(dtype=torch.long)
-            target = frame["target"].detach().reshape(-1).to(dtype=torch.long)
-            scores = frame["scores"].detach().to(dtype=torch.float32)
+            coord = frame.coord.detach().to(dtype=torch.float32)
+            pred = frame.pred.detach().reshape(-1).to(dtype=torch.long)
+            target = frame.target.detach().reshape(-1).to(dtype=torch.long)
+            scores = frame.scores.detach().to(dtype=torch.float32)
             num_points = coord.shape[0]
-            if not (pred.shape[0] == target.shape[0] == scores.shape[0] == num_points):
-                raise ValueError(
-                    f"per-point arrays disagree: coord {num_points}, pred {pred.shape[0]}, "
-                    f"target {target.shape[0]}, scores {scores.shape[0]}."
-                )
             if num_points and scores.shape[1] != self.num_classes:
                 raise ValueError(
                     f"scores carry {scores.shape[1]} columns for {self.num_classes} "
@@ -329,13 +328,13 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 grouped_confidence, grouped_entropy = _reduce_scores(folded_scores, folded_pred)
                 self.grouped_confidence.append(grouped_confidence.cpu())
                 self.grouped_entropy.append(grouped_entropy.to(torch.float32).cpu())
-            boxes = frame.get("gt_boxes")
-            labels = frame.get("gt_box_labels")
+            boxes = frame.gt_boxes
+            labels = frame.gt_box_labels
             if needs_boxes and (boxes is None or labels is None):
                 raise ValueError(
-                    "a configured component reads detection ground truth, seg3d_frames "
-                    "entries must carry gt_boxes and gt_box_labels (empty tensors for "
-                    "a frame without objects)."
+                    "a configured component reads detection ground truth, the segmentation "
+                    "frames must carry gt_boxes and gt_box_labels (empty tensors for a frame "
+                    "without objects)."
                 )
             self.gt_boxes.append(
                 torch.zeros((0, 7), dtype=torch.float32)
@@ -350,7 +349,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             if self._component_filters and active:
                 # filters convert the coordinates to float64 themselves
                 point_masks, box_masks, available = self._filter_masks(
-                    frame, coord_cpu.numpy(), self.gt_boxes[-1].numpy(), active
+                    frame.frame_meta, coord_cpu.numpy(), self.gt_boxes[-1].numpy(), active
                 )
                 self.region_masks.append(point_masks)
                 self.box_region_masks.append(box_masks)
@@ -500,7 +499,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
 
     def _filter_masks(
         self,
-        frame: dict[str, Any],
+        frame_meta: FrameMetaSample | None,
         coord_np: np.ndarray,
         boxes_np: np.ndarray,
         active: Any,
@@ -512,7 +511,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         instead of leaking into it.
 
         Args:
-            frame: One ``seg3d_frames`` entry, the source of the filter context.
+            frame_meta: Metadata of the frame, the source of the filter context.
             coord_np: ``(N, 3+)`` point coordinates of the frame.
             boxes_np: ``(M, 7+)`` detection GT boxes of the frame.
             active: Cache keys of the filters this stage reads.
@@ -526,7 +525,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         available = []
         for index, metric_filter in enumerate(self._component_filters):
             context = (
-                self._frame_filter_context(index, metric_filter, frame)
+                self._frame_filter_context(index, metric_filter, frame_meta)
                 if metric_filter.cache_key in active
                 else None
             )

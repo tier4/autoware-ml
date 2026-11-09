@@ -27,6 +27,14 @@ from autoware_ml.metrics.segmentation3d.accuracy import Accuracy
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
+from autoware_ml.metrics.eval_output import EvalOutput
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    prediction,
+    segmentation_eval_output,
+    segmentation_frame,
+)
 from autoware_ml.utils.tests.distributed_fixtures import (
     GLOO_AVAILABLE,
     spawn_gloo_workers,
@@ -57,33 +65,32 @@ _WORLD_SIZES = [2, 8]
 _SEG3D_RANGES = (MetricRange("0-50m", 0.0, 50.0), MetricRange("50-90m", 50.0, 90.0))
 
 
-def _seg3d_shard(rank: int) -> dict[str, object]:
+def _seg3d_shard(rank: int) -> EvalOutput:
     """Deterministic per-rank points, two near (10 m) and one far (60 m)."""
-    return {
-        "seg3d_frames": [
-            {
-                "pred": torch.tensor([0, 1, rank % 2]),
-                "target": torch.tensor([0, 1, 0]),
-                "coord": torch.tensor([[10.0, 0.0, 0.0], [10.0, 0.0, 0.0], [60.0, 0.0, 0.0]]),
-            }
+    return segmentation_eval_output(
+        [
+            segmentation_frame(
+                pred=torch.tensor([0, 1, rank % 2]),
+                target=torch.tensor([0, 1, 0]),
+                coord=torch.tensor([[10.0, 0.0, 0.0], [10.0, 0.0, 0.0], [60.0, 0.0, 0.0]]),
+            )
         ]
-    }
+    )
 
 
-def _det3d_shard(rank: int) -> dict[str, object]:
+def _det3d_shard(rank: int) -> EvalOutput:
     """One frame per rank with a single matching prediction at x = rank."""
     boxes = torch.zeros((1, 7), dtype=torch.float32)
     boxes[0, 0] = float(rank)
-    prediction = {
-        "bboxes_3d": boxes.clone(),
-        "scores_3d": torch.tensor([0.9]),
-        "labels_3d": torch.tensor([0]),
-    }
-    return {
-        "predictions": [prediction],
-        "gt_boxes": [boxes.clone()],
-        "gt_labels": [torch.tensor([0])],
-    }
+    return detection_eval_output(
+        [
+            detection_frame(
+                predictions=prediction(boxes.clone(), torch.tensor([0.9]), torch.tensor([0])),
+                gt_boxes=boxes.clone(),
+                gt_labels=torch.tensor([0]),
+            )
+        ]
+    )
 
 
 def _assert_reports_equal(actual: MetricReport, expected: MetricReport) -> None:

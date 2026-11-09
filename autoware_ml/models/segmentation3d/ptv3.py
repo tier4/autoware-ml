@@ -52,6 +52,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.metrics.eval_output import EvalOutput
 
 
 class _PTv3Segmentation3DExportModule(PTv3EncoderExportBase):
@@ -190,9 +191,7 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             self.seg3d_head, outputs.segmentation3d().logits, batch_inputs
         )
 
-    def build_eval_output(
-        self, batch: ModelBatchInputs, outputs: ModelOutputs
-    ) -> dict[str, torch.Tensor]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Gather the voxel predictions of the current frame points for the metrics.
 
         Args:
@@ -200,9 +199,11 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             outputs: Segmentation head outputs returned by :meth:`forward`.
 
         Returns:
-            The seg3d_frames eval output the segmentation suites consume.
+            The eval output with the segmentation frames the suites consume.
         """
-        return segmentation3d_eval_output(outputs.segmentation3d().logits, batch)
+        return EvalOutput(
+            segmentation3d=segmentation3d_eval_output(outputs.segmentation3d().logits, batch)
+        )
 
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs
