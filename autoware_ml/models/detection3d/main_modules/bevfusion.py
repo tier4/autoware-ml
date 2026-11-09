@@ -575,6 +575,11 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     args=(voxels, coors, num_points_per_voxel),
                     input_names=["voxels", "coors", "num_points_per_voxel"],
                     output_names=["bbox_pred", "score", "label_pred"],
+                    dynamic_axes={
+                        "voxels": {0: "voxels_num"},
+                        "coors": {0: "voxels_num"},
+                        "num_points_per_voxel": {0: "voxels_num"},
+                    },
                 )
             }
 
@@ -614,6 +619,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                 args=(imgs_uint8,),
                 input_names=["imgs"],
                 output_names=["image_feats"],
+                dynamic_axes={"imgs": {0: "num_imgs"}},
             ),
             "bevfusion_camera_lidar": ExportSpec(
                 module=_BEVFusionExportWrapper(export_model),
@@ -640,6 +646,17 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     "indices",
                 ],
                 output_names=["bbox_pred", "score", "label_pred"],
+                dynamic_axes={
+                    "voxels": {0: "voxels_num"},
+                    "coors": {0: "voxels_num"},
+                    "num_points_per_voxel": {0: "voxels_num"},
+                    "image_feats": {0: "num_imgs"},
+                    "depth_maps": {0: "num_imgs"},
+                    "geom_feats": {0: "num_kept"},
+                    "kept": {0: "num_frustum_points"},
+                    "ranks": {0: "num_kept"},
+                    "indices": {0: "num_kept"},
+                },
             ),
         }
 

@@ -34,9 +34,7 @@ callbacks:
 deploy:
   onnx:
     modules:
-      end_to_end:
-        dynamic_shapes:
-          input: { 2: height, 3: width }
+      end_to_end: {}
 
 model:
   _target_: autoware_ml.models.calibration_status.calibration_status.CalibrationStatusClassifier

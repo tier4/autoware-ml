@@ -344,6 +344,7 @@ class FRNet(ModuleBaseModel):
             The export specification.
         """
         range_view_data = _range_view_data(batch_inputs)
+        output_names = self.get_export_output_names()
         return ExportSpec(
             module=_FRNetExportModule(self),
             args=(
@@ -353,5 +354,11 @@ class FRNet(ModuleBaseModel):
                 range_view_data.inverse_map,
             ),
             input_names=["points", "coors", "voxel_coors", "inverse_map"],
-            output_names=self.get_export_output_names(),
+            output_names=output_names,
+            # One row per point, but one per unique range-view cell for voxel_coors.
+            dynamic_axes={
+                **{name: {0: "num_points"} for name in ("points", "coors", "inverse_map")},
+                "voxel_coors": {0: "num_unique_coors"},
+                **{name: {0: "num_points"} for name in output_names},
+            },
         )

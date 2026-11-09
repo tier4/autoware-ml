@@ -40,11 +40,7 @@ deploy:
     opset_version: 17
     do_constant_folding: false
     modules:
-      end_to_end:
-        dynamic_axes:
-          voxels: { 0: num_voxels }
-          num_points: { 0: num_voxels }
-          coors: { 0: num_voxels }
+      end_to_end: {}
   tensorrt:
     enabled: false
 
