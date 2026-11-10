@@ -343,6 +343,47 @@ def test_serialized_attention_export_padding_matches_batched_branch() -> None:
     assert short_pad.max().item() < 2
 
 
+def test_serialized_attention_padding_is_shared_by_the_blocks_of_a_level() -> None:
+    """The padding depends on the offsets and the window only, so the point container keeps it."""
+
+    def make_attention(patch_size: int) -> SerializedAttention:
+        return SerializedAttention(
+            channels=32,
+            num_heads=4,
+            patch_size=patch_size,
+            qkv_bias=True,
+            qk_scale=None,
+            attn_drop=0.0,
+            proj_drop=0.0,
+            order_index=0,
+            enable_rpe=False,
+            enable_flash=True,
+            upcast_attention=False,
+            upcast_softmax=False,
+        )
+
+    # Two samples: six tokens, whose last window borrows tokens 2 and 3 of the previous one, and
+    # four tokens, exactly one window.
+    point = Point({"feat": torch.randn(10, 32), "offset": torch.tensor([6, 10], dtype=torch.long)})
+    pad, unpad, cu_seqlens = make_attention(4)._get_padding_and_inverse(point)
+    assert pad.tolist() == [0, 1, 2, 3, 4, 5, 2, 3, 6, 7, 8, 9]
+    assert unpad.tolist() == [0, 1, 2, 3, 4, 5, 8, 9, 10, 11]
+    assert cu_seqlens.tolist() == [0, 4, 8, 12]
+
+    # The next block of the level reads the stored result instead of building it again.
+    with patch(
+        "autoware_ml.models.segmentation3d.encoders.ptv3.build_patch_order",
+        side_effect=AssertionError("the padding was built a second time"),
+    ):
+        shared = make_attention(4)._get_padding_and_inverse(point)
+    assert shared[0] is pad and shared[1] is unpad and shared[2] is cu_seqlens
+
+    # Another window size is another padding.
+    wider_pad, _, wider_cu_seqlens = make_attention(8)._get_padding_and_inverse(point)
+    assert wider_pad.tolist() == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert wider_cu_seqlens.tolist() == [0, 6, 10]
+
+
 def test_point_sequential_skips_dense_module_on_empty_sparse_tensor() -> None:
     spconv = pytest.importorskip("spconv.pytorch")
     sparse_tensor = spconv.SparseConvTensor(
