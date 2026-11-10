@@ -14,9 +14,8 @@
 
 """Synthetic-inputs entrypoint for Autoware-ML PTv3 models.
 
-This script writes the export inputs of every module at set voxel counts per encoder stage, for
-latency benchmarks with trtexec. The voxels are as clustered as ``target_neighbors`` asks per
-stage, since the sparse convolutions cost more the more neighbors a voxel has.
+This script writes the export inputs of every module at set voxel counts per encoder stage.
+The voxels are as clustered as ``target_neighbors`` asks per stage.
 """
 
 from __future__ import annotations
@@ -86,12 +85,16 @@ def main(cfg: DictConfig) -> None:
         )
 
     grid_shape, _ = model.compute_export_geometry(torch.device("cpu"))
+    point_cloud_range = torch.tensor(model.point_cloud_range, dtype=torch.float32)
     spec = VoxelLayoutSpec(
-        list(cfg.voxel_counts), model.encoder.stride, grid_shape, list(cfg.target_neighbors)
+        voxel_counts=list(cfg.voxel_counts),
+        pooling_strides=model.encoder.stride,
+        grid_shape=grid_shape,
+        target_neighbors=list(cfg.target_neighbors),
+        center=-point_cloud_range[:3] / model.grid_size,
     )
     generator = torch.Generator().manual_seed(cfg.seed)
     coords = voxel_layout(spec, generator)
-    point_cloud_range = torch.tensor(model.point_cloud_range, dtype=torch.float32)
     xyz = point_cloud_range[:3] + (coords + 0.5) * torch.tensor(model.grid_size)
     intensity = torch.rand(len(coords), 1, generator=generator)
     if isinstance(model.voxel_encoder, MeanVoxelFeatureEncoder):

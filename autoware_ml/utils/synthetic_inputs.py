@@ -50,12 +50,14 @@ class VoxelLayoutSpec:
         pooling_strides: Pooling stride between consecutive stages.
         grid_shape: Finest grid size per axis.
         target_neighbors: Target mean of occupied cells around a voxel per stage, finest first.
+        center: Point the voxels cluster around, in finest grid cells.
     """
 
     voxel_counts: Sequence[int]
     pooling_strides: Sequence[int]
     grid_shape: Int64[torch.Tensor, "3"]
     target_neighbors: Sequence[float]
+    center: Float32[torch.Tensor, "3"]
 
     def __post_init__(self) -> None:
         """Refuse a spec whose stages do not line up.
@@ -115,17 +117,17 @@ def _best_children(
 def _fit_neighbors(
     cells: Cells,
     grid_shape: Int64[torch.Tensor, "3"],
+    center: Float32[torch.Tensor, "3"],
     scale: int,
     target_neighbors: float,
     generator: torch.Generator,
     keep: Callable[[Float32[torch.Tensor, " num_cells"]], Cells],
 ) -> Cells:
-    """Return the cells ``keep`` picks by distance to the grid floor center plus noise.
+    """Return the cells ``keep`` picks by distance to ``center`` plus noise.
 
     The noise weight is bisected until the picked cells have ``target_neighbors`` on average.
     """
-    center = torch.tensor([*(grid_shape[:2] / 2), 0.0]) / scale
-    distance = (cells + 0.5 - center).norm(dim=1)
+    distance = (cells + 0.5 - center / scale).norm(dim=1)
     noise = torch.rand(len(cells), generator=generator) * distance.max()
     distance[~(cells < _stage_shape(grid_shape, scale)).all(dim=1)] = math.inf
     low_weight, high_weight, tolerance = 0.0, 64.0, 1e-3
@@ -143,12 +145,12 @@ def voxel_layout(
 ) -> Int64[torch.Tensor, "num_voxels 3"]:
     """Pick voxels whose stages hold the voxel counts and neighbor targets of ``spec``.
 
-    Stage by stage, coarsest first, keeps the cells nearest the center of the grid floor, ranked
-    with noise whose weight is bisected until the stage's mean neighbors reach the target. Every
+    Stage by stage, coarsest first, keeps the cells nearest ``spec.center``, ranked with noise
+    whose weight is bisected until the stage's mean neighbors reach the target. Every
     stage's grid is the finest one divided by its scale, rounded up as the model pools it.
 
     Args:
-        spec: Voxel counts, pooling strides, grid and neighbor targets per stage.
+        spec: Voxel counts, pooling strides, grid, neighbor targets and center.
         generator: Source of the ranking noise.
 
     Returns:
@@ -166,6 +168,7 @@ def voxel_layout(
     layout = _fit_neighbors(
         cells,
         grid_shape,
+        spec.center,
         scale,
         target_neighbors[-1],
         generator,
@@ -184,6 +187,7 @@ def voxel_layout(
         layout = _fit_neighbors(
             cells,
             grid_shape,
+            spec.center,
             scale,
             target_neighbors[stage],
             generator,

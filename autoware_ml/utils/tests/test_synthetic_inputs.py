@@ -37,6 +37,7 @@ from autoware_ml.utils.synthetic_inputs import (
 )
 
 _NEIGHBORS = (8.24, 9.15, 9.44, 9.93, 10.60)
+_CENTER = torch.zeros(3)
 
 
 class TestVoxelLayoutSpec(unittest.TestCase):
@@ -49,7 +50,13 @@ class TestVoxelLayoutSpec(unittest.TestCase):
         Check: a ValueError naming the counts, targets and strides.
         """
         with self.assertRaisesRegex(ValueError, "2 voxel counts and 2 neighbor targets for 2"):
-            VoxelLayoutSpec([320, 48], [2, 2], torch.tensor([8, 8, 5]), _NEIGHBORS[:2])
+            VoxelLayoutSpec(
+                voxel_counts=[320, 48],
+                pooling_strides=[2, 2],
+                grid_shape=torch.tensor([8, 8, 5]),
+                target_neighbors=_NEIGHBORS[:2],
+                center=_CENTER,
+            )
 
 
 class TestVoxelLayout(unittest.TestCase):
@@ -66,7 +73,16 @@ class TestVoxelLayout(unittest.TestCase):
         strides = [2, 2, 2, 2]
         grid_shape = torch.tensor([512, 512, 64])
         generator = torch.Generator().manual_seed(0)
-        grid = voxel_layout(VoxelLayoutSpec(counts, strides, grid_shape, _NEIGHBORS), generator)
+        grid = voxel_layout(
+            VoxelLayoutSpec(
+                voxel_counts=counts,
+                pooling_strides=strides,
+                grid_shape=grid_shape,
+                target_neighbors=_NEIGHBORS,
+                center=_CENTER,
+            ),
+            generator,
+        )
 
         point, _ = serialize_point_cloud_batch(
             {
@@ -101,7 +117,13 @@ class TestVoxelLayout(unittest.TestCase):
             with self.subTest(counts=counts, size=size):
                 with self.assertRaisesRegex(ValueError, "cannot pool"):
                     voxel_layout(
-                        VoxelLayoutSpec(counts, [2], torch.tensor([size] * 3), _NEIGHBORS[:2]),
+                        VoxelLayoutSpec(
+                            voxel_counts=counts,
+                            pooling_strides=[2],
+                            grid_shape=torch.tensor([size] * 3),
+                            target_neighbors=_NEIGHBORS[:2],
+                            center=_CENTER,
+                        ),
                         torch.Generator(),
                     )
 
@@ -113,7 +135,13 @@ class TestVoxelLayout(unittest.TestCase):
         Check: 320 distinct voxels whose largest coordinates are the grid's last cells.
         """
         grid_shape = torch.tensor([8, 8, 5])
-        spec = VoxelLayoutSpec([320, 48], [2], grid_shape, _NEIGHBORS[:2])
+        spec = VoxelLayoutSpec(
+            voxel_counts=[320, 48],
+            pooling_strides=[2],
+            grid_shape=grid_shape,
+            target_neighbors=_NEIGHBORS[:2],
+            center=_CENTER,
+        )
         grid = voxel_layout(spec, torch.Generator())
 
         self.assertEqual(len(torch.unique(grid, dim=0)), 320)
