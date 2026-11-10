@@ -31,6 +31,8 @@ The training path uses `flash-attn` for serialized attention. The export path
 automatically disables flash attention and falls back to the standard attention
 implementation so ONNX export remains supported.
 
+With `cosine_attention: true` the serialized attention is cosine attention: queries and keys are normalized per head, and a learned per-head scale of at most 100 multiplies their dot products, as in Swin Transformer V2. Every attention logit stays far inside the fp16 range, so the deployed fp16 engines run the encoder and the decoder without overflow. The export folds the scales into a constant. Pretrained encoder weights without the scales initialize a fine-tune, which starts every scale at 10.
+
 ## Summary
 
 | Property     | Value                                                                                             |

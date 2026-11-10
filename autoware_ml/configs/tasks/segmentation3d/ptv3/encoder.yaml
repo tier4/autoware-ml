@@ -19,3 +19,4 @@ enable_rpe: false
 enable_flash: true
 upcast_attention: false
 upcast_softmax: false
+cosine_attention: false

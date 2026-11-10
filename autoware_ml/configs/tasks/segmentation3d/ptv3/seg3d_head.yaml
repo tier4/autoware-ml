@@ -19,5 +19,6 @@ enable_rpe: ${model.encoder.enable_rpe}
 enable_flash: ${model.encoder.enable_flash}
 upcast_attention: ${model.encoder.upcast_attention}
 upcast_softmax: ${model.encoder.upcast_softmax}
+cosine_attention: ${model.encoder.cosine_attention}
 lovasz_weight: 1.0
 mixed_voxel_weight: 1.0
