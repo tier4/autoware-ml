@@ -303,16 +303,13 @@ class HungarianAssigner2D:
         assigned_labels = bbox_pred.new_full((num_queries,), -1, dtype=torch.long)
         if num_gts == 0 or num_queries == 0:
             return AssignResult2D(num_gts=num_gts, gt_inds=assigned_gt_inds, labels=assigned_labels)
-        # The classification cost treats -1 as the padding of a batched ground truth and gives it
-        # the highest cost, but this assigner drops no pair, so such a box would still be matched
-        # and its proposal would carry the background label. The 2D ground truth is not padded.
+        # ClassificationCost treats -1 as padding; this assigner drops no pair, so such a box
+        # would still be matched. The 2D ground truth is not padded.
         if bool((gt_labels < 0).any()):
             raise ValueError("Found negative gt_labels. The 2D ground truth is not padded.")
 
-        # The matching runs in float32, as the reference does under force_fp32. Under autocast
-        # the head's logits are bfloat16, whose sigmoid rounds every logit above about 6.2 to 1
-        # and gives all confident proposals one cost, far below their float32 costs; a bfloat16
-        # box is off by up to 1/256 of the image before it is scaled to pixels.
+        # Match in float32 like the reference (force_fp32): a bfloat16 sigmoid saturates above
+        # logit 6.2, and a bfloat16 box is off by up to 1/256 of the image.
         bbox_pred = bbox_pred.float()
         cls_pred = cls_pred.float()
         pred_centers2d = pred_centers2d.float()
@@ -320,8 +317,7 @@ class HungarianAssigner2D:
         gt_centers2d = gt_centers2d.float()
 
         factor = gt_bboxes.new_tensor([image_width, image_height, image_width, image_height])
-        # The classification cost is batched over padded ground truth; one image is a batch
-        # of one whose ground truth is all valid.
+        # ClassificationCost is batched; one image is a batch of one with all boxes valid.
         valid_masks = torch.ones((1, num_gts), dtype=torch.bool, device=gt_labels.device)
         cls_cost = self.cls_cost(cls_pred.unsqueeze(0), gt_labels.unsqueeze(0), valid_masks)[0]
         cost = (
