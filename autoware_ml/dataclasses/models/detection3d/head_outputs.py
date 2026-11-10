@@ -147,6 +147,28 @@ class TransFusionHeadOutputs(BaseModel):
         } | {name: getattr(separate, name) for name in type(separate).model_fields}
         return _pick_export_tensors(tensors, names)
 
+    @classmethod
+    def from_export_tensors(cls, tensors: Mapping[str, torch.Tensor]) -> TransFusionHeadOutputs:
+        """
+        Rebuild the outputs from the tensors of an exported head, the inverse of export_tensors.
+
+        Args:
+            tensors: The head outputs keyed by their export names; an absent optional output
+                stays unset.
+
+        Returns:
+            The head outputs.
+        """
+        separate_fields = TransFusionSeparateHeadOutputs.model_fields
+        return cls(
+            dense_heatmap=tensors["dense_heatmap"],
+            query_heatmap_score=tensors["query_heatmap_score"],
+            query_labels=tensors["query_labels"].long(),
+            separate_head_outputs=TransFusionSeparateHeadOutputs(
+                **{name: tensors.get(name) for name in separate_fields}
+            ),
+        )
+
 
 class CenterHeadOutputs(BaseModel):
     """
@@ -204,6 +226,19 @@ class CenterHeadOutputs(BaseModel):
         """
         tensors = {name: getattr(self, name) for name in type(self).model_fields}
         return _pick_export_tensors(tensors, names)
+
+    @classmethod
+    def from_export_tensors(cls, tensors: Mapping[str, torch.Tensor]) -> CenterHeadOutputs:
+        """
+        Rebuild the outputs from the tensors of an exported head, the inverse of export_tensors.
+
+        Args:
+            tensors: The head outputs keyed by their export names; an absent ``vel`` stays unset.
+
+        Returns:
+            The head outputs.
+        """
+        return cls(**{name: tensors.get(name) for name in cls.model_fields})
 
 
 class StreamPETRDenoisingOutputs(BaseModel):

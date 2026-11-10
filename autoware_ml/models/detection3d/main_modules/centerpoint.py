@@ -22,7 +22,7 @@ around the reusable PointPillars and CenterPoint detection components.
 from __future__ import annotations
 
 from types import MappingProxyType
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from jaxtyping import Float32
@@ -34,7 +34,10 @@ from torch.optim.lr_scheduler import LRScheduler
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    CenterHeadOutputs,
+    Detection3DHeadOutputs,
+)
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -226,6 +229,14 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             outputs=outputs.detection3d_head_outputs
         )
         return multi_task_predictions
+
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the detection outputs from the exported head's outputs."""
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=CenterHeadOutputs.from_export_tensors(tensors)
+            )
+        )
 
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
