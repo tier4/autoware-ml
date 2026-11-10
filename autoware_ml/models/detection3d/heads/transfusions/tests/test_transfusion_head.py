@@ -845,6 +845,51 @@ class TestTransFusionHead(unittest.TestCase):
         # The setUp head names no pooling class, so nothing is suppressed at all.
         self.assertTrue(torch.equal(untouched, heatmaps))
 
+    def test_suppress_dense_heatmaps_matches_the_slice_assignment_reference(self) -> None:
+        """Test that the scatter-free suppression matches the slice-assignment reference."""
+        transfusion_head = self._build_transfusion_head(
+            dense_heatmap_pooling_class_names=["pedestrian"]
+        )
+        height, width = self.feature_map_size
+        heatmaps = torch.rand(
+            (2, self.num_classes, height, width), dtype=torch.float32, device=self.device
+        )
+        padding = transfusion_head.nms_kernel_size // 2
+        pooling_ids = transfusion_head.dense_heatmap_pooling_class_ids
+        local_max = heatmaps.clone()
+        local_max[:, pooling_ids, padding:-padding, padding:-padding] = (
+            torch.nn.functional.max_pool2d(
+                heatmaps[:, pooling_ids], kernel_size=transfusion_head.nms_kernel_size, stride=1
+            )
+        )
+        reference = heatmaps * (local_max == heatmaps)
+
+        self.assertTrue(torch.equal(transfusion_head._suppress_dense_heatmaps(heatmaps), reference))
+
+    def test_suppress_dense_heatmaps_exports_without_scatter(self) -> None:
+        """Test that the suppression exports as constant gathers, not as a ScatterND."""
+        transfusion_head = self._build_transfusion_head(dense_heatmap_pooling_class_names=["car"])
+        height, width = self.feature_map_size
+        heatmaps = torch.rand((1, self.num_classes, height, width), device=self.device)
+
+        class _Suppress(torch.nn.Module):
+            def forward(self, maps: torch.Tensor) -> torch.Tensor:
+                return transfusion_head._suppress_dense_heatmaps(maps)
+
+        with tempfile.TemporaryDirectory() as export_dir:
+            output_path = Path(export_dir) / "suppress.onnx"
+            torch.onnx.export(
+                _Suppress().eval(),
+                (heatmaps,),
+                output_path,
+                input_names=["heatmaps"],
+                output_names=["suppressed"],
+                opset_version=17,
+                dynamo=False,
+            )
+            model = onnx.load(output_path)
+        self.assertFalse(any(node.op_type == "ScatterND" for node in model.graph.node))
+
     def test_get_targets_populates_labels_and_boxes(self) -> None:
         """Test that get_targets returns targets shaped for every decoder layer's queries."""
         targets = self._get_targets()
