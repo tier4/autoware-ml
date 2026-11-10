@@ -22,14 +22,13 @@ writes are the inputs of a trtexec latency benchmark.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import functools
 import itertools
 import logging
 import math
 from pathlib import Path
-from typing import Mapping, Sequence
 
 from jaxtyping import Float32, Int, Int64
 import torch
@@ -86,7 +85,7 @@ def mean_neighbors(coords: Int[torch.Tensor, "num_voxels 3"]) -> float:
         Mean number of occupied neighbor cells per voxel, between 0 and 26.
     """
     cells = coords.long() + 1
-    neighbor_cells = cells[:, None] + _NEIGHBOR_OFFSETS.to(cells.device)
+    neighbor_cells = cells.unsqueeze(1) + _NEIGHBOR_OFFSETS.to(cells.device)
     span = int(neighbor_cells.max()) + 1
     weights = torch.tensor([span * span, span, 1], device=cells.device)
     keys = (cells * weights).sum(dim=-1).sort().values
@@ -178,7 +177,7 @@ def voxel_layout(
         stride = pooling_strides[stage]
         depth -= stride.bit_length() - 1
         offsets = torch.tensor(list(itertools.product(range(stride), repeat=3)))
-        cells = (layout[:, None] * stride + offsets[None]).reshape(-1, 3)
+        cells = (layout.unsqueeze(1) * stride + offsets.unsqueeze(0)).reshape(-1, 3)
         inside = int((cells < pooled_sparse_shape(grid_shape, depth)).all(dim=1).sum())
         if not len(layout) <= voxel_counts[stage] <= inside:
             raise ValueError(
