@@ -60,6 +60,13 @@ def main(cfg: DictConfig) -> None:
 
     Args:
         cfg: Hydra configuration.
+
+    Raises:
+        NotImplementedError: If the configured model is not a PTv3 model.
+        ValueError: If the model inputs carry no voxels, or a stage of ``cfg.voxel_counts``
+            cannot pool to the next.
+        RuntimeError: If the voxelizer dropped voxels, or the stages do not hold
+            ``cfg.voxel_counts`` voxels.
     """
     validate_cuda_available()
     configure_torch_runtime()

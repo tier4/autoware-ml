@@ -72,7 +72,14 @@ class VoxelLayoutSpec:
 
 
 def mean_neighbors(coords: Int[torch.Tensor, "num_voxels 3"]) -> float:
-    """Return how many of the 26 cells around a voxel are occupied, on average."""
+    """Return how many of the 26 cells around a voxel are occupied, on average.
+
+    Args:
+        coords: ``[num_voxels, 3]`` integer grid coordinates of the occupied voxels.
+
+    Returns:
+        Mean number of occupied neighbor cells per voxel, between 0 and 26.
+    """
     cells = coords.long() + 1
     neighbor_cells = cells[:, None] + _NEIGHBOR_OFFSETS.to(cells.device)
     span = int(neighbor_cells.max()) + 1
@@ -190,6 +197,12 @@ def write_export_inputs(specs: Mapping[str, ExportSpec], out: Path) -> None:
 
     ``shapes.txt`` next to them lists ``name:AxB`` per input, the ``--shapes`` argument of
     trtexec.
+
+    Args:
+        specs: Export spec per module; every tensor of ``args`` is written as
+            ``<input name>.bin``.
+        out: Root directory, one subdirectory per module, created when missing. Files
+            already there are overwritten.
     """
     for module, spec in specs.items():
         module_dir = out / module
