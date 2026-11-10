@@ -174,6 +174,8 @@ An fp16 export only works if the inference engine honors its dtypes instead of
 reassigning them. In Autoware, that means `trt_precision: strongly-typed` on the
 node.
 
+**fp16_range_share**: before the export, the module runs once on its trace batch and every float tensor it reads or computes, a graph input or an intermediate such as an attention logit, has to stay within this share of the fp16 maximum (65504). An engine that runs a layer in fp16 overflows silently on a larger value, so the export is refused instead, and the error names the module path and the op of the largest offenders. Minus infinity masks and the float32 extremes of empty reductions are sentinels and left out, a positive infinity is an overflow. The check follows the engines, not `precision`: an fp32 ONNX still runs in fp16 when the engine is built with fp16 enabled. A module whose numerics need fp32 declares `required_onnx_precision = "fp32"` and is skipped, and a deployment with fp32 engines sets `fp16_range_share: null` for a module under `deploy.onnx.modules`.
+
 **dynamo**: `true` exports through `torch.export`, which gets one `Dim` per
 axis name the spec declares over the inputs. Set `dynamo: false` for models
 that export through the TorchScript exporter and its ONNX symbolic functions;

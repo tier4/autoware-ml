@@ -19,12 +19,15 @@ from __future__ import annotations
 import numpy as np
 import onnx
 import pytest
+import torch.nn as nn
 from omegaconf import OmegaConf
 from onnx import TensorProto, helper, numpy_helper
 
 from autoware_ml.utils.onnx_precision import (
+    DeclaredPrecision,
     OnnxPrecision,
     convert_onnx_precision,
+    declared_onnx_precisions,
     resolve_onnx_precision,
     should_convert_precision,
     validate_module_onnx_precision,
@@ -85,6 +88,28 @@ def test_validate_module_precision_requirement() -> None:
     validate_module_onnx_precision(module, OmegaConf.create({"precision": "fp16"}))
     with pytest.raises(ValueError, match="requires deploy.onnx.precision='fp16'"):
         validate_module_onnx_precision(module, OmegaConf.create({"precision": "fp32"}))
+
+
+class _Fp32Attention(nn.Module):
+    """A submodule that declares fp32 numerics."""
+
+    required_onnx_precision = "fp32"
+
+
+def test_declared_precisions_name_every_declaring_submodule() -> None:
+    """
+    Input: a module with a submodule declaring fp32 next to one declaring nothing, then the
+      declaration changed to a precision outside OnnxPrecision.
+    Expected: one fp32 entry naming the declaring class, then a ValueError.
+    """
+    module = nn.Sequential(nn.Linear(2, 2), _Fp32Attention())
+
+    assert declared_onnx_precisions(module) == [
+        DeclaredPrecision("_Fp32Attention", OnnxPrecision.FP32)
+    ]
+    module[1].required_onnx_precision = "int8"
+    with pytest.raises(ValueError, match="int8"):
+        declared_onnx_precisions(module)
 
 
 def test_fp16_conversion(tmp_path) -> None:
