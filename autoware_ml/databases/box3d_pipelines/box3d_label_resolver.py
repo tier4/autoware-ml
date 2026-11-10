@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Pipeline resolving raw 3D box label names to the fine vocabulary names."""
+
 from collections.abc import Sequence
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline

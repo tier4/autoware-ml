@@ -606,6 +606,7 @@ class BaseBBoxes3D(ABC):
                 representation of the 3D bounding boxes.
             bbox_labels (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 labels of the 3D bounding boxes.
+            bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
             bbox_num_lidar_points (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 number of lidar points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Dataset serving every task from the record table of a nuScenes database."""
+
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.lidar_frames import LidarFrameDataModel
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset

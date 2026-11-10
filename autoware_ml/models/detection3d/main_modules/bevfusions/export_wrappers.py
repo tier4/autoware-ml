@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Packing of the TransFusion head outputs into the runtime detection interface."""
+
 from jaxtyping import Float32
 import torch
 import torch.nn.functional as F

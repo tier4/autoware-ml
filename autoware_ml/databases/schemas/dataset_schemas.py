@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Record table schema and the dataset record of one of its rows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

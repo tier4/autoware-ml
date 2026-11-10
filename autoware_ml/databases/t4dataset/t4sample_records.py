@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Intermediate T4 sample record and its conversion to a dataset record."""
 
 from collections.abc import Sequence
 from pydantic import BaseModel, ConfigDict

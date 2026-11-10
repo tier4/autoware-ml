@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Enumerations of the sensor modalities and the lidar and camera channels."""
+
 from enum import Enum
 
 
