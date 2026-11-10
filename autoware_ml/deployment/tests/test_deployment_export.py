@@ -598,3 +598,43 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="precision='fp16'"):
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
+
+    def test_a_module_beyond_the_fp16_range_share_is_refused(self, tmp_path: Path) -> None:
+        """
+        Input: a module whose trace batch reaches more than a share of 1e-6 of the fp16 range.
+        Expected: the export is refused before any ONNX is written.
+        Check: a ValueError naming the module and the range, and no file.
+        """
+        exporter = _exporter(tmp_path, _deploy_cfg({"head": {"fp16_range_share": 1e-6}}))
+
+        with pytest.raises(ValueError, match="Module 'head' leaves 1e-06 of the fp16 range"):
+            exporter.export()
+        assert list((tmp_path / "exports").iterdir()) == []
+
+    def test_a_module_declaring_fp32_skips_the_fp16_range_check(self, tmp_path: Path) -> None:
+        """
+        Input: a module declaring ``required_onnx_precision = "fp32"`` and a tiny share.
+        Expected: the export runs without the check.
+        Check: the ONNX file is written.
+        """
+        model = _ExportModel()
+        model.head.required_onnx_precision = "fp32"
+        exporter = _exporter(
+            tmp_path, _deploy_cfg({"head": {"fp16_range_share": 1e-6}}), model=model
+        )
+
+        outputs = exporter.export()
+
+        assert [path.name for path in outputs.onnx_exported_paths] == ["head.onnx"]
+
+    def test_a_module_for_fp32_engines_skips_the_fp16_range_check(self, tmp_path: Path) -> None:
+        """
+        Input: the module of the previous test with fp16_range_share null.
+        Expected: the export runs without the check.
+        Check: the ONNX file is written.
+        """
+        exporter = _exporter(tmp_path, _deploy_cfg({"head": {"fp16_range_share": None}}))
+
+        outputs = exporter.export()
+
+        assert [path.name for path in outputs.onnx_exported_paths] == ["head.onnx"]
