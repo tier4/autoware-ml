@@ -12,15 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Helpers of the multi-rank tests: spawn gloo workers and open their process group."""
+"""Run a multi-rank test on CPU processes that share one gloo process group."""
 
 from __future__ import annotations
 
 import os
 import tempfile
-import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -28,58 +26,23 @@ import torch.multiprocessing as mp
 GLOO_AVAILABLE = dist.is_available() and dist.is_gloo_available()
 
 
-def spawn_gloo_workers(
-    worker: Callable[..., None], *args: object, world_size: int = 2, timeout: float = 120.0
+def _run_in_gloo_group(
+    rank: int, world_size: int, init_file: str, worker: Callable[..., None], args: tuple
 ) -> None:
-    """Run ``worker(rank, world_size, init_file, *args)`` on ``world_size`` CPU processes.
-
-    A collective such as ``all_reduce`` only runs inside a process group, so a test of one
-    needs more than one process. The processes are started with ``torch.multiprocessing.spawn``
-    and the worker joins the gloo group of the run through :func:`gloo_process_group`, which
-    reads ``init_file``. gloo runs on CPU, so the test needs no GPU; the semantics of the
-    collectives are those of every backend.
-
-    ``join=False`` hands back the context so the wait can carry a deadline.
-    ``ProcessContext.join(timeout)`` returns after one wait pass (it wakes whenever a worker
-    exits and returns ``False`` while the others still run), not after ``timeout`` seconds,
-    so the loop polls it until every worker is done or the deadline passes. A deadlocked
-    collective, for example one rank calling ``all_reduce`` once more than the others, never
-    exits on its own: at the deadline the workers are terminated and the caller fails with a
-    message instead of hanging the test runner.
-
-    An exception in a worker, a failed ``unittest.TestCase`` assertion included, is raised
-    again by ``join`` in the caller as ``ProcessRaisedException`` and the other workers are
-    terminated, so an assertion in a worker fails the caller.
-    """
-    with tempfile.TemporaryDirectory() as directory:
-        context = mp.spawn(
-            worker,
-            args=(world_size, os.path.join(directory, "store"), *args),
-            nprocs=world_size,
-            join=False,
-        )
-        # join(timeout) returns after one wait pass, so poll until the deadline.
-        deadline = time.monotonic() + timeout
-        while not context.join(timeout=5.0):
-            if time.monotonic() > deadline:
-                # Join the terminated workers before the store directory goes, so none is left
-                # a zombie or logs a store error over the message below.
-                for process in context.processes:
-                    process.terminate()
-                for process in context.processes:
-                    process.join(timeout=5.0)
-                raise AssertionError(f"distributed workers did not finish within {timeout}s")
-
-
-@contextmanager
-def gloo_process_group(rank: int, world_size: int, init_file: str) -> Iterator[None]:
-    """Join the gloo process group of a spawned worker for the duration of the block.
-
-    A worker that raises ends its process, which releases the group, so the block needs no
-    ``finally``.
-    """
     dist.init_process_group(
         "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world_size
     )
-    yield
+    worker(rank, world_size, *args)
     dist.destroy_process_group()
+
+
+def spawn_gloo_workers(worker: Callable[..., None], *args: object, world_size: int = 2) -> None:
+    """Run ``worker(rank, world_size, *args)`` on ``world_size`` CPU processes in one gloo group.
+
+    A collective such as ``all_reduce`` only runs inside a process group, so a test of one
+    needs more than one process; gloo runs on CPU, so the test needs no GPU. An exception in a
+    worker, a failed ``unittest.TestCase`` assertion included, is raised again in the caller.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        store = os.path.join(directory, "store")
+        mp.spawn(_run_in_gloo_group, args=(world_size, store, worker, args), nprocs=world_size)

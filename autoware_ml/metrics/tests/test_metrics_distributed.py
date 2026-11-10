@@ -28,7 +28,6 @@ from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionReca
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.utils.tests.distributed_fixtures import (
     GLOO_AVAILABLE,
-    gloo_process_group,
     spawn_gloo_workers,
 )
 
@@ -96,30 +95,28 @@ def _assert_reports_equal(actual: dict[str, float], expected: dict[str, float]) 
             assert abs(actual_value - expected_value) < 1e-6, (key, actual_value, expected_value)
 
 
-def _seg3d_worker(rank: int, world_size: int, init_file: str) -> None:
-    with gloo_process_group(rank, world_size, init_file):
-        metric = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES)
-        metric.update(_seg3d_shard(rank))
-        report = metric.result(EvalStage.TEST)  # all_reduce inside compute, then build report
+def _seg3d_worker(rank: int, world_size: int) -> None:
+    metric = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES)
+    metric.update(_seg3d_shard(rank))
+    report = metric.result(EvalStage.TEST)  # all_reduce inside compute, then build report
 
-        if rank == 0:
-            reference = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES, sync_on_compute=False)
-            for other in range(world_size):
-                reference.update(_seg3d_shard(other))
-            _assert_reports_equal(report, reference.result(EvalStage.TEST))
+    if rank == 0:
+        reference = _seg3d_suite(num_classes=2, ranges=_SEG3D_RANGES, sync_on_compute=False)
+        for other in range(world_size):
+            reference.update(_seg3d_shard(other))
+        _assert_reports_equal(report, reference.result(EvalStage.TEST))
 
 
-def _det3d_worker(rank: int, world_size: int, init_file: str) -> None:
-    with gloo_process_group(rank, world_size, init_file):
-        metric = _det3d_suite(thresholds=(0.5,))
-        metric.update(_det3d_shard(rank))
-        report = metric.result(EvalStage.VAL)  # list-state gather inside compute, then build report
+def _det3d_worker(rank: int, world_size: int) -> None:
+    metric = _det3d_suite(thresholds=(0.5,))
+    metric.update(_det3d_shard(rank))
+    report = metric.result(EvalStage.VAL)  # list-state gather inside compute, then build report
 
-        if rank == 0:
-            reference = _det3d_suite(thresholds=(0.5,), sync_on_compute=False)
-            for other in range(world_size):
-                reference.update(_det3d_shard(other))
-            _assert_reports_equal(report, reference.result(EvalStage.VAL))
+    if rank == 0:
+        reference = _det3d_suite(thresholds=(0.5,), sync_on_compute=False)
+        for other in range(world_size):
+            reference.update(_det3d_shard(other))
+        _assert_reports_equal(report, reference.result(EvalStage.VAL))
 
 
 @pytest.mark.parametrize("world_size", _WORLD_SIZES)

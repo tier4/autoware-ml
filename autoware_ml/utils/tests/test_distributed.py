@@ -26,23 +26,21 @@ import torch
 from autoware_ml.utils.distributed import reduce_mean_count
 from autoware_ml.utils.tests.distributed_fixtures import (
     GLOO_AVAILABLE,
-    gloo_process_group,
     spawn_gloo_workers,
 )
 
 
-def _reduce_mean_count_worker(rank: int, world_size: int, init_file: str) -> None:
+def _reduce_mean_count_worker(rank: int, world_size: int) -> None:
     # The worker runs in its own process, so it checks with a case of its own.
     case = unittest.TestCase()
-    with gloo_process_group(rank, world_size, init_file):
-        local_count = torch.tensor(float(2 if rank == 0 else 8))
-        case.assertAlmostEqual(reduce_mean_count(local_count).item(), 5.0)
-        case.assertAlmostEqual(local_count.item(), 2.0 if rank == 0 else 8.0)
-        # The floor applies to the sum over the ranks, not to the mean.
-        case.assertAlmostEqual(reduce_mean_count(torch.tensor(float(1 - rank))).item(), 0.5)
-        case.assertAlmostEqual(reduce_mean_count(torch.tensor(0.0)).item(), 0.5)
-        pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
-        torch.testing.assert_close(pair, torch.tensor([0.5, 4.0]))
+    local_count = torch.tensor(float(2 if rank == 0 else 8))
+    case.assertAlmostEqual(reduce_mean_count(local_count).item(), 5.0)
+    case.assertAlmostEqual(local_count.item(), 2.0 if rank == 0 else 8.0)
+    # The floor applies to the sum over the ranks, not to the mean.
+    case.assertAlmostEqual(reduce_mean_count(torch.tensor(float(1 - rank))).item(), 0.5)
+    case.assertAlmostEqual(reduce_mean_count(torch.tensor(0.0)).item(), 0.5)
+    pair = reduce_mean_count(torch.tensor([float(1 - rank), 4.0]))
+    torch.testing.assert_close(pair, torch.tensor([0.5, 4.0]))
 
 
 class TestReduceMeanCount(unittest.TestCase):

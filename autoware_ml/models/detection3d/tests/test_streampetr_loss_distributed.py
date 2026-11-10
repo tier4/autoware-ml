@@ -26,7 +26,6 @@ model. ``reduce_mean_count`` itself is tested in ``utils/tests``.
 
 from __future__ import annotations
 
-import copy
 import unittest
 
 import torch
@@ -47,7 +46,6 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
 )
 from autoware_ml.utils.tests.distributed_fixtures import (
     GLOO_AVAILABLE,
-    gloo_process_group,
     spawn_gloo_workers,
 )
 
@@ -133,68 +131,66 @@ def _matching_losses(
     return torch.stack([losses["loss_cls"].detach(), losses["loss_bbox"].detach()])
 
 
-def _sharding_invariance_worker(rank: int, world_size: int, init_file: str) -> None:
-    with gloo_process_group(rank, world_size, init_file):
-        head = _build_head().train()
-        frames = [_sample(2, seed=10), _sample(8, seed=20)]
+def _sharding_invariance_worker(rank: int, world_size: int) -> None:
+    head = _build_head().train()
+    frames = [_sample(2, seed=10), _sample(8, seed=20)]
 
-        sharded = _matching_losses(head, [frames[rank]])
-        gathered = [torch.zeros_like(sharded) for _ in range(world_size)]
-        dist.all_gather(gathered, sharded)
-        ddp_averaged = torch.stack(gathered).mean(dim=0)
+    sharded = _matching_losses(head, [frames[rank]])
+    gathered = [torch.zeros_like(sharded) for _ in range(world_size)]
+    dist.all_gather(gathered, sharded)
+    ddp_averaged = torch.stack(gathered).mean(dim=0)
 
-        # The whole batch on every rank: identical counts reduce to themselves.
-        combined = _matching_losses(head, frames)
+    # The whole batch on every rank: identical counts reduce to themselves.
+    combined = _matching_losses(head, frames)
 
-        torch.testing.assert_close(ddp_averaged, combined, rtol=1e-5, atol=1e-6)
+    torch.testing.assert_close(ddp_averaged, combined, rtol=1e-5, atol=1e-6)
 
 
-def _dn_mixed_gt_worker(rank: int, world_size: int, init_file: str) -> None:
-    with gloo_process_group(rank, world_size, init_file):
-        head = _build_head().train()
-        if rank == 0:
-            _, _, gt_boxes, gt_labels = _sample(4, seed=30)
-        else:
-            gt_boxes = torch.zeros(0, 9)
-            gt_labels = torch.zeros(0, dtype=torch.long)
+def _dn_mixed_gt_worker(rank: int, world_size: int) -> None:
+    head = _build_head().train()
+    if rank == 0:
+        _, _, gt_boxes, gt_labels = _sample(4, seed=30)
+    else:
+        gt_boxes = torch.zeros(0, 9)
+        gt_labels = torch.zeros(0, dtype=torch.long)
 
-        # The rank without boxes gets ``denoising=None``, as from the head, and must still
-        # reach the denoising count collective.
-        num_layers = head.num_decoder_layers
-        generator = torch.Generator().manual_seed(40)
-        all_cls_scores = torch.randn(num_layers, 1, _NUM_QUERIES, _NUM_CLASSES, generator=generator)
-        all_bbox_preds = torch.randn(num_layers, 1, _NUM_QUERIES, 10, generator=generator)
-        if rank == 0:
-            pad = 8
-            num_known = gt_labels.numel() * head.scalar
-            denoising = StreamPETRDenoisingOutputs(
-                cls_scores=torch.randn(num_layers, 1, pad, _NUM_CLASSES, generator=generator),
-                bbox_preds=torch.randn(num_layers, 1, pad, 10, generator=generator),
-                known_labels=gt_labels.repeat(head.scalar),
-                known_boxes=gt_boxes.repeat(head.scalar, 1),
-                batch_indices=torch.zeros(num_known, dtype=torch.long),
-                slot_indices=torch.arange(num_known),
-            )
-        else:
-            denoising = None
-        outputs = StreamPETRHeadOutputs(
-            all_cls_scores=all_cls_scores, all_bbox_preds=all_bbox_preds, denoising=denoising
+    # The rank without boxes gets ``denoising=None``, as from the head, and must still
+    # reach the denoising count collective.
+    num_layers = head.num_decoder_layers
+    generator = torch.Generator().manual_seed(40)
+    all_cls_scores = torch.randn(num_layers, 1, _NUM_QUERIES, _NUM_CLASSES, generator=generator)
+    all_bbox_preds = torch.randn(num_layers, 1, _NUM_QUERIES, 10, generator=generator)
+    if rank == 0:
+        pad = 8
+        num_known = gt_labels.numel() * head.scalar
+        denoising = StreamPETRDenoisingOutputs(
+            cls_scores=torch.randn(num_layers, 1, pad, _NUM_CLASSES, generator=generator),
+            bbox_preds=torch.randn(num_layers, 1, pad, 10, generator=generator),
+            known_labels=gt_labels.repeat(head.scalar),
+            known_boxes=gt_boxes.repeat(head.scalar, 1),
+            batch_indices=torch.zeros(num_known, dtype=torch.long),
+            slot_indices=torch.arange(num_known),
         )
+    else:
+        denoising = None
+    outputs = StreamPETRHeadOutputs(
+        all_cls_scores=all_cls_scores, all_bbox_preds=all_bbox_preds, denoising=denoising
+    )
 
-        losses = head.loss(
-            outputs, [gt_boxes], [gt_labels], padding_mask=torch.zeros(1, dtype=torch.bool)
-        )
+    losses = head.loss(
+        outputs, [gt_boxes], [gt_labels], padding_mask=torch.zeros(1, dtype=torch.bool)
+    )
 
-        # The worker runs in its own process, so it checks with a case of its own.
-        case = unittest.TestCase()
-        case.assertIn("dn_loss_cls", losses)
-        case.assertIn("dn_loss_bbox", losses)
-        if rank == 0:
-            case.assertGreater(losses["dn_loss_cls"].item(), 0.0)
-            case.assertGreater(losses["dn_loss_bbox"].item(), 0.0)
-        else:
-            case.assertEqual(losses["dn_loss_cls"].item(), 0.0)
-            case.assertEqual(losses["dn_loss_bbox"].item(), 0.0)
+    # The worker runs in its own process, so it checks with a case of its own.
+    case = unittest.TestCase()
+    case.assertIn("dn_loss_cls", losses)
+    case.assertIn("dn_loss_bbox", losses)
+    if rank == 0:
+        case.assertGreater(losses["dn_loss_cls"].item(), 0.0)
+        case.assertGreater(losses["dn_loss_bbox"].item(), 0.0)
+    else:
+        case.assertEqual(losses["dn_loss_cls"].item(), 0.0)
+        case.assertEqual(losses["dn_loss_bbox"].item(), 0.0)
 
 
 def _frame(
@@ -259,25 +255,34 @@ def _layer_loss(
     )["loss"]
 
 
-def _ddp_gradient_worker(
-    rank: int, world_size: int, init_file: str, box_counts: tuple[int, ...]
-) -> None:
-    head = _build_head().train()
-    frames = [_frame(count, seed=70 + 10 * index) for index, count in enumerate(box_counts)]
+def _frames(
+    box_counts: tuple[int, ...],
+) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    return [_frame(count, seed=70 + 10 * index) for index, count in enumerate(box_counts)]
+
+
+def _layer() -> torch.nn.Linear:
     torch.manual_seed(0)
-    layer = torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
-    whole_batch_layer = copy.deepcopy(layer)
-    # The reference runs before the process group exists, so its counts are floored as on one
-    # device.
-    _layer_loss(head, whole_batch_layer, frames).backward()
+    return torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
 
-    with gloo_process_group(rank, world_size, init_file):
-        # The wrapper must outlive the backward pass, which its hooks average over the ranks.
-        ddp_layer = DistributedDataParallel(layer)
-        _layer_loss(head, ddp_layer, [frames[rank]]).backward()
 
-        for sharded, whole in zip(layer.parameters(), whole_batch_layer.parameters()):
-            torch.testing.assert_close(sharded.grad, whole.grad, rtol=1e-5, atol=1e-7)
+def _whole_batch_gradients(box_counts: tuple[int, ...]) -> list[torch.Tensor]:
+    """The gradients of the loss of all the frames on one process, where no count is reduced."""
+    layer = _layer()
+    _layer_loss(_build_head().train(), layer, _frames(box_counts)).backward()
+    return [parameter.grad for parameter in layer.parameters()]
+
+
+def _ddp_gradient_worker(
+    rank: int, world_size: int, box_counts: tuple[int, ...], whole_gradients: list[torch.Tensor]
+) -> None:
+    layer = _layer()
+    # The wrapper must outlive the backward pass, which its hooks average over the ranks.
+    ddp_layer = DistributedDataParallel(layer)
+    _layer_loss(_build_head().train(), ddp_layer, [_frames(box_counts)[rank]]).backward()
+
+    for sharded, whole in zip(layer.parameters(), whole_gradients):
+        torch.testing.assert_close(sharded.grad, whole, rtol=1e-5, atol=1e-7)
 
 
 @unittest.skipUnless(GLOO_AVAILABLE, "gloo backend unavailable")
@@ -308,7 +313,12 @@ class TestStreamPETRLossDistributed(unittest.TestCase):
         """
         for box_counts in [(10, 30), (1, 0), (0, 0), (10, 30, 0, 1)]:
             with self.subTest(box_counts=box_counts):
-                spawn_gloo_workers(_ddp_gradient_worker, box_counts, world_size=len(box_counts))
+                spawn_gloo_workers(
+                    _ddp_gradient_worker,
+                    box_counts,
+                    _whole_batch_gradients(box_counts),
+                    world_size=len(box_counts),
+                )
 
 
 if __name__ == "__main__":
