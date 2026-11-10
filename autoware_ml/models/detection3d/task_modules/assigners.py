@@ -10,6 +10,7 @@ from typing import Sequence
 from dataclasses import dataclass
 
 from jaxtyping import Float32, Bool, Int32, Int64
+import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 
@@ -142,12 +143,14 @@ class HungarianAssigner3D:
         # (batch_size,) number of real gt boxes per sample, ignoring the padded columns.
         num_gts = valid_masks.sum(dim=1).to(torch.int32)
         batch_size, num_bboxes, _ = bboxes.shape
+        # The matching runs on the host, so the mask comes over once and serves both the early
+        # exit and the per-sample column selection below.
+        valid_masks_host = valid_masks.detach().cpu().numpy()
 
-        assigned_gt_inds = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
-        assigned_labels = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
-        max_num_gts = torch.max(num_gts)
-        if max_num_gts == 0 or num_bboxes == 0:
-            if max_num_gts == 0:
+        if not valid_masks_host.any() or num_bboxes == 0:
+            assigned_gt_inds = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
+            assigned_labels = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
+            if not valid_masks_host.any():
                 assigned_gt_inds[:] = 0
                 num_gts = torch.zeros(batch_size, device=bboxes.device, dtype=torch.int32)
 
@@ -170,39 +173,47 @@ class HungarianAssigner3D:
             torch.nan_to_num(cls_cost + reg_cost + iou_cost, nan=1e6, posinf=1e6, neginf=-1e6)
             .detach()
             .cpu()
+            .numpy()
         )
 
-        # linear_sum_assignment takes one cost matrix at a time, so loop over the batch.
-        batch_size, num_bboxes = bboxes.shape[0], bboxes.shape[1]
-        assigned_gt_inds = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
+        # linear_sum_assignment takes one cost matrix at a time, so loop over the batch. Only the
+        # columns of the real gt boxes take part: the padded columns all carry the maximum cost,
+        # so leaving them out matches the real columns exactly as before while the Hungarian
+        # problem shrinks from max_num_gt_bboxes columns to the few boxes of the sample, and no
+        # pair can point at padding, which the caller's `gt_inds[gt_inds > 0] - 1` would gather
+        # as a regression target.
+        matches = []
+        for current_batch, valid_columns in enumerate(map(np.flatnonzero, valid_masks_host)):
+            if valid_columns.size == 0:
+                continue
+            matched_rows, matched_columns = linear_sum_assignment(
+                cost[current_batch][:, valid_columns]
+            )
+            matches.append(
+                np.stack(
+                    [
+                        np.full_like(matched_rows, current_batch),
+                        matched_rows,
+                        valid_columns[matched_columns],
+                    ]
+                )
+            )
+        # The matched pairs of the whole batch go to the device in one copy and scatter at once.
+        matched_batches, matched_rows, matched_columns = (
+            torch.from_numpy(np.concatenate(matches, axis=1)).to(bboxes.device).unbind(0)
+        )
+        # Every proposal starts as a negative (0). Only matched ones carry a gt index.
+        assigned_gt_inds = bboxes.new_zeros((batch_size, num_bboxes), dtype=torch.long)
         assigned_labels = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
         max_overlaps = torch.zeros(
             (batch_size, num_bboxes), device=bboxes.device, dtype=bboxes.dtype
         )
-        for current_batch in range(batch_size):
-            current_cost = cost[current_batch]
-            matched_row_inds, matched_col_inds = linear_sum_assignment(current_cost)
-            matched_row_inds = torch.from_numpy(matched_row_inds).to(bboxes.device)
-            matched_col_inds = torch.from_numpy(matched_col_inds).to(bboxes.device)
-
-            # Hungarian matching always fills min(num_bboxes, max_num_gt_bboxes) pairs, so it
-            # matches the padded gt columns too even though their cost is the maximum. Drop those
-            # pairs, otherwise gt_inds would point at padding and the caller's
-            # `gt_inds[gt_inds > 0] - 1` would gather padded boxes as regression targets.
-            valid_pairs = valid_masks[current_batch, matched_col_inds]
-            matched_row_inds = matched_row_inds[valid_pairs]
-            matched_col_inds = matched_col_inds[valid_pairs]
-
-            # Every proposal starts as a negative (0). Only matched ones carry a gt index.
-            assigned_gt_inds[current_batch, :] = 0
-            assigned_gt_inds[current_batch, matched_row_inds] = matched_col_inds + 1
-            assigned_labels[current_batch, matched_row_inds] = gt_labels[
-                current_batch, matched_col_inds
-            ]
-            # iou is batched, so the sample axis has to be indexed too.
-            max_overlaps[current_batch, matched_row_inds] = iou[
-                current_batch, matched_row_inds, matched_col_inds
-            ]
+        assigned_gt_inds[matched_batches, matched_rows] = matched_columns + 1
+        assigned_labels[matched_batches, matched_rows] = gt_labels[matched_batches, matched_columns]
+        # iou is batched, so the sample axis has to be indexed too.
+        max_overlaps[matched_batches, matched_rows] = iou[
+            matched_batches, matched_rows, matched_columns
+        ]
 
         return AssignResult(
             num_gts=num_gts,
