@@ -11,14 +11,17 @@ segmentation head and is not part of the detection path.
 from __future__ import annotations
 
 from copy import deepcopy
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import torch
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
@@ -35,6 +38,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_encoder_export_spec,
     build_ptv3_export_context,
     build_ptv3_input_dynamic_axes,
+    pick_named_tensors,
     prepare_ptv3_export_inputs,
     stage_voxel_axis_name,
 )
@@ -345,21 +349,11 @@ def build_det3d_head_export_spec(
         bbox_head=bbox_head,
         output_names=output_names,
     ).eval()
-    skip_stage = context.stage_count - 2
-    skip_grid_coord = (
-        context.inputs.grid_coord
-        if skip_stage == 0
-        else context.inputs.pooling_metadata[skip_stage - 1].grid_coord
-    )
+    input_names = det3d_head_export_input_names(context.stage_count)
     return ExportSpec(
         module=module,
-        args=(
-            context.stage_feats[skip_stage],
-            context.stage_feats[context.stage_count - 1],
-            context.inputs.pooling_metadata[skip_stage].cluster,
-            skip_grid_coord,
-        ),
-        input_names=det3d_head_export_input_names(context.stage_count),
+        args=pick_named_tensors(context.named_tensors(), input_names),
+        input_names=input_names,
         output_names=list(output_names),
         dynamic_axes=det3d_head_export_dynamic_axes(context.stage_count),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
@@ -508,6 +502,14 @@ class PTv3Detection3DModel(PTv3BaseModel):
         """Return the ordered export output names."""
         return list(self.export_output_names)
 
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the detection outputs from the exported head's outputs."""
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                transfusion_head_outputs=TransFusionHeadOutputs.from_export_tensors(tensors)
+            )
+        )
+
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run PTv3 feature extraction followed by the configured detection head.
 
@@ -517,6 +519,8 @@ class PTv3Detection3DModel(PTv3BaseModel):
         Returns:
             The outputs of the task heads.
         """
+        if self.engines is not None:
+            return self.forward_engines(multi_task_batch_inputs)
         point = self.encode_batch(multi_task_batch_inputs)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(

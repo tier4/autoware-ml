@@ -10,6 +10,7 @@ from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
@@ -40,8 +41,10 @@ from autoware_ml.models.segmentation3d.encoders.voxel import (
 )
 from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3Seg3DDecoderHead
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
+from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel, export_patch_sizes
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
+from autoware_ml.preprocessing.segmentation3d.ptv3_serialization import PTv3Serialization
 from autoware_ml.types.geometry import Box3DCenterCoordinateType
 
 POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
@@ -324,6 +327,17 @@ def build_inputs(
         batch = batch.to_device(device)
     preprocessor = DataPreprocessor(preprocessor_modules=[build_preprocessor()])
     return preprocessor(batch, is_training=is_training)
+
+
+def with_serialized_voxels(model: PTv3BaseModel, batch: ModelBatchInputs) -> ModelBatchInputs:
+    """Add the serialized voxels the model's exported graphs read, as its preprocessing would."""
+    serialization = PTv3Serialization(
+        grid_size=model.grid_size,
+        point_cloud_range=model.point_cloud_range,
+        strides=model.encoder.stride,
+        patch_sizes=export_patch_sizes(model),
+    )
+    return serialization(batch, is_training=False)
 
 
 def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:

@@ -49,6 +49,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_input_dynamic_axes,
     build_seg3d_head_export_spec,
     prepare_ptv3_export_inputs,
+    seg3d_head_outputs_from_export,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -165,6 +166,8 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             Segmentation head outputs with the voxel-level logits of shape
             ``(num_voxels, num_classes)``.
         """
+        if self.engines is not None:
+            return self.forward_engines(multi_task_batch_inputs)
         logits = self.seg3d_head(self.encode_batch(multi_task_batch_inputs))
         return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
 
@@ -225,6 +228,10 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
     def get_export_output_names(self) -> list[str]:
         """Return ordered PTv3 segmentation export output names."""
         return ["pred_labels", "pred_probs"]
+
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the segmentation outputs from the exported head's probabilities."""
+        return ModelOutputs(segmentation3d_head_outputs=seg3d_head_outputs_from_export(tensors))
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the ONNX export specification.

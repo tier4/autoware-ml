@@ -30,6 +30,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_seg3d_model,
     build_trans_model,
     build_transfusion_head,
+    with_serialized_voxels,
 )
 from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
@@ -131,7 +132,7 @@ def test_ptv3_seg3d_split_export_supports_decoder_blocks() -> None:
     model = build_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
-    specs = model.build_export_specs(batch)
+    specs = model.build_export_specs(with_serialized_voxels(model, batch))
 
     # The encoder-only encoder graph never consumes pooling clusters; the
     # tracer would prune them, so the declared interface must not list them.
@@ -296,7 +297,7 @@ def test_ptv3_transhead_det3d_seg3d_export_uses_named_joint_outputs(tmp_path: Pa
     )
 
     batch = build_inputs(device=torch.device("cuda"))
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(with_serialized_voxels(model, batch))
     outputs = spec.module(*spec.args)
 
     assert spec.input_names == EXPECTED_PTV3_INPUT_NAMES

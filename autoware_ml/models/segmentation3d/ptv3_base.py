@@ -12,6 +12,8 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -30,7 +32,6 @@ from autoware_ml.utils.point_cloud.structures import (
     Point,
     bit_length_tensor,
     pooled_sparse_shape,
-    serialize_point_cloud_batch,
 )
 
 _BLOCK_STAGE_META_FIELDS = ("patch_order", "serialized_inverse", "grid_coord")
@@ -166,6 +167,64 @@ class PTv3BaseModel(ModuleBaseModel):
         if self.freeze_encoder:
             self.encoder.requires_grad_(False)
             self.encoder.eval()
+        self._check_serialization_preprocessing()
+
+    def _check_serialization_preprocessing(self) -> None:
+        """Refuse a PTv3Serialization preprocessing that serializes unlike the exported graphs.
+
+        Raises:
+            ValueError: Naming the settings of the preprocessing that differ from the model's.
+        """
+        from autoware_ml.preprocessing.segmentation3d.ptv3_serialization import PTv3Serialization
+
+        for module in self._data_preprocessor.preprocessor_modules:
+            if not isinstance(module, PTv3Serialization):
+                continue
+            expected = {
+                "orders": tuple(self.EXPORT_ORDER),
+                "strides": tuple(int(stride) for stride in self.encoder.stride),
+                "patch_sizes": tuple(export_patch_sizes(self)),
+            }
+            if self.grid_size is not None and self.point_cloud_range is not None:
+                expected |= {
+                    "grid_size": float(self.grid_size),
+                    "point_cloud_range": self.point_cloud_range,
+                }
+            differing = {
+                name: (getattr(module, name), value)
+                for name, value in expected.items()
+                if getattr(module, name) != value
+            }
+            if differing:
+                raise ValueError(
+                    "PTv3Serialization differs from the model in (preprocessing, model): "
+                    f"{differing}."
+                )
+
+    def serialized_voxels(self, batch_inputs: ModelBatchInputs) -> tuple[PTv3ExportInputs, ...]:
+        """Read the per-sample inputs of the exported graphs from the batch.
+
+        Raises:
+            ValueError: If the PTv3Serialization preprocessing did not run on the batch.
+        """
+        if batch_inputs.serialized_voxels is None:
+            raise ValueError(
+                "The exported PTv3 graphs read serialized voxels; add PTv3Serialization after "
+                "the voxelizer in data_preprocessor.preprocessor_modules (it skips training)."
+            )
+        return batch_inputs.serialized_voxels
+
+    def forward_engines(self, batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the deployed graphs of :attr:`engines` on every sample of the batch.
+
+        Args:
+            batch_inputs: Model inputs holding the serialized voxels.
+
+        Returns:
+            The model outputs rebuilt from the graphs' outputs.
+        """
+        tensors = run_export_graphs(list(self.engines.values()), self.serialized_voxels(batch_inputs))
+        return self.outputs_from_export_tensors(tensors)
 
     def train(self, mode: bool = True) -> PTv3BaseModel:
         """Keep the frozen encoder in eval mode during training.
@@ -272,21 +331,6 @@ class PTv3BaseModel(ModuleBaseModel):
             )
         return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
 
-    def _compute_export_geometry(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute sparse shape and serialization depth for export.
-
-        Args:
-            device: Device of the voxels of the example batch.
-
-        Returns:
-            ``(sparse_shape, serialization_depth)`` as long tensors on ``device``.
-        """
-        point_cloud_range = torch.tensor(self.point_cloud_range, dtype=torch.float32, device=device)
-        axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / self.grid_size
-        serialization_depth = bit_length_tensor(torch.max(axis_extents))
-        sparse_shape = torch.round(axis_extents).to(dtype=torch.long)
-        return sparse_shape, serialization_depth
-
     def _prepare_encoder_export(self) -> PointTransformerV3Encoder:
         """Return an export-ready copy of the encoder.
 
@@ -295,6 +339,26 @@ class PTv3BaseModel(ModuleBaseModel):
             export order.
         """
         return self.encoder.prepare_for_export(self.EXPORT_ORDER)
+
+
+def ptv3_export_geometry(
+    grid_size: float, point_cloud_range: Sequence[float], device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute the sparse shape and the serialization depth the exported graphs bake in.
+
+    Args:
+        grid_size: Edge of the cubic voxels.
+        point_cloud_range: ``[x_min, y_min, z_min, x_max, y_max, z_max]``.
+        device: Device of the returned tensors.
+
+    Returns:
+        ``(sparse_shape, serialization_depth)`` as long tensors on ``device``.
+    """
+    point_cloud_range = torch.tensor(point_cloud_range, dtype=torch.float32, device=device)
+    axis_extents = (point_cloud_range[3:] - point_cloud_range[:3]) / grid_size
+    serialization_depth = bit_length_tensor(torch.max(axis_extents))
+    sparse_shape = torch.round(axis_extents).to(dtype=torch.long)
+    return sparse_shape, serialization_depth
 
 
 def build_serialized_pooling_metadata(
@@ -635,6 +699,27 @@ class PTv3ExportInputs:
     serialized_inverse: torch.Tensor
     pooling_metadata: tuple[SerializedPoolingMeta, ...]
 
+    def named_tensors(self) -> dict[str, torch.Tensor]:
+        """Return every tensor of the batch under the input name the exported graphs give it.
+
+        The one mapping from the deployment contract's names to the tensors: the export specs
+        take their args from it and the deployed graphs read their inputs from it.
+        """
+        tensors = {
+            "voxels": self.voxels,
+            "num_points_per_voxel": self.num_points,
+            "grid_coord": self.grid_coord,
+            "patch_order": self.patch_order,
+            "serialized_inverse": self.serialized_inverse,
+            "point_grid_coord_0": self.grid_coord,
+        }
+        for stage_index, meta in enumerate(self.pooling_metadata):
+            for field in SERIALIZED_POOLING_FIELDS:
+                tensors[f"serialized_pooling_{stage_index}_{field}"] = getattr(meta, field)
+            tensors[f"pooling_cluster_{stage_index}"] = meta.cluster
+            tensors[f"point_grid_coord_{stage_index + 1}"] = meta.grid_coord
+        return tensors
+
     def encoder_args(
         self, pooling_field_names: Sequence[str]
     ) -> tuple[tuple[torch.Tensor, ...], list[str]]:
@@ -643,51 +728,157 @@ class PTv3ExportInputs:
         Args:
             pooling_field_names: Pooling metadata fields the graph consumes.
         """
-        pooling_inputs, pooling_names = flatten_serialized_pooling_inputs(
+        _, pooling_names = flatten_serialized_pooling_inputs(
             self.pooling_metadata, pooling_field_names
         )
-        args = (
-            self.voxels,
-            self.num_points,
-            self.grid_coord,
-            self.patch_order,
-            self.serialized_inverse,
-            *pooling_inputs,
+        input_names = [*ENCODER_EXPORT_INPUT_NAMES, *pooling_names]
+        return pick_named_tensors(self.named_tensors(), input_names), input_names
+
+
+def pick_named_tensors(
+    tensors: Mapping[str, torch.Tensor], names: Sequence[str]
+) -> tuple[torch.Tensor, ...]:
+    """Return the tensors of the names, in their order.
+
+    Raises:
+        KeyError: Naming the names without a tensor.
+    """
+    missing = [name for name in names if name not in tensors]
+    if missing:
+        raise KeyError(f"No tensor is named {missing}.")
+    return tuple(tensors[name] for name in names)
+
+
+def serialize_voxels(
+    voxels: torch.Tensor,
+    num_points: torch.Tensor,
+    grid_coord: torch.Tensor,
+    sparse_shape: torch.Tensor,
+    serialization_depth: torch.Tensor,
+    orders: Sequence[str],
+    strides: Sequence[int],
+    patch_sizes: Sequence[int],
+) -> PTv3ExportInputs:
+    """Serialize the voxels of one sample and precompute the metadata of every pooling stage.
+
+    The export-side preprocessing of PTv3: what the deployed runtime computes before it runs
+    the exported graphs.
+
+    Args:
+        voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
+        num_points: Valid point count per voxel.
+        grid_coord: Voxel coordinates ``(num_voxels, 3)``.
+        sparse_shape: Sparse shape of the voxel grid, see :func:`ptv3_export_geometry`.
+        serialization_depth: Serialization depth, see :func:`ptv3_export_geometry`.
+        orders: Serialization orders.
+        strides: One pooling stride per stage.
+        patch_sizes: Attention window per level, the input level first.
+
+    Returns:
+        The inputs of the exported graphs.
+    """
+    point = Point(
+        {
+            "coord": grid_coord,
+            "grid_coord": grid_coord,
+            "offset": shape_as_tensor(grid_coord)[:1].to(grid_coord.device),
+        }
+    )
+    point.serialization(orders, shuffle_orders=False, depth=serialization_depth)
+    pooling_metadata = build_serialized_pooling_metadata(
+        grid_coord, point["serialized_code"], point["serialized_order"], strides, patch_sizes
+    )
+    return PTv3ExportInputs(
+        sparse_shape=sparse_shape,
+        serialization_depth=serialization_depth,
+        voxels=voxels,
+        num_points=num_points,
+        grid_coord=grid_coord,
+        patch_order=build_patch_order(point["serialized_order"], patch_sizes[0]),
+        serialized_inverse=point["serialized_inverse"],
+        pooling_metadata=tuple(pooling_metadata),
+    )
+
+
+def split_voxels_by_sample(
+    voxels_data: VoxelsData, batch_size: int
+) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    """Split a batch of voxels into the ``(voxels, num_points, grid_coord)`` of every sample.
+
+    Args:
+        voxels_data: Voxels grouped by sample, as the voxelizer returns them.
+        batch_size: Number of samples of the batch.
+
+    Raises:
+        ValueError: If the voxels are not grouped by sample or a sample has no voxel.
+    """
+    batch_indices = voxels_data.batch_indices.long()
+    if bool((batch_indices[1:] < batch_indices[:-1]).any()):
+        raise ValueError("The voxels of the batch are not grouped by sample.")
+    counts = torch.bincount(batch_indices, minlength=batch_size).tolist()
+    if 0 in counts:
+        raise ValueError(f"Sample {counts.index(0)} of the batch has no voxel.")
+    return list(
+        zip(
+            voxels_data.voxels.split(counts),
+            voxels_data.num_points.split(counts),
+            voxels_data.coords.split(counts),
         )
-        return args, [*ENCODER_EXPORT_INPUT_NAMES, *pooling_names]
+    )
+
+
+def run_export_graphs(
+    graphs: Sequence[Any], samples: Sequence[PTv3ExportInputs]
+) -> dict[str, torch.Tensor]:
+    """Run the deployed graphs on every sample, each reading the tensors before it by name.
+
+    Args:
+        graphs: Callables taking and returning tensors keyed by their export names, in
+            dataflow order, such as TensorRT engines.
+        samples: The inputs of the graphs, one per sample.
+
+    Returns:
+        The outputs no later graph reads, concatenated over the samples along the first axis.
+    """
+    per_sample = []
+    for sample in samples:
+        tensors = sample.named_tensors()
+        outputs: dict[str, torch.Tensor] = {}
+        for graph in graphs:
+            produced = graph(tensors)
+            tensors |= produced
+            outputs |= produced
+        per_sample.append(outputs)
+    read = {name for graph in graphs for name in graph.input_names}
+    return {
+        name: torch.cat([outputs[name] for outputs in per_sample])
+        for name in per_sample[0]
+        if name not in read
+    }
+
+
+def seg3d_head_outputs_from_export(
+    tensors: Mapping[str, torch.Tensor],
+) -> Segmentation3DHeadOutputs:
+    """Rebuild the segmentation head outputs from an exported head's class probabilities.
+
+    Their log has the same softmax, argmax and cross entropy as the logits, so the deployed
+    head is decoded and scored like the trained one.
+    """
+    probs = tensors["pred_probs"]
+    return Segmentation3DHeadOutputs(logits=probs.clamp_min(torch.finfo(probs.dtype).tiny).log())
 
 
 def prepare_ptv3_export_inputs(
     model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> PTv3ExportInputs:
-    """Serialize a preprocessed voxel batch and precompute its pooling metadata."""
-    voxels_data = _voxels_data(batch_inputs)
-    sparse_shape, serialization_depth = model._compute_export_geometry(voxels_data.voxels.device)
-    encoder_inputs = model.build_encoder_inputs(
-        voxels_data.voxels,
-        voxels_data.num_points,
-        voxels_data.batch_xyz_coords(),
-    )
-    require_single_sample_export_batch(encoder_inputs)
-    point, _ = serialize_point_cloud_batch(encoder_inputs, model.EXPORT_ORDER, serialization_depth)
-    patch_sizes = export_patch_sizes(model)
-    pooling_metadata = build_serialized_pooling_metadata(
-        point["grid_coord"],
-        point["serialized_code"],
-        point["serialized_order"],
-        model.encoder.stride,
-        patch_sizes,
-    )
-    return PTv3ExportInputs(
-        sparse_shape=sparse_shape,
-        serialization_depth=serialization_depth,
-        voxels=voxels_data.voxels,
-        num_points=voxels_data.num_points,
-        grid_coord=encoder_inputs["grid_coord"],
-        patch_order=build_patch_order(point["serialized_order"], patch_sizes[0]),
-        serialized_inverse=point["serialized_inverse"],
-        pooling_metadata=tuple(pooling_metadata),
-    )
+    """Return the serialized voxels of a single-sample batch, see :class:`PTv3Serialization`."""
+    samples = model.serialized_voxels(batch_inputs)
+    if len(samples) != 1:
+        raise ValueError(
+            f"PTv3 export supports only single-sample export batches, got {len(samples)} samples."
+        )
+    return samples[0]
 
 
 @dataclass(frozen=True)
@@ -708,6 +899,12 @@ class PTv3ExportContext:
     @property
     def stage_count(self) -> int:
         return len(self.stage_feats)
+
+    def named_tensors(self) -> dict[str, torch.Tensor]:
+        """Return the graph inputs and the encoder outputs keyed by their export names."""
+        return self.inputs.named_tensors() | dict(
+            zip(stage_feature_names(self.stage_count), self.stage_feats)
+        )
 
 
 def build_ptv3_export_context(
@@ -765,14 +962,7 @@ def build_seg3d_head_export_spec(
     dynamic_axes.update(build_point_feature_dynamic_axes(output_names))
     return ExportSpec(
         module=module,
-        args=build_seg3d_head_export_args(
-            context.stage_feats,
-            context.inputs.pooling_metadata,
-            context.inputs.patch_order,
-            context.inputs.serialized_inverse,
-            context.inputs.grid_coord,
-            seg3d_head.dec_depths,
-        ),
+        args=pick_named_tensors(context.named_tensors(), input_names),
         input_names=input_names,
         output_names=list(output_names),
         dynamic_axes=dynamic_axes,
@@ -897,30 +1087,6 @@ def seg3d_head_export_input_names(stage_count: int, dec_depths: Sequence[int]) -
         prefix = "" if stage == 0 else f"serialized_pooling_{stage - 1}_"
         names += [prefix + field for field in _BLOCK_STAGE_META_FIELDS]
     return names
-
-
-def build_seg3d_head_export_args(
-    stage_feats: Sequence[torch.Tensor],
-    pooling_metadata: Sequence[SerializedPoolingMeta],
-    patch_order: torch.Tensor,
-    serialized_inverse: torch.Tensor,
-    grid_coord: torch.Tensor,
-    dec_depths: Sequence[int],
-) -> tuple[torch.Tensor, ...]:
-    """Assemble the split seg-head export args matching the input-name rule."""
-    level0 = {
-        "patch_order": patch_order,
-        "serialized_inverse": serialized_inverse,
-        "grid_coord": grid_coord,
-    }
-    args = [*stage_feats, *(meta.cluster for meta in pooling_metadata)]
-    for stage in _block_stage_indices(dec_depths):
-        if stage == 0:
-            args += [level0[field] for field in _BLOCK_STAGE_META_FIELDS]
-        else:
-            meta = pooling_metadata[stage - 1]
-            args += [getattr(meta, field) for field in _BLOCK_STAGE_META_FIELDS]
-    return tuple(args)
 
 
 def build_seg3d_head_input_dynamic_axes(

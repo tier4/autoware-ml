@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
@@ -32,6 +34,12 @@ class ModelBatchInputs(BaseModel):
 
     # Point cloud projected into range images
     range_view_data: InstanceOf[RangeViewData] | None
+
+    # Export-side preprocessing, the inputs of the exported graphs. Decorated pillar features
+    # (num_pillars, max_num_points, channels) of a pillar encoder.
+    decorated_pillars: InstanceOf[torch.Tensor] | None = None
+    # One PTv3ExportInputs per sample, the serialized voxels and their pooling metadata.
+    serialized_voxels: tuple[Any, ...] | None = None
 
     # TODO(Kok Seang): Add input features for 2D detection/segmentation model.
 

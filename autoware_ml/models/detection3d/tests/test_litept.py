@@ -32,6 +32,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_ptv3_encoder,
     build_seg3d_model,
+    with_serialized_voxels,
 )
 
 REQUIRES_SPARSE_CUDA = pytest.mark.skipif(
@@ -216,7 +217,7 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
     model = build_litept_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
-    specs = model.build_export_specs(batch)
+    specs = model.build_export_specs(with_serialized_voxels(model, batch))
     encoder_spec = specs["ptv3_encoder"]
 
     assert "serialized_inverse" in encoder_spec.input_names
@@ -252,7 +253,7 @@ def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
     model = build_litept_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(with_serialized_voxels(model, batch))
 
     assert "patch_order" in spec.input_names
     assert "serialized_pooling_0_cluster" in spec.input_names
@@ -271,7 +272,7 @@ def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
     model = build_seg3d_model().cuda().eval()
     batch = build_inputs(device=torch.device("cuda"))
 
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(with_serialized_voxels(model, batch))
 
     assert spec.input_names == [
         "voxels",
@@ -310,7 +311,7 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
     for tag, model in (("litept", build_litept_seg3d_model()), ("ptv3", build_seg3d_model())):
         model = model.cuda().eval()
         batch = build_inputs(device=torch.device("cuda"))
-        spec = model.build_export_specs(batch)["ptv3_encoder"]
+        spec = model.build_export_specs(with_serialized_voxels(model, batch))["ptv3_encoder"]
         path = tmp_path / f"{tag}_encoder.onnx"
 
         export_to_onnx(spec, onnx_cfg, path)
@@ -330,8 +331,12 @@ def test_litept_encoder_contract_matches_ptv3_field_for_field() -> None:
     every stage, plus the input level's serialization - and rejects an engine missing any.
     """
     batch = build_inputs(device=torch.device("cuda"))
-    litept = build_litept_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
-    ptv3 = build_seg3d_model().cuda().eval().build_export_specs(batch)["ptv3_encoder"]
+    litept_model = build_litept_seg3d_model().cuda().eval()
+    ptv3_model = build_seg3d_model().cuda().eval()
+    litept = litept_model.build_export_specs(with_serialized_voxels(litept_model, batch))[
+        "ptv3_encoder"
+    ]
+    ptv3 = ptv3_model.build_export_specs(with_serialized_voxels(ptv3_model, batch))["ptv3_encoder"]
 
     def stage_fields(names: list[str]) -> set[str]:
         return {name.split("_", 3)[3] for name in names if name.startswith("serialized_pooling_")}

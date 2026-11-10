@@ -29,6 +29,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_ptv3_encoder,
     build_seg3d_head,
     build_seg3d_model,
+    with_serialized_voxels,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Point,
@@ -1351,6 +1352,7 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
         ).multi_task_gt_batch,
         is_training=True,
     )
+    double = with_serialized_voxels(model, double)
     for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
         with pytest.raises(ValueError, match="single-sample"):
             builder(model, double)

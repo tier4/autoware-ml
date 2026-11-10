@@ -34,6 +34,7 @@ from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 from autoware_ml.models.module_base_model import LogDictConfigs
+from autoware_ml.preprocessing.detection3d.pillar_decoration import PillarDecoration
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
@@ -182,7 +183,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
                 [[100], [200]], dtype=torch.int32, device=self.device
             ),
         )
-        return ModelBatchInputs(
+        batch = ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=detection3d_gt_batch,
@@ -194,6 +195,29 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             image_data=None,
             range_view_data=None,
         )
+        return self._pillar_decoration()(batch, is_training=True)
+
+    def _pillar_decoration(self) -> PillarDecoration:
+        return PillarDecoration(
+            voxel_size=[0.5, 0.5, 4.0], point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
+        )
+
+    def test_pillar_decoration_matches_the_voxel_encoder(self) -> None:
+        """The preprocessing decorates the pillars exactly like the voxel encoder."""
+        batch = self._build_multi_task_batch_inputs()
+        assert batch.voxels_data is not None and batch.decorated_pillars is not None
+        torch.testing.assert_close(
+            batch.decorated_pillars,
+            self.pillar_feature_net.to(self.device).encode(batch.voxels_data),
+            rtol=0,
+            atol=0,
+        )
+
+    def test_forward_requires_the_pillar_decoration(self) -> None:
+        """A batch without decorated pillars names the missing preprocessing."""
+        batch = self._build_multi_task_batch_inputs().replace(decorated_pillars=None)
+        with self.assertRaisesRegex(ValueError, "PillarDecoration"):
+            self.centerpoint(batch)
 
     def test_centerpoint_forward_compute_metrics_and_decode_run(self) -> None:
         """

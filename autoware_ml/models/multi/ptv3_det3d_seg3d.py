@@ -36,7 +36,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
@@ -64,6 +67,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_input_dynamic_axes,
     build_seg3d_head_export_spec,
     prepare_ptv3_export_inputs,
+    seg3d_head_outputs_from_export,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -171,6 +175,8 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         Returns:
             The outputs of the task heads.
         """
+        if self.engines is not None:
+            return self.forward_engines(multi_task_batch_inputs)
         point = self.encode_batch(multi_task_batch_inputs)
         # The BEV neck must read the encoder chain before the segmentation
         # decoder: SerializedUnpooling pops the chain and overwrites parent
@@ -356,6 +362,15 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
                 "export_output_names must be provided at construction time to use export."
             )
         return list(self._export_output_names)
+
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the outputs of both heads from the exported heads' outputs."""
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                transfusion_head_outputs=TransFusionHeadOutputs.from_export_tensors(tensors)
+            ),
+            segmentation3d_head_outputs=seg3d_head_outputs_from_export(tensors),
+        )
 
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the ONNX export spec for joint PTv3 segmentation+detection.

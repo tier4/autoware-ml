@@ -8,6 +8,7 @@ import torch
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_trans_model,
+    with_serialized_voxels,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 
@@ -36,7 +37,7 @@ def test_ptv3_transhead_build_export_spec_uses_named_detection3d_outputs() -> No
     model = build_trans_model().to(device)
     batch = build_inputs(device=device)
 
-    spec = model.build_export_spec(batch)
+    spec = model.build_export_spec(with_serialized_voxels(model, batch))
     outputs = spec.module(*spec.args)
 
     assert spec.input_names == EXPECTED_PTV3_INPUT_NAMES

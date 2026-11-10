@@ -27,6 +27,57 @@ from autoware_ml.models.detection3d.encoders.pillars.pfn_layer import PFNLayer
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
 
 
+def decorate_pillars(
+    voxels_data: VoxelsData,
+    voxel_size: Sequence[float],
+    voxel_origin: Sequence[float],
+    with_distance: bool,
+    with_cluster_center: bool,
+    with_voxel_center: bool,
+) -> Float32[torch.Tensor, "num_pillars max_num_points feature_channels"]:
+    """Append pillar-relative offsets to the points of every pillar, zeroing padded points.
+
+    Args:
+        voxels_data: Padded pillars of a voxelizer.
+        voxel_size: Pillar size in meters.
+        voxel_origin: Center of the first pillar, half a pillar inside the range minimum.
+        with_distance: Whether to append point distance from the origin.
+        with_cluster_center: Whether to append the offset to the mean of the pillar's points.
+        with_voxel_center: Whether to append the offset to the pillar center.
+
+    Returns:
+        Decorated pillar features.
+    """
+    features = [voxels_data.voxels]
+    voxels = voxels_data.voxels
+    num_points = voxels_data.num_points
+    coords = voxels_data.coords
+
+    points_mean = voxels[:, :, :3].sum(dim=1, keepdim=True) / num_points.clamp_min(1).view(
+        -1, 1, 1
+    ).to(voxels.dtype)
+    if with_cluster_center:
+        features.append(voxels[:, :, :3] - points_mean)
+
+    if with_voxel_center:
+        center_offset = voxels.new_zeros((*voxels.shape[:2], 3))
+        for axis in range(3):
+            center_offset[:, :, axis] = voxels[:, :, axis] - (
+                coords[:, axis].to(voxels.dtype).unsqueeze(1) * voxel_size[axis]
+                + voxel_origin[axis]
+            )
+        features.append(center_offset)
+
+    if with_distance:
+        features.append(torch.norm(voxels[:, :, :3], dim=2, keepdim=True))
+
+    decorated = torch.cat(features, dim=-1)
+    mask = torch.arange(voxels.shape[1], device=voxels.device).unsqueeze(0) < num_points.unsqueeze(
+        1
+    )
+    return decorated * mask.unsqueeze(-1)
+
+
 class PillarFeatureNet(nn.Module):
     """Decorate pillars and encode them into per-pillar descriptors.
 
@@ -87,7 +138,7 @@ class PillarFeatureNet(nn.Module):
     def encode(
         self,
         voxels_data: VoxelsData,
-    ) -> Float32[torch.Tensor, "num_pillars num_output_channels"]:
+    ) -> Float32[torch.Tensor, "num_pillars max_num_points feature_channels"]:
         """Build PointPillars decorated point features.
 
         Args:
@@ -95,41 +146,16 @@ class PillarFeatureNet(nn.Module):
                 number of points, voxel coordinates, and batch indices.
 
         Returns:
-            Encoded pillar feature tensor.
+            Decorated pillar features, see :func:`decorate_pillars`.
         """
-        features = [voxels_data.voxels]
-        voxels = voxels_data.voxels
-        num_points = voxels_data.num_points
-        coords = voxels_data.coords
-
-        points_mean = voxels[:, :, :3].sum(dim=1, keepdim=True) / num_points.clamp_min(1).view(
-            -1, 1, 1
-        ).to(voxels.dtype)
-        if self.with_cluster_center:
-            features.append(voxels[:, :, :3] - points_mean)
-
-        if self.with_voxel_center:
-            center_offset = voxels.new_zeros((*voxels.shape[:2], 3))
-            center_offset[:, :, 0] = voxels[:, :, 0] - (
-                coords[:, 0].to(voxels.dtype).unsqueeze(1) * self.vx + self.x_offset
-            )
-            center_offset[:, :, 1] = voxels[:, :, 1] - (
-                coords[:, 1].to(voxels.dtype).unsqueeze(1) * self.vy + self.y_offset
-            )
-            center_offset[:, :, 2] = voxels[:, :, 2] - (
-                coords[:, 2].to(voxels.dtype).unsqueeze(1) * self.vz + self.z_offset
-            )
-            features.append(center_offset)
-
-        if self.with_distance:
-            features.append(torch.norm(voxels[:, :, :3], dim=2, keepdim=True))
-
-        decorated = torch.cat(features, dim=-1)
-        mask = torch.arange(voxels.shape[1], device=voxels.device).unsqueeze(
-            0
-        ) < num_points.unsqueeze(1)
-        decorated = decorated * mask.unsqueeze(-1)
-
+        decorated = decorate_pillars(
+            voxels_data,
+            voxel_size=(self.vx, self.vy, self.vz),
+            voxel_origin=(self.x_offset, self.y_offset, self.z_offset),
+            with_distance=self.with_distance,
+            with_cluster_center=self.with_cluster_center,
+            with_voxel_center=self.with_voxel_center,
+        )
         if decorated.shape[-1] != self.feature_channels:
             raise ValueError(
                 f"Decorated pillar features have {decorated.shape[-1]} channels, "
