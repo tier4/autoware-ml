@@ -1,25 +1,48 @@
 """Reusable proposal assigners for detection3d tasks.
 
 This module contains assignment utilities shared by transformer-style 3D
-detection heads during training target construction.
+detection heads during training target construction, and the per-image 2D
+assigner of the auxiliary image-plane head (Focal-PETR): classification, box
+L1, GIoU and projected-center L1 costs.
 """
 
 from __future__ import annotations
 
 from typing import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from jaxtyping import Float32, Bool, Int32, Int64
 import torch
 from scipy.optimize import linear_sum_assignment
 
+from autoware_ml.geometry.bbox_2d.boxes import bbox_cxcywh_to_xyxy
 from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBox3DL1Cost,
     BBoxBEVL1Cost,
+    BBoxL1Cost2D,
+    Center2DL1Cost,
     ClassificationCost,
     IoU3DCost,
+    IoUCost2D,
 )
 from autoware_ml.types.geometry import Box3DFieldIndex
+
+
+def _linear_sum_assignment(cost: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run SciPy's Hungarian solver on one cost block.
+
+    Args:
+        cost: Pairwise cost block ``(num_proposals, num_gts)`` of finite values.
+
+    Returns:
+        The matched proposal rows and ground-truth columns, as long tensors on the device of
+        ``cost``.
+    """
+    matched_rows, matched_cols = linear_sum_assignment(cost.detach().cpu().numpy())
+    return (
+        torch.as_tensor(matched_rows, device=cost.device, dtype=torch.long),
+        torch.as_tensor(matched_cols, device=cost.device, dtype=torch.long),
+    )
 
 
 @dataclass(frozen=True)
@@ -180,10 +203,9 @@ class HungarianAssigner3D:
             (batch_size, num_bboxes), device=bboxes.device, dtype=bboxes.dtype
         )
         for current_batch in range(batch_size):
-            current_cost = cost[current_batch]
-            matched_row_inds, matched_col_inds = linear_sum_assignment(current_cost)
-            matched_row_inds = torch.from_numpy(matched_row_inds).to(bboxes.device)
-            matched_col_inds = torch.from_numpy(matched_col_inds).to(bboxes.device)
+            matched_row_inds, matched_col_inds = _linear_sum_assignment(cost[current_batch])
+            matched_row_inds = matched_row_inds.to(bboxes.device)
+            matched_col_inds = matched_col_inds.to(bboxes.device)
 
             # Hungarian matching always fills min(num_bboxes, max_num_gt_bboxes) pairs, so it
             # matches the padded gt columns too even though their cost is the maximum. Drop those
@@ -210,3 +232,106 @@ class HungarianAssigner3D:
             max_overlaps=max_overlaps,
             labels=assigned_labels,
         )
+
+
+@dataclass(frozen=True)
+class AssignResult2D:
+    """Assignment of the dense proposals of one image to its ground truth.
+
+    Attributes:
+        num_gts: Number of ground-truth boxes of the image.
+        gt_inds: Assigned ground-truth index of every proposal, offset by one; background
+            proposals carry 0.
+        labels: Assigned class label of every proposal, -1 for background.
+    """
+
+    num_gts: int
+    gt_inds: torch.Tensor
+    labels: torch.Tensor
+
+
+@dataclass(frozen=True)
+class HungarianAssigner2D:
+    """One-to-one assignment between dense 2D proposals and ground truth.
+
+    The default cost weights are the reference Focal-PETR recipe (2 / 5 / 2 / 10), the same
+    values the auxiliary 2D head uses as its loss weights.
+    """
+
+    cls_cost: ClassificationCost = field(default_factory=lambda: ClassificationCost(weight=2.0))
+    reg_cost: BBoxL1Cost2D = field(default_factory=lambda: BBoxL1Cost2D(weight=5.0))
+    iou_cost: IoUCost2D = field(default_factory=lambda: IoUCost2D(weight=2.0))
+    centers2d_cost: Center2DL1Cost = field(default_factory=lambda: Center2DL1Cost(weight=10.0))
+
+    def assign(
+        self,
+        bbox_pred: torch.Tensor,
+        cls_pred: torch.Tensor,
+        pred_centers2d: torch.Tensor,
+        gt_bboxes: torch.Tensor,
+        gt_labels: torch.Tensor,
+        gt_centers2d: torch.Tensor,
+        image_height: int,
+        image_width: int,
+    ) -> AssignResult2D:
+        """Assign each proposal to background (0) or a 1-based ground-truth index.
+
+        Args:
+            bbox_pred: Proposal boxes ``(num_queries, 4)`` as normalized
+                ``(cx, cy, w, h)``.
+            cls_pred: Proposal classification logits ``(num_queries, C)``.
+            pred_centers2d: Proposal centers ``(num_queries, 2)`` normalized.
+            gt_bboxes: Ground-truth boxes ``(num_gts, 4)`` in unnormalized
+                ``(x1, y1, x2, y2)`` pixels.
+            gt_labels: Ground-truth class indices ``(num_gts,)``. The ground truth of one image
+                is not padded, so every label must be a class index; -1 is not a padding
+                sentinel here.
+            gt_centers2d: Ground-truth projected centers ``(num_gts, 2)`` in
+                unnormalized pixels.
+            image_height: Padded image height in pixels.
+            image_width: Padded image width in pixels.
+
+        Returns:
+            Assignment result over the proposals.
+
+        Raises:
+            ValueError: If a label is negative or not below the number of class channels.
+        """
+        num_gts = gt_bboxes.size(0)
+        num_queries = bbox_pred.size(0)
+        assigned_gt_inds = bbox_pred.new_zeros((num_queries,), dtype=torch.long)
+        assigned_labels = bbox_pred.new_full((num_queries,), -1, dtype=torch.long)
+        if num_gts == 0 or num_queries == 0:
+            return AssignResult2D(num_gts=num_gts, gt_inds=assigned_gt_inds, labels=assigned_labels)
+        # The classification cost treats -1 as the padding of a batched ground truth and gives it
+        # the highest cost, but this assigner drops no pair, so such a box would still be matched
+        # and its proposal would carry the background label. The 2D ground truth is not padded.
+        if bool((gt_labels < 0).any()):
+            raise ValueError("Found negative gt_labels. The 2D ground truth is not padded.")
+
+        # The matching runs in float32, as the reference does under force_fp32. Under autocast
+        # the head's logits are bfloat16, whose sigmoid rounds every logit above about 6.2 to 1
+        # and gives all confident proposals one cost, far below their float32 costs; a bfloat16
+        # box is off by up to 1/256 of the image before it is scaled to pixels.
+        bbox_pred = bbox_pred.float()
+        cls_pred = cls_pred.float()
+        pred_centers2d = pred_centers2d.float()
+        gt_bboxes = gt_bboxes.float()
+        gt_centers2d = gt_centers2d.float()
+
+        factor = gt_bboxes.new_tensor([image_width, image_height, image_width, image_height])
+        # The classification cost is batched over padded ground truth; one image is a batch
+        # of one whose ground truth is all valid.
+        valid_masks = torch.ones((1, num_gts), dtype=torch.bool, device=gt_labels.device)
+        cls_cost = self.cls_cost(cls_pred.unsqueeze(0), gt_labels.unsqueeze(0), valid_masks)[0]
+        cost = (
+            cls_cost
+            + self.reg_cost(bbox_pred, gt_bboxes / factor)
+            + self.iou_cost(bbox_cxcywh_to_xyxy(bbox_pred) * factor, gt_bboxes)
+            + self.centers2d_cost(pred_centers2d, gt_centers2d / factor[:2])
+        )
+        cost = torch.nan_to_num(cost, nan=100.0, posinf=100.0, neginf=-100.0)
+        matched_rows, matched_cols = _linear_sum_assignment(cost)
+        assigned_gt_inds[matched_rows] = matched_cols + 1
+        assigned_labels[matched_rows] = gt_labels[matched_cols].long()
+        return AssignResult2D(num_gts=num_gts, gt_inds=assigned_gt_inds, labels=assigned_labels)

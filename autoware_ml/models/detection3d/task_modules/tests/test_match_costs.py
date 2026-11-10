@@ -22,6 +22,9 @@ import torch
 
 from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
 from autoware_ml.models.detection3d.task_modules.match_costs import (
+    BBoxL1Cost2D,
+    Center2DL1Cost,
+    IoUCost2D,
     BBox3DL1Cost,
     BBoxBEVL1Cost,
     ClassificationCost,
@@ -610,6 +613,52 @@ class TestIoU3DCost(unittest.TestCase):
         self.assertEqual(cost.shape, iou.shape)
         self.assertTrue(torch.allclose(cost, -iou * 0.25, atol=1e-6))
         self.assertLess(float(cost[1, 1]), float(cost[0, 0]))
+
+
+class TestMatchCosts2D(unittest.TestCase):
+    """The cost terms by hand, so a wrong weight, sign or box form does not pass unnoticed."""
+
+    def test_box_l1_cost_converts_the_ground_truth_to_the_proposal_form(self) -> None:
+        """A (0.5, 0.5, 0.2, 0.2) proposal is (0.4, 0.4)-(0.6, 0.6): L1 0 to that box.
+
+        To (0.4, 0.4)-(0.8, 0.8), which is (0.6, 0.6, 0.4, 0.4), the L1 is 0.6; weighted by 5
+        that is 3. In the ``xyxy`` form the proposal is converted instead and the L1 is 0.4.
+        """
+        bbox_pred = torch.tensor([[0.5, 0.5, 0.2, 0.2]])
+        gt_bboxes = torch.tensor([[0.4, 0.4, 0.6, 0.6], [0.4, 0.4, 0.8, 0.8]])
+
+        torch.testing.assert_close(
+            BBoxL1Cost2D(weight=5.0)(bbox_pred, gt_bboxes), torch.tensor([[0.0, 3.0]])
+        )
+        torch.testing.assert_close(
+            BBoxL1Cost2D(weight=5.0, box_format="xyxy")(bbox_pred, gt_bboxes[1:]),
+            torch.tensor([[2.0]]),
+        )
+
+    def test_iou_cost_is_the_negative_overlap(self) -> None:
+        """The pair with GIoU 1/7 - 2/9 costs minus twice that; the IoU mode costs -2/7."""
+        boxes = torch.tensor([[0.0, 0.0, 2.0, 2.0]])
+        gt_bboxes = torch.tensor([[1.0, 1.0, 3.0, 3.0]])
+
+        torch.testing.assert_close(
+            IoUCost2D(weight=2.0)(boxes, gt_bboxes), torch.tensor([[-(1 / 7 - 2 / 9) * 2]])
+        )
+        torch.testing.assert_close(
+            IoUCost2D(weight=2.0, iou_mode="iou")(boxes, gt_bboxes), torch.tensor([[-2 / 7]])
+        )
+
+    def test_the_costs_reject_unknown_formats_when_built(self) -> None:
+        with self.assertRaisesRegex(ValueError, "box_format"):
+            BBoxL1Cost2D(box_format="xywhr")
+        with self.assertRaisesRegex(ValueError, "iou_mode"):
+            IoUCost2D(iou_mode="iof")
+
+    def test_center_cost_is_the_weighted_l1_distance(self) -> None:
+        """(0.5, 0.5) to (0.6, 0.3) is 0.3 apart; weighted by 10 that is 3."""
+        torch.testing.assert_close(
+            Center2DL1Cost(weight=10.0)(torch.tensor([[0.5, 0.5]]), torch.tensor([[0.6, 0.3]])),
+            torch.tensor([[3.0]]),
+        )
 
 
 if __name__ == "__main__":

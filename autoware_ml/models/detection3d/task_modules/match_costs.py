@@ -1,6 +1,9 @@
 """Reusable matching costs for detection3d assignment.
 
-This module contains pairwise matching costs used by Hungarian assignment.
+This module contains pairwise matching costs used by Hungarian assignment. The 3D costs work
+on a padded ``(batch_size, num_bboxes, max_num_gt_bboxes)`` block and fill the padded columns
+with the highest cost; the 2D costs of the auxiliary image-plane head work on the unpadded
+``(num_queries, num_gts)`` block of one image.
 """
 
 from __future__ import annotations
@@ -11,6 +14,11 @@ from dataclasses import dataclass
 from jaxtyping import Float32, Int64, Bool
 import torch
 
+from autoware_ml.geometry.bbox_2d.boxes import (
+    bbox_cxcywh_to_xyxy,
+    bbox_overlaps,
+    bbox_xyxy_to_cxcywh,
+)
 from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -217,3 +225,56 @@ class IoU3DCost:
             Pairwise minimization cost derived from IoU.
         """
         return -iou * self.weight
+
+
+@dataclass(frozen=True)
+class BBoxL1Cost2D:
+    """Pairwise L1 cost between normalized 2D boxes.
+
+    Predictions are ``(cx, cy, w, h)`` in [0, 1]; ground truth arrives as
+    normalized ``(x1, y1, x2, y2)`` and is converted according to
+    ``box_format``.
+    """
+
+    weight: float = 1.0
+    box_format: str = "xywh"
+
+    def __post_init__(self) -> None:
+        if self.box_format not in ("xywh", "xyxy"):
+            raise ValueError(f"Unsupported box_format '{self.box_format}'.")
+
+    def __call__(self, bbox_pred: torch.Tensor, gt_bboxes: torch.Tensor) -> torch.Tensor:
+        """Compute the pairwise box L1 cost."""
+        if self.box_format == "xywh":
+            gt_bboxes = bbox_xyxy_to_cxcywh(gt_bboxes)
+        else:
+            bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
+        return torch.cdist(bbox_pred.float(), gt_bboxes.float(), p=1) * self.weight
+
+
+@dataclass(frozen=True)
+class IoUCost2D:
+    """Pairwise negative-IoU (or GIoU) cost between unnormalized 2D boxes."""
+
+    weight: float = 1.0
+    iou_mode: str = "giou"
+
+    def __post_init__(self) -> None:
+        if self.iou_mode not in ("iou", "giou"):
+            raise ValueError(f"Unsupported iou_mode '{self.iou_mode}'.")
+
+    def __call__(self, bboxes: torch.Tensor, gt_bboxes: torch.Tensor) -> torch.Tensor:
+        """Compute the pairwise overlap cost."""
+        overlaps = bbox_overlaps(bboxes, gt_bboxes, mode=self.iou_mode, is_aligned=False)
+        return -overlaps * self.weight
+
+
+@dataclass(frozen=True)
+class Center2DL1Cost:
+    """Pairwise L1 cost between normalized projected 2D centers."""
+
+    weight: float = 1.0
+
+    def __call__(self, center_pred: torch.Tensor, gt_centers: torch.Tensor) -> torch.Tensor:
+        """Compute the pairwise center L1 cost."""
+        return torch.cdist(center_pred.float(), gt_centers.float(), p=1) * self.weight

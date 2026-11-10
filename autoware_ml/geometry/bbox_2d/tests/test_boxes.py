@@ -22,7 +22,7 @@ import unittest
 import torch
 from torchvision.ops import box_iou, generalized_box_iou
 
-from autoware_ml.models.detection3d.task_modules.boxes2d import (
+from autoware_ml.geometry.bbox_2d.boxes import (
     bbox_cxcywh_to_xyxy,
     bbox_overlaps,
     bbox_xyxy_to_cxcywh,
