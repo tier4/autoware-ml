@@ -271,6 +271,9 @@ class PointSequential(PointModule):
     :class:`Point`, a sparse-convolution tensor, or a dense tensor.
     """
 
+    #: Lets ``utils/bn_fusion.py`` pair adjacent Conv/Linear and BatchNorm children.
+    applies_children_in_order = True
+
     def __init__(self, *modules: nn.Module) -> None:
         """Initialize the sequential point-module container.
 
