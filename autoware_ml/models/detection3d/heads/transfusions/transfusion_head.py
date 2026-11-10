@@ -250,6 +250,7 @@ class TransFusionHead(nn.Module):
         norm_eps: float = 1e-3,
         norm_momentum: float = 0.01,
         use_bf16_cross_attention: bool = False,
+        fuse_export_attention: bool = False,
     ) -> None:
         """Initialize the TransFusion detection head.
 
@@ -318,6 +319,13 @@ class TransFusionHead(nn.Module):
                 (shared block, dense heatmap head, prediction branches).
             use_bf16_cross_attention: Whether export emits fusion-ready attention and uses bf16 for
                 the long cross-attention core. Requires ``deploy.onnx.precision=fp16``.
+            fuse_export_attention: Whether export emits attention without the max-subtraction
+                before softmax, in the trace dtype, so TensorRT's Myelin fuses it into one MHA
+                kernel that keeps the softmax stable itself (0.68 -> 0.25 ms on the j6gen2
+                graph). Off by default: where Myelin does not match the pattern (another
+                TensorRT version or graph shape), unfused fp16 attention can overflow, so a
+                config that enables it relies on the deploy evaluation to catch that. Implied
+                by ``use_bf16_cross_attention``.
 
         Raises:
             ValueError: If ``common_heads`` misses a regression branch or holds an unknown one,
@@ -379,6 +387,7 @@ class TransFusionHead(nn.Module):
         self.norm_momentum = norm_momentum
         self.use_bf16_cross_attention = use_bf16_cross_attention
         self.required_onnx_precision = "fp16" if use_bf16_cross_attention else None
+        self.fuse_export_attention = fuse_export_attention
         if nms_type not in {None, "circle"}:
             raise ValueError(f"Unsupported TransFusion NMS type: {nms_type!r}")
         self.nms_type = nms_type
@@ -1565,6 +1574,7 @@ class TransFusionHead(nn.Module):
             ExportableMultiheadAttention in all decoder layers.
         """
         head = deepcopy(self).eval()
+        fuse = head.fuse_export_attention or head.use_bf16_cross_attention
         bev_pos = None
         if bev_shape is not None:
             height, width = bev_shape
@@ -1579,12 +1589,12 @@ class TransFusionHead(nn.Module):
             if isinstance(decoder_layer.self_attn, nn.MultiheadAttention):
                 decoder_layer.self_attn = ExportableMultiheadAttention(
                     decoder_layer.self_attn,
-                    fuse_attention=head.use_bf16_cross_attention,
+                    fuse_attention=fuse,
                 )
             if isinstance(decoder_layer.cross_attn, nn.MultiheadAttention):
                 decoder_layer.cross_attn = ExportableMultiheadAttention(
                     decoder_layer.cross_attn,
-                    fuse_attention=head.use_bf16_cross_attention,
+                    fuse_attention=fuse,
                     use_bf16=head.use_bf16_cross_attention,
                 )
         # The replacement modules are constructed in training mode.
