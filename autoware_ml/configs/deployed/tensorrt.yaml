@@ -1,0 +1,14 @@
+# @package _global_
+# Evaluate the TensorRT engines of a deploy run with the model subclass of the task that runs
+# them in place of the modules they were exported from:
+#   autoware-ml test --config-name <task> --weights <ckpt> deployed=tensorrt \
+#     deployed.engine_dir=<dir with one <module>.engine per exported module>
+deployed:
+  model: ${deployed.tensorrt_model}
+  engine_dir: ???
+  # Plugin libraries the engines need, e.g. those of autoware_tensorrt_plugins.
+  plugin_paths: []
+
+model:
+  engine_dir: ${deployed.engine_dir}
+  plugin_paths: ${deployed.plugin_paths}

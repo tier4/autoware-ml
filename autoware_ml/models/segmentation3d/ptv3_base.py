@@ -12,7 +12,9 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.deployment.tensorrt_engine import TensorRTModelMixin
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -283,6 +285,25 @@ class PTv3BaseModel(ModuleBaseModel):
         """
         return ptv3_export_geometry(self.grid_size, self.point_cloud_range, device)
 
+    def serialize_for_export(
+        self, voxels: torch.Tensor, num_points: torch.Tensor, grid_coord: torch.Tensor
+    ) -> PTv3ExportInputs:
+        """Compute the inputs of the exported graphs from the voxels of one sample.
+
+        The export-side preprocessing, shared by the export and the deployed-graph forward.
+        """
+        sparse_shape, serialization_depth = self._compute_export_geometry(voxels.device)
+        return serialize_voxels(
+            voxels,
+            num_points,
+            grid_coord,
+            sparse_shape,
+            serialization_depth,
+            self.EXPORT_ORDER,
+            self.encoder.stride,
+            export_patch_sizes(self),
+        )
+
     def _prepare_encoder_export(self) -> PointTransformerV3Encoder:
         """Return an export-ready copy of the encoder.
 
@@ -311,6 +332,32 @@ def ptv3_export_geometry(
     serialization_depth = bit_length_tensor(torch.max(axis_extents))
     sparse_shape = torch.round(axis_extents).to(dtype=torch.long)
     return sparse_shape, serialization_depth
+
+
+class PTv3TensorRTMixin(TensorRTModelMixin):
+    """Run a PTv3 model's exported graphs as TensorRT engines, one sample at a time.
+
+    Mixed in ahead of a PTv3 task model, whose ``outputs_from_export_tensors`` rebuilds the
+    outputs; the exported graphs take one sample each.
+    """
+
+    def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Serialize every sample as the export does and run the engines on it.
+
+        Args:
+            multi_task_batch_inputs: Model inputs holding the voxels.
+
+        Returns:
+            The model outputs rebuilt from the engine outputs.
+        """
+        samples = [
+            self.serialize_for_export(voxels, num_points, grid_coord)
+            for voxels, num_points, grid_coord in split_voxels_by_sample(
+                _voxels_data(multi_task_batch_inputs), multi_task_batch_inputs.batch_size()
+            )
+        ]
+        tensors = run_export_graphs(list(self.engines.values()), samples)
+        return self.outputs_from_export_tensors(tensors)
 
 
 def build_serialized_pooling_metadata(
@@ -829,16 +876,8 @@ def prepare_ptv3_export_inputs(
     require_single_sample_export_batch(
         {"offset": batch_to_offset(voxels_data.batch_indices.long())}
     )
-    sparse_shape, serialization_depth = model._compute_export_geometry(voxels_data.voxels.device)
-    return serialize_voxels(
-        voxels_data.voxels,
-        voxels_data.num_points,
-        voxels_data.coords,
-        sparse_shape,
-        serialization_depth,
-        model.EXPORT_ORDER,
-        model.encoder.stride,
-        export_patch_sizes(model),
+    return model.serialize_for_export(
+        voxels_data.voxels, voxels_data.num_points, voxels_data.coords
     )
 
 

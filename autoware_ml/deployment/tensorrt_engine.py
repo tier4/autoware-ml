@@ -214,3 +214,28 @@ def load_engines(
     return {
         name: TensorRTEngine(Path(engine_dir) / f"{name}.engine", plugin_paths) for name in names
     }
+
+class TensorRTModelMixin:
+    """Load the engines of a model whose subclass runs its exported graphs on TensorRT.
+
+    Mixed in ahead of a model class. The subclass names its exported modules in
+    ``ENGINE_NAMES`` and overrides the forward of the stages they replace; everything else,
+    decoding and metrics included, is the model's own.
+
+    Args:
+        engine_dir: Directory holding one ``<name>.engine`` per entry of ``ENGINE_NAMES``.
+        plugin_paths: Plugin libraries the engines need.
+        **kwargs: Arguments of the model class.
+    """
+
+    ENGINE_NAMES: tuple[str, ...] = ()
+
+    def __init__(
+        self,
+        *args: Any,
+        engine_dir: str | Path,
+        plugin_paths: Sequence[str | Path] = (),
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.engines = load_engines(engine_dir, self.ENGINE_NAMES, plugin_paths)

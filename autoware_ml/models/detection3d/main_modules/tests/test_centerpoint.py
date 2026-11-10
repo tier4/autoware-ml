@@ -14,6 +14,8 @@
 
 """Unit tests for CenterPoint detection model."""
 
+from pathlib import Path
+import tempfile
 import unittest
 
 import torch
@@ -27,6 +29,7 @@ from autoware_ml.models.detection3d.main_modules.centerpoint import (
     CenterPointDetection3DModel,
     _CenterPointBackboneNeckHeadExportWrapper,
     _CenterPointVoxelEncoderExportWrapper,
+    CenterPointTensorRTModel,
 )
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
@@ -34,6 +37,7 @@ from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
 from autoware_ml.models.detection3d.necks.second_fpn import SECONDFPN
 from autoware_ml.models.module_base_model import LogDictConfigs
+from autoware_ml.models.multi.tests.test_ptv3_export_graphs import TorchGraph
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
@@ -326,6 +330,35 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         """Test that the single-module export entry point points at the split export."""
         with self.assertRaisesRegex(RuntimeError, "build_export_specs"):
             self.centerpoint.build_export_spec(self._build_multi_task_batch_inputs())
+
+    def test_tensorrt_model_runs_the_exported_stages_in_place_of_the_modules(self) -> None:
+        """With the exported modules standing in for the engines, the subclass reproduces the model."""
+        self.centerpoint.eval()
+        batch = self._build_multi_task_batch_inputs()
+        specs = self.centerpoint.build_export_specs(batch)
+        with tempfile.TemporaryDirectory() as engine_dir:
+            for name in CenterPointTensorRTModel.ENGINE_NAMES:
+                Path(engine_dir, f"{name}.engine").touch()
+            deployed = CenterPointTensorRTModel(
+                engine_dir=engine_dir,
+                data_preprocessor=self.data_preprocessor,
+                pts_voxel_encoder=self.pillar_feature_net,
+                pts_middle_encoder=self.middle_encoder,
+                pts_backbone=self.backbone,
+                pts_neck=self.neck,
+                bbox_head=self.centerpoint.bbox_head,
+                log_dict_configs=self.log_dict_configs,
+            ).eval()
+        deployed.engines = {name: TorchGraph(spec) for name, spec in specs.items()}
+
+        with torch.no_grad():
+            expected = self.centerpoint(batch).detection3d().center_head()
+            actual = deployed(batch).detection3d().center_head()
+        for name in ["heatmap", "reg", "height", "dim", "rot", "vel"]:
+            # TF32 convolutions, which other tests enable, differ by about 1e-4.
+            torch.testing.assert_close(
+                getattr(actual, name), getattr(expected, name), atol=1e-3, rtol=1e-3
+            )
 
     def test_build_export_specs_requires_eval_mode(self) -> None:
         """Test that export spec construction rejects a model in training mode."""

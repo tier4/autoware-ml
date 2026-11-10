@@ -31,6 +31,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3En
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    PTv3TensorRTMixin,
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
     PTv3EncoderExportBase,
@@ -629,3 +630,9 @@ class PTv3Detection3DModel(PTv3BaseModel):
                 self.export_output_names,
             ),
         }
+
+
+class PTv3Detection3DTensorRTModel(PTv3TensorRTMixin, PTv3Detection3DModel):
+    """PTv3 detection whose exported graphs run as TensorRT engines."""
+
+    ENGINE_NAMES = ("ptv3_encoder", "ptv3_det3d_head")

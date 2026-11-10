@@ -45,8 +45,14 @@ deploy:
   tensorrt:
     enabled: false
 
+deployed:
+  # Subclass of the model that runs its exported graphs as TensorRT engines, see
+  # configs/deployed/tensorrt.yaml.
+  tensorrt_model: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointTensorRTModel
+
 model:
-  _target_: autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetection3DModel
+  # deployed=tensorrt swaps in deployed.tensorrt_model.
+  _target_: ${oc.select:deployed.model,autoware_ml.models.detection3d.main_modules.centerpoint.CenterPointDetection3DModel}
   metrics: ${metrics}
   log_dict_configs:
     _target_: autoware_ml.models.module_base_model.LogDictConfigs

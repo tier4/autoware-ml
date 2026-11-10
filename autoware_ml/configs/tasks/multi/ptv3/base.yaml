@@ -78,8 +78,14 @@ deploy:
   tensorrt:
     enabled: false
 
+deployed:
+  # Subclass of the model that runs its exported graphs as TensorRT engines, see
+  # configs/deployed/tensorrt.yaml.
+  tensorrt_model: autoware_ml.models.multi.ptv3_det3d_seg3d.PTv3Det3DSeg3DTensorRTModel
+
 model:
-  _target_: autoware_ml.models.multi.ptv3_det3d_seg3d.PTv3Det3DSeg3DModel
+  # deployed=tensorrt swaps in deployed.tensorrt_model.
+  _target_: ${oc.select:deployed.model,autoware_ml.models.multi.ptv3_det3d_seg3d.PTv3Det3DSeg3DModel}
   _convert_: all
   metrics: ${metrics}
   log_dict_configs:

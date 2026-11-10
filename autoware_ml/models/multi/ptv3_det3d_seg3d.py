@@ -58,6 +58,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    PTv3TensorRTMixin,
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
     PTv3EncoderExportBase,
@@ -515,3 +516,9 @@ class _PTv3Det3DSeg3DExportModule(PTv3EncoderExportBase):
         detection = dict(zip(detection3d_names, det3d_outputs.export_tensors(detection3d_names)))
         outputs = segmentation | detection
         return tuple(outputs[name] for name in self.output_names)
+
+
+class PTv3Det3DSeg3DTensorRTModel(PTv3TensorRTMixin, PTv3Det3DSeg3DModel):
+    """PTv3 detection and segmentation whose exported graphs run as TensorRT engines."""
+
+    ENGINE_NAMES = ("ptv3_encoder", "ptv3_seg3d_head", "ptv3_det3d_head")
