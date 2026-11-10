@@ -19,7 +19,9 @@ PointTransformerV3 is a LiDAR encoder for LiDAR 3D semantic segmentation and
   `Sparse4DHead`, whose queries sample the sparse voxels at keypoints around
   their anchors with no BEV canvas, and carry the most confident instances from
   one frame of a scenario to the next. The keypoints sample the sparse voxels,
-  dense BEV maps of the stages, or both. `Sparse4DDetectionModel` runs the same
+  dense BEV maps of the stages, or both, or the queries attend to every cell of
+  the BEV maps with the shared positional embedding of CMT in place of the
+  keypoint sampling. `Sparse4DDetectionModel` runs the same
   head on the BEVFusion lidar network instead: its lidar branch `Sparse4DLidar`
   holds the sin/cos voxel encoder, the sparse encoder, the SECOND backbone and
   FPN of `BEVFusionLidar`, reading single frames without a time lag, and the
@@ -82,6 +84,7 @@ and adds features with these configs under its `t4dataset/` directory:
 | `base_bev_level`             | One dense BEV level (0.96 m) sampled next to the sparse voxels    |
 | `base_sparse_bev_multiscale` | A three scale BEV pyramid (0.48, 0.96, 1.92 m) next to the voxels |
 | `base_bev_multiscale`        | The three scale BEV pyramid in place of the sparse voxels         |
+| `base_bev_attention`         | Cross attention over every cell of the pyramid, no keypoints      |
 
 Every joint lidar experiment comes in four samplings, named by the suffix of its config: none
 for the sparse voxels, `_sparse_bev`, `_sparse_bev_multiscale` and `_bev`. The experiment and its
@@ -99,7 +102,8 @@ experiment_name: my_experiment_bev
 
 The detection only experiments bind `detection3d/sparse4d/t4dataset/base_voxel0170_122m`, the
 dynamic classes of BEVFusion on its lidar network, and take no add-on: the head samples the BEV
-map of the neck as it is.
+map of the neck as it is. The add-on `detection3d/sparse4d/base_bev_attention` replaces the
+keypoint sampling with cross attention over every cell of the map.
 
 ## Training
 

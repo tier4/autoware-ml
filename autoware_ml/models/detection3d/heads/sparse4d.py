@@ -1064,6 +1064,198 @@ class BEVDeformableAggregation(nn.Module):
         return self.output_proj(bev_deformable_aggregation(key_points, weights, levels))
 
 
+def sincos_position_embedding(
+    position: torch.Tensor, num_feats: int, temperature: float = 10000.0
+) -> torch.Tensor:
+    """Sine and cosine embedding of unit range ``(x, y)`` positions, the ``pos2embed`` of CMT.
+
+    Every axis gets ``num_feats`` features over the wavelengths of the transformer embedding,
+    the sine and the cosine of every wavelength alternating. The y features come first.
+
+    Args:
+        position: Positions ``(..., 2)`` in the unit range.
+        num_feats: Features per axis, even.
+        temperature: Base of the wavelength progression.
+
+    Returns:
+        Embedding ``(..., 2 * num_feats)``.
+    """
+    scaled = position * (2.0 * math.pi)
+    wavelength = torch.arange(num_feats, dtype=scaled.dtype, device=scaled.device)
+    wavelength = temperature ** (2.0 * wavelength.div(2, rounding_mode="floor") / num_feats)
+    embeddings = []
+    for axis in (_Y, _X):
+        phase = scaled[..., axis, None] / wavelength
+        embeddings.append(
+            torch.stack((phase[..., 0::2].sin(), phase[..., 1::2].cos()), dim=-1).flatten(-2)
+        )
+    return torch.cat(embeddings, dim=-1)
+
+
+class CMTPositionEmbedding(nn.Module):
+    """Positional embedding of metric ``(x, y)`` shared by the BEV cells and the queries.
+
+    CMT (arXiv 2301.01283) puts the queries and the BEV map in one positional space: the
+    position, normalized to the unit range over the point cloud range, becomes a sine and cosine
+    embedding that one MLP maps to the feature dimension. A query reads it at its anchor center,
+    a BEV cell at its center, so a query and the cell under it share one embedding.
+    """
+
+    def __init__(
+        self, embed_dims: int, point_cloud_range: Sequence[float], temperature: float = 10000.0
+    ) -> None:
+        """Initialize the shared embedding.
+
+        Args:
+            embed_dims: Feature dimension of the embedding, even.
+            point_cloud_range: Metric range ``(x_min, y_min, z_min, x_max, y_max, z_max)`` that
+                normalizes the positions.
+            temperature: Base of the wavelength progression of the sine and cosine embedding.
+
+        Raises:
+            ValueError: If the feature dimension is odd.
+        """
+        super().__init__()
+        if embed_dims % 2 != 0:
+            raise ValueError(f"The sine and cosine embedding needs even dims, got {embed_dims}.")
+        self.embed_dims = embed_dims
+        self.temperature = temperature
+        self.register_buffer(
+            "origin",
+            torch.tensor([float(point_cloud_range[0]), float(point_cloud_range[1])]),
+            persistent=False,
+        )
+        self.register_buffer(
+            "extent",
+            torch.tensor(
+                [
+                    float(point_cloud_range[3] - point_cloud_range[0]),
+                    float(point_cloud_range[4] - point_cloud_range[1]),
+                ]
+            ),
+            persistent=False,
+        )
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dims * 2, embed_dims),
+            nn.ReLU(inplace=True),
+            nn.Linear(embed_dims, embed_dims),
+        )
+
+    def forward(self, position: torch.Tensor) -> torch.Tensor:
+        """Embed metric ``(x, y)`` positions ``(..., 2)`` into ``(..., C)``."""
+        unit = (position - self.origin) / self.extent
+        return self.mlp(sincos_position_embedding(unit, self.embed_dims, self.temperature))
+
+    def cells(self, level: BEVLevel) -> torch.Tensor:
+        """Embed the cell centers of a BEV level ``(H * W, C)``, row major like its flattened map."""
+        height, width = level.feat.shape[-2:]
+        origin = self.origin.new_tensor(level.grid_origin)
+        xs = (torch.arange(width, device=origin.device) + 0.5) * level.cell_size + origin[0]
+        ys = (torch.arange(height, device=origin.device) + 0.5) * level.cell_size + origin[1]
+        grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
+        return self(torch.stack([grid_x, grid_y], dim=-1).reshape(-1, 2))
+
+
+class BEVCrossAttention(nn.Module):
+    """Attend from every query to every cell of the BEV maps, in place of the aggregation.
+
+    The CMT decoder reads the lidar map with plain cross attention: the queries and the cells
+    carry the shared :class:`CMTPositionEmbedding`, so the attention logits compare positions
+    next to features, and the values are the cell features alone. The block takes the inputs of
+    :class:`SparseDeformableAggregation` and reads no keypoints and no sparse voxels. The anchor
+    embedding of Sparse4D stays with the instance attention and the refinement.
+    """
+
+    def __init__(
+        self,
+        *,
+        embed_dims: int,
+        bev_channels: int,
+        num_heads: int,
+        position_embedding: CMTPositionEmbedding,
+        dropout: float = 0.0,
+        attn_drop: float = 0.0,
+    ) -> None:
+        """Initialize the cross attention block.
+
+        Args:
+            embed_dims: Instance feature dimension.
+            bev_channels: Feature dimension of the BEV maps.
+            num_heads: Number of attention heads.
+            position_embedding: Embedding shared by the queries, the cells and the other blocks.
+            dropout: Dropout on the attended features.
+            attn_drop: Dropout on the attention weights in training.
+
+        Raises:
+            ValueError: If the feature dimension does not split into the heads.
+        """
+        super().__init__()
+        if embed_dims % num_heads != 0:
+            raise ValueError(f"embed_dims {embed_dims} not divisible by num_heads {num_heads}.")
+        self.embed_dims = embed_dims
+        self.num_heads = num_heads
+        self.attn_drop = attn_drop
+        self.position_embedding = position_embedding
+        self.input_proj = nn.Linear(bev_channels, embed_dims)
+        self.q_proj = nn.Linear(embed_dims, embed_dims)
+        self.k_proj = nn.Linear(embed_dims, embed_dims)
+        self.v_proj = nn.Linear(embed_dims, embed_dims)
+        self.out_proj = nn.Linear(embed_dims, embed_dims)
+        self.proj_drop = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        instance_feature: torch.Tensor,
+        anchor: torch.Tensor,
+        anchor_embed: torch.Tensor,
+        levels: Sequence[SparseLevel],
+        bev_levels: Sequence[BEVLevel] = (),
+        context: Any = None,
+    ) -> torch.Tensor:
+        """Attend to the BEV cells and add the result to the instance features.
+
+        Args:
+            instance_feature: Instance features ``(B, N, C)``.
+            anchor: Anchor states ``(B, N, 10)``, the queries take their position from them.
+            anchor_embed: Anchor embeddings ``(B, N, C)``, not read.
+            levels: Sparse stages, not read.
+            bev_levels: BEV maps the queries attend to, every cell of every level is one key.
+            context: Frame context of a subclass block, None for the lidar block.
+
+        Returns:
+            Updated instance features ``(B, N, C)``.
+
+        Raises:
+            ValueError: If the block gets no BEV map or a frame context.
+        """
+        if context is not None:
+            raise ValueError("The BEV attention block reads no frame context.")
+        if len(bev_levels) == 0:
+            raise ValueError("The BEV attention block needs BEV maps.")
+        query = instance_feature + self.position_embedding(anchor[..., _X : _Y + 1])
+        value = torch.cat(
+            [self.input_proj(level.feat.flatten(2).transpose(1, 2)) for level in bev_levels], dim=1
+        )
+        key = value + torch.cat([self.position_embedding.cells(level) for level in bev_levels])
+        return instance_feature + self.proj_drop(self._attend(query, key, value))
+
+    def _attend(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor) -> torch.Tensor:
+        """Multi-head scaled dot product attention over the cells, ``(B, N, C)``."""
+        batch_size = query.shape[0]
+        head_dims = self.embed_dims // self.num_heads
+
+        def split_heads(tokens: torch.Tensor) -> torch.Tensor:
+            return tokens.reshape(batch_size, -1, self.num_heads, head_dims).transpose(1, 2)
+
+        attended = F.scaled_dot_product_attention(
+            split_heads(self.q_proj(query)),
+            split_heads(self.k_proj(key)),
+            split_heads(self.v_proj(value)),
+            dropout_p=self.attn_drop if self.training else 0.0,
+        )
+        return self.out_proj(attended.transpose(1, 2).reshape(batch_size, -1, self.embed_dims))
+
+
 class DecoupledInstanceAttention(nn.Module):
     """Instance attention with decoupled (concatenated) anchor embeddings.
 
@@ -1459,6 +1651,7 @@ class SparseQueryHead(nn.Module):
         bev_aggregation: Callable[[], BEVDeformableAggregation | None] = lambda: None,
         sample_sparse: bool = True,
         aggregation: Callable[..., SparseDeformableAggregation] = SparseDeformableAggregation,
+        bev_attention: Callable[[], BEVCrossAttention] | None = None,
     ) -> None:
         """Create the decoder blocks.
 
@@ -1469,7 +1662,8 @@ class SparseQueryHead(nn.Module):
             num_groups: Feature groups of the deformable aggregation.
             feedforward_channels: Hidden width of the FFN blocks.
             dropout: Dropout probability in the attention and FFN blocks.
-            attn_drop: Keypoint dropout of the aggregation in training.
+            attn_drop: Keypoint dropout of the aggregation, or the attention dropout of the BEV
+                attention, in training.
             temporal: Whether the blocks attend to a temporal memory.
             point_cloud_range: Metric range of the voxel grid.
             grid_size: Metric size of the input voxel grid.
@@ -1485,6 +1679,8 @@ class SparseQueryHead(nn.Module):
             sample_sparse: Whether the blocks sample the sparse voxels.
             aggregation: Builds the deformable aggregation of one block from its keyword
                 arguments.
+            bev_attention: Builds the BEV cross attention of one block, which then takes the
+                place of its deformable aggregation. None for the aggregation.
         """
         self.num_decoder = num_decoder
         self.bev = bev
@@ -1512,6 +1708,7 @@ class SparseQueryHead(nn.Module):
         self.level_grids = nn.ModuleList(
             [SparseLevelGrid(point_cloud_range, grid_size, stride) for stride in feature_strides]
         )
+        # The lidar block of every decoder, the deformable aggregation or the BEV attention
         self.deformable = nn.ModuleList(
             [
                 aggregation(
@@ -1524,6 +1721,8 @@ class SparseQueryHead(nn.Module):
                     bev_aggregation=bev_aggregation(),
                     sample_sparse=sample_sparse,
                 )
+                if bev_attention is None
+                else bev_attention()
                 for _ in range(num_decoder)
             ]
         )
@@ -1930,7 +2129,8 @@ class Sparse4DHead(SparseQueryHead):
             dropout: Dropout probability in the attention and FFN blocks.
             fix_scale: Fixed keypoint offsets as fractions of the box size.
             num_learnable_pts: Keypoints per anchor that the instance feature places.
-            attn_drop: Keypoint dropout of the aggregation in training.
+            attn_drop: Keypoint dropout of the aggregation, or the attention dropout of the BEV
+                attention, in training.
             reg_weights: Regression loss weight of every anchor channel.
             match_reg_weights: Matching cost weight of every anchor channel.
             cls_cost_weight: Classification cost weight of the matching.
@@ -1968,7 +2168,9 @@ class Sparse4DHead(SparseQueryHead):
             dn_noise_yaw: Half range of the uniform heading rotation in radians.
             dn_noise_velocity: Half range of the uniform velocity jitter in m/s.
             lidar_sampling: ``sparse`` samples the sparse voxels, ``sparse_bev`` adds the BEV
-                maps and ``bev`` samples the BEV maps alone.
+                maps and ``bev`` samples the BEV maps alone. ``bev_attention`` attends from
+                every query to every cell of the BEV maps with the shared CMT positional
+                embedding of :class:`BEVCrossAttention` in place of the deformable aggregation.
             bev: Builds the BEV levels of a frame from the stages. BEV sampling takes exactly
                 one of ``bev`` and ``bev_cell_size``.
             bev_cell_size: Metric cell size of the BEV map the head gets as its lidar features
@@ -1984,9 +2186,10 @@ class Sparse4DHead(SparseQueryHead):
                 ranks instead of the count of each rank.
         """
         super().__init__()
-        if lidar_sampling not in {"sparse", "sparse_bev", "bev"}:
+        if lidar_sampling not in {"sparse", "sparse_bev", "bev", "bev_attention"}:
             raise ValueError(
-                f"lidar_sampling must be sparse, sparse_bev or bev, got {lidar_sampling}."
+                "lidar_sampling must be sparse, sparse_bev, bev or bev_attention, got "
+                f"{lidar_sampling}."
             )
         num_bev_sources = int(bev is not None) + int(bev_cell_size is not None)
         if num_bev_sources != int(lidar_sampling != "sparse"):
@@ -2084,6 +2287,12 @@ class Sparse4DHead(SparseQueryHead):
             self.tracker = InstanceTracker(
                 num_temp_instances, min_observed_points, track_birth_score
             )
+        # CMT shares one positional embedding between the queries, the cells and the blocks
+        position_embedding = (
+            CMTPositionEmbedding(embed_dims, point_cloud_range)
+            if lidar_sampling == "bev_attention"
+            else None
+        )
         self._build_decoder(
             embed_dims=embed_dims,
             num_decoder=num_decoder,
@@ -2108,7 +2317,7 @@ class Sparse4DHead(SparseQueryHead):
             bev=bev,
             bev_cell_size=bev_cell_size,
             bev_aggregation=lambda: None
-            if lidar_sampling == "sparse"
+            if lidar_sampling in {"sparse", "bev_attention"}
             else BEVDeformableAggregation(
                 embed_dims=embed_dims,
                 bev_channels=bev_channels,
@@ -2117,8 +2326,18 @@ class Sparse4DHead(SparseQueryHead):
                 num_points=len(fix_scale) + num_learnable_pts,
                 attn_drop=attn_drop,
             ),
-            sample_sparse=lidar_sampling != "bev",
+            sample_sparse=lidar_sampling in {"sparse", "sparse_bev"},
             aggregation=aggregation,
+            bev_attention=None
+            if lidar_sampling != "bev_attention"
+            else lambda: BEVCrossAttention(
+                embed_dims=embed_dims,
+                bev_channels=bev_channels,
+                num_heads=num_heads,
+                position_embedding=position_embedding,
+                dropout=dropout,
+                attn_drop=attn_drop,
+            ),
         )
         self.loss_cls = SigmoidFocalLoss()
         self.loss_yns = GaussianFocalLoss()

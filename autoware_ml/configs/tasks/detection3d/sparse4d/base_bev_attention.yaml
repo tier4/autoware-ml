@@ -1,0 +1,6 @@
+# @package _global_
+# The queries attend to every cell of the neck map with the shared CMT positional embedding in
+# place of the deformable aggregation at the keypoints.
+model:
+  bbox_head:
+    lidar_sampling: bev_attention
