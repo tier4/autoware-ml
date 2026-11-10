@@ -32,6 +32,7 @@ from lightning.pytorch.loggers import Logger, MLFlowLogger
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
 import polars as pl
+import spconv.constants as spconv_constants
 
 from autoware_ml.utils.config.resolvers import register_config_resolvers
 from autoware_ml.utils.config.settings import CONFIGS_ROOT, SETTINGS_FILE, Settings
@@ -114,7 +115,9 @@ def configure_torch_runtime() -> None:
     """Apply shared PyTorch runtime settings for GPU execution.
 
     The helper enables TF32-friendly settings when CUDA is available and logs
-    the active GPU device.
+    the active GPU device. spconv keeps its own switch for the tensor-core
+    kernels of the sparse convolutions, which otherwise run fp32 on the CUDA
+    cores; it follows the dense convolutions and matmuls.
     """
     if not torch.cuda.is_available():
         return
@@ -122,6 +125,7 @@ def configure_torch_runtime() -> None:
     torch.set_float32_matmul_precision("medium")
     torch.backends.cudnn.fp32_precision = "tf32"
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+    spconv_constants.SPCONV_ALLOW_TF32 = True
 
     logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
     logger.info("TF32 precision enabled for improved performance")
