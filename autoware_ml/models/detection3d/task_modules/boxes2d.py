@@ -16,6 +16,10 @@
 
 These helpers back the auxiliary 2D detection head used by camera 3D
 detectors (Focal-PETR-style): box format conversion and IoU/GIoU overlaps.
+
+torchvision ships ``box_convert``, ``box_iou`` and ``generalized_box_iou``, but none of them
+computes aligned (element-wise) overlaps, and without an ``eps`` a zero-area pair gives NaN
+where the matching cost needs 0. The overlaps here are tested against torchvision's.
 """
 
 from __future__ import annotations
@@ -44,6 +48,10 @@ def bbox_overlaps(
 ) -> torch.Tensor:
     """Compute IoU or GIoU between two sets of ``(x1, y1, x2, y2)`` boxes.
 
+    The overlaps are computed in float32 whatever the input dtype: the areas of pixel boxes
+    overflow float16 (a 1900 x 1000 enclosing box is 1.9e6, above the float16 maximum of
+    65504), which would turn the overlap into NaN.
+
     Args:
         boxes1: Boxes with shape ``(N, 4)``.
         boxes2: Boxes with shape ``(M, 4)`` (or ``(N, 4)`` when aligned).
@@ -52,15 +60,26 @@ def bbox_overlaps(
         eps: Numerical stability constant.
 
     Returns:
-        Overlap tensor with shape ``(N,)`` when aligned, else ``(N, M)``.
+        Float32 overlap tensor with shape ``(N,)`` when aligned, else ``(N, M)``.
+
+    Raises:
+        ValueError: If the mode is unknown, a box tensor is not two-dimensional, or the
+            aligned counts differ.
     """
     if mode not in ("iou", "giou"):
         raise ValueError(f"Unsupported overlap mode '{mode}'.")
+    if boxes1.ndim != 2 or boxes2.ndim != 2:
+        raise ValueError(
+            f"Overlaps take two-dimensional (num_boxes, 4) tensors, got shapes "
+            f"{tuple(boxes1.shape)} and {tuple(boxes2.shape)}."
+        )
     if is_aligned and boxes1.shape[0] != boxes2.shape[0]:
         raise ValueError(
             f"Aligned overlaps need as many boxes1 as boxes2, got {boxes1.shape[0]} and "
             f"{boxes2.shape[0]}."
         )
+    boxes1 = boxes1.float()
+    boxes2 = boxes2.float()
     area1 = (boxes1[..., 2] - boxes1[..., 0]).clamp(min=0) * (
         boxes1[..., 3] - boxes1[..., 1]
     ).clamp(min=0)

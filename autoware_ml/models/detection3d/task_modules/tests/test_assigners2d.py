@@ -24,6 +24,7 @@ import torch
 from autoware_ml.models.detection3d.task_modules.assigners2d import (
     AssignResult2D,
     BBoxL1Cost2D,
+    Center2DL1Cost,
     HungarianAssigner2D,
     IoUCost2D,
 )
@@ -50,6 +51,55 @@ def _assign(bbox_pred, cls_pred, centers, gt_bboxes, gt_labels, gt_centers=None)
     return HungarianAssigner2D().assign(
         bbox_pred, cls_pred, centers, gt_bboxes, gt_labels, gt_centers, IMAGE_HEIGHT, IMAGE_WIDTH
     )
+
+
+class TestMatchCosts2D(unittest.TestCase):
+    """The cost terms by hand, so a wrong weight, sign or box form does not pass unnoticed."""
+
+    def test_box_l1_cost_converts_the_ground_truth_to_the_proposal_form(self) -> None:
+        """A (0.5, 0.5, 0.2, 0.2) proposal is (0.4, 0.4)-(0.6, 0.6): L1 0 to that box.
+
+        To (0.4, 0.4)-(0.8, 0.8), which is (0.6, 0.6, 0.4, 0.4), the L1 is 0.6; weighted by 5
+        that is 3. In the ``xyxy`` form the proposal is converted instead and the L1 is 0.4.
+        """
+        bbox_pred = torch.tensor([[0.5, 0.5, 0.2, 0.2]])
+        gt_bboxes = torch.tensor([[0.4, 0.4, 0.6, 0.6], [0.4, 0.4, 0.8, 0.8]])
+
+        torch.testing.assert_close(
+            BBoxL1Cost2D(weight=5.0)(bbox_pred, gt_bboxes), torch.tensor([[0.0, 3.0]])
+        )
+        torch.testing.assert_close(
+            BBoxL1Cost2D(weight=5.0, box_format="xyxy")(bbox_pred, gt_bboxes[1:]),
+            torch.tensor([[2.0]]),
+        )
+
+    def test_iou_cost_is_the_negative_overlap(self) -> None:
+        """The pair with GIoU 1/7 - 2/9 costs minus twice that; the IoU mode costs -2/7."""
+        boxes = torch.tensor([[0.0, 0.0, 2.0, 2.0]])
+        gt_bboxes = torch.tensor([[1.0, 1.0, 3.0, 3.0]])
+
+        torch.testing.assert_close(
+            IoUCost2D(weight=2.0)(boxes, gt_bboxes), torch.tensor([[-(1 / 7 - 2 / 9) * 2]])
+        )
+        torch.testing.assert_close(
+            IoUCost2D(weight=2.0, iou_mode="iou")(boxes, gt_bboxes), torch.tensor([[-2 / 7]])
+        )
+
+    def test_center_cost_is_the_weighted_l1_distance(self) -> None:
+        """(0.5, 0.5) to (0.6, 0.3) is 0.3 apart; weighted by 10 that is 3."""
+        torch.testing.assert_close(
+            Center2DL1Cost(weight=10.0)(torch.tensor([[0.5, 0.5]]), torch.tensor([[0.6, 0.3]])),
+            torch.tensor([[3.0]]),
+        )
+
+    def test_the_default_assigner_carries_the_reference_weights(self) -> None:
+        """Focal-PETR matches with classification 2, box L1 5 on (cx, cy, w, h), GIoU 2, center 10."""
+        assigner = HungarianAssigner2D()
+
+        self.assertEqual(assigner.cls_cost.weight, 2.0)
+        self.assertEqual((assigner.reg_cost.weight, assigner.reg_cost.box_format), (5.0, "xywh"))
+        self.assertEqual((assigner.iou_cost.weight, assigner.iou_cost.iou_mode), (2.0, "giou"))
+        self.assertEqual(assigner.centers2d_cost.weight, 10.0)
 
 
 class TestHungarianAssigner2D(unittest.TestCase):

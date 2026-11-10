@@ -99,6 +99,22 @@ class TestBBoxOverlaps(unittest.TestCase):
             bbox_overlaps(_random_boxes(3, seed=4), torch.zeros(0, 4), mode="giou").shape, (3, 0)
         )
 
+    def test_float16_pixel_boxes_are_computed_in_float32(self) -> None:
+        """The 1900 x 1000 enclosing box overflows float16; the float32 GIoU is returned instead."""
+        boxes1 = torch.tensor([[0.0, 0.0, 1900.0, 1000.0]])
+        boxes2 = torch.tensor([[10.0, 10.0, 1800.0, 900.0]])
+        expected = generalized_box_iou(boxes1, boxes2)
+
+        result = bbox_overlaps(boxes1.half(), boxes2.half(), mode="giou")
+
+        self.assertEqual(result.dtype, torch.float32)
+        torch.testing.assert_close(result, expected)
+
+    def test_overlaps_reject_batched_boxes(self) -> None:
+        """A (batch, num_boxes, 4) input would broadcast into a wrong shape instead of failing."""
+        with self.assertRaisesRegex(ValueError, "two-dimensional"):
+            bbox_overlaps(torch.rand(2, 5, 4), torch.rand(2, 5, 4))
+
     def test_aligned_overlaps_reject_mismatched_counts(self) -> None:
         """Aligned mode pairs boxes one to one, so one box against three is an error."""
         with self.assertRaisesRegex(ValueError, "as many"):
