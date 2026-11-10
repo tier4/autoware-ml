@@ -1150,7 +1150,9 @@ def test_ptv3_frozen_encoder_supports_decoder_block_backward() -> None:
 # The tests below check the padding index kernels (`build_patch_order`,
 # `_get_padding_and_inverse`) directly: the fill layout they compute is not observable from
 # the attention outputs (a uniform key multiplicity cancels in the softmax).
-def _build_attention(patch_size: int, order_index: int = 0) -> SerializedAttention:
+def _build_attention(
+    patch_size: int, order_index: int = 0, cosine_attention: bool = False
+) -> SerializedAttention:
     """Return a non-flash attention module with a fixed window size."""
     attention = SerializedAttention(
         channels=32,
@@ -1165,6 +1167,7 @@ def _build_attention(patch_size: int, order_index: int = 0) -> SerializedAttenti
         enable_flash=False,
         upcast_attention=False,
         upcast_softmax=False,
+        cosine_attention=cosine_attention,
     ).eval()
     # `__init__` zeroes `patch_size` when flash is off, and `forward` - which the fill tests
     # bypass to reach `_get_padding_and_inverse` - is what normally sets it.
@@ -1300,6 +1303,128 @@ def test_export_attention_is_exact_when_the_count_divides_the_window(num_points:
             return attention(point).feat
 
     assert torch.allclose(run(padded), run(reference), atol=1e-5)
+
+
+def test_cosine_attention_bounds_every_logit() -> None:
+    """
+    Input: cosine attention whose learned scale grew to 1e4 and features of magnitude 1e4.
+    Expected: the logits stay within the clamped scale of 100.
+    Check: the largest logit that reaches the softmax.
+    """
+    attention = _build_attention(4, cosine_attention=True)
+    with torch.no_grad():
+        attention.logit_scale.fill_(math.log(1e4))
+    logits = []
+    attention.softmax.register_forward_hook(lambda module, args, output: logits.append(args[0]))
+    point = _identity_point(4)
+    point.feat = torch.randn(4, 32) * 1e4
+
+    with torch.no_grad():
+        attention(point)
+
+    assert float(logits[0].abs().max()) <= 100.0 + 1e-3
+
+
+def test_export_folds_the_cosine_head_scales() -> None:
+    """
+    Input: cosine attention prepared for export, its learned scale changed afterwards.
+    Expected: the export path keeps the scales folded at preparation.
+    Check: the export output equals the training path output from before the change.
+    """
+    torch.manual_seed(0)
+    feat = torch.randn(4, 32)
+    attention = _build_attention(4, cosine_attention=True)
+
+    def run(export: bool) -> torch.Tensor:
+        point = _identity_point(4, 4 if export else None)
+        point.feat = feat.clone()
+        with torch.no_grad():
+            return attention(point).feat
+
+    reference = run(export=False)
+    attention.prepare_for_export()
+    with torch.no_grad():
+        attention.logit_scale.zero_()
+
+    torch.testing.assert_close(run(export=True), reference)
+
+
+def test_cosine_attention_refuses_a_manual_scale() -> None:
+    """
+    Input: cosine attention with a manual qk_scale.
+    Expected: the module refuses to build, cosine attention learns its scale.
+    """
+    with pytest.raises(ValueError, match="qk_scale"):
+        SerializedAttention(
+            channels=32,
+            num_heads=4,
+            patch_size=4,
+            qkv_bias=True,
+            qk_scale=0.5,
+            attn_drop=0.0,
+            proj_drop=0.0,
+            order_index=0,
+            enable_rpe=False,
+            enable_flash=False,
+            upcast_attention=False,
+            upcast_softmax=False,
+            cosine_attention=True,
+        )
+
+
+def test_cosine_attention_hands_flash_unit_keys_and_scaled_queries() -> None:
+    """
+    Input: cosine attention on the flash path with a stand-in flash module, eight points.
+    Expected: flash gets no extra scale, every key of every head has unit norm and every query
+      the scale of its head, so the flash logits are the bounded cosine logits.
+    Check: the softmax scale and the norms of the packed queries and keys.
+    """
+    calls: list[tuple[torch.Tensor, float]] = []
+
+    def flash_attn_varlen_qkvpacked_func(
+        qkv: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        max_seqlen: int,
+        dropout_p: float,
+        softmax_scale: float,
+        deterministic: bool = False,
+    ) -> torch.Tensor:
+        calls.append((qkv.float(), softmax_scale))
+        return qkv[:, 2]
+
+    flash_module = SimpleNamespace(
+        flash_attn_varlen_qkvpacked_func=flash_attn_varlen_qkvpacked_func
+    )
+    point = _identity_point(8)
+    point.feat = torch.randn(8, 32) * 5.0
+    with patch(
+        "autoware_ml.models.segmentation3d.encoders.ptv3.load_flash_attn_module",
+        return_value=flash_module,
+    ):
+        attention = SerializedAttention(
+            channels=32,
+            num_heads=4,
+            patch_size=4,
+            qkv_bias=True,
+            qk_scale=None,
+            attn_drop=0.0,
+            proj_drop=0.0,
+            order_index=0,
+            enable_rpe=False,
+            enable_flash=True,
+            upcast_attention=False,
+            upcast_softmax=False,
+            cosine_attention=True,
+        )
+        with torch.no_grad():
+            attention.logit_scale.copy_(torch.log(torch.tensor([2.0, 5.0, 10.0, 20.0])))
+            attention(point)
+
+    ((packed, softmax_scale),) = calls
+    assert softmax_scale == 1.0
+    scales = attention.head_scales().detach().expand(8, 4)
+    torch.testing.assert_close(packed[:, 1].norm(dim=-1), torch.ones(8, 4), rtol=1e-2, atol=0)
+    torch.testing.assert_close(packed[:, 0].norm(dim=-1), scales, rtol=1e-2, atol=0)
 
 
 @pytest.mark.parametrize("num_points", [6, 9])
