@@ -4,7 +4,7 @@ Modules to save decoded predictions from multi-task models.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from pydantic import BaseModel, ConfigDict
 

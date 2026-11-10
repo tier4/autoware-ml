@@ -21,7 +21,8 @@ integration, and trainer execution for evaluating trained checkpoints.
 import logging
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 
 import hydra

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Sequence, NamedTuple
+from typing import NamedTuple
+from collections.abc import Sequence
 
 import torch
 from jaxtyping import Bool

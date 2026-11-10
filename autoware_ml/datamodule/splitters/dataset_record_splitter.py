@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Sequence, Mapping
+from collections.abc import Sequence, Mapping
 from types import MappingProxyType
 
 import polars as pl

@@ -6,7 +6,7 @@ detection heads during training target construction.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from jaxtyping import Float32, Bool, Int32, Int64

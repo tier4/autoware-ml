@@ -6,7 +6,7 @@ shared by CenterPoint-style dense heads.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from jaxtyping import Bool, Float32, Int32, Int64
 import math

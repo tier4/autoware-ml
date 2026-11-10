@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
+from collections.abc import Sequence
 
 from jaxtyping import Float32, Int32, Int64
 import torch

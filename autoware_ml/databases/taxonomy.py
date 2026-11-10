@@ -26,7 +26,7 @@ sample is loaded, so the record table serves every taxonomy.
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 
 class LabelVocabulary:

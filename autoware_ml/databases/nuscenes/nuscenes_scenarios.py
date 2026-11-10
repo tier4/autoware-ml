@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
 from nuscenes.nuscenes import NuScenes

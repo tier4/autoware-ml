@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 import logging
 from collections import defaultdict
 import yaml

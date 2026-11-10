@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 import copy
-from typing import Sequence
+from collections.abc import Sequence
 
 from jaxtyping import Float32, Int32, Bool
 import torch

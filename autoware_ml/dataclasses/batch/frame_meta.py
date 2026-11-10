@@ -13,7 +13,8 @@ predecessor at all.
 
 from __future__ import annotations
 
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
+from collections.abc import Sequence
 
 from jaxtyping import Float32, Float64
 import torch

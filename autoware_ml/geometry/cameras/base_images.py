@@ -4,7 +4,7 @@ It is a base class for all image data structures, providing common attributes an
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from jaxtyping import Float32, Float64, Int64
 from pydantic import BaseModel, ConfigDict, model_validator

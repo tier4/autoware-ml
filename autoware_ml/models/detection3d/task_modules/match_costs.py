@@ -5,7 +5,7 @@ This module contains pairwise matching costs used by Hungarian assignment.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from jaxtyping import Float32, Int64, Bool

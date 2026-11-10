@@ -6,7 +6,7 @@ Note that the code is modified from:
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d/lidar_box3d.py
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 from torch import Tensor
 from jaxtyping import Bool, Float32, Int32
 import torch
