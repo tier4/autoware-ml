@@ -33,6 +33,7 @@ from jaxtyping import Float32, Int, Int64
 import torch
 
 from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +93,6 @@ def mean_neighbors(coords: Int[torch.Tensor, "num_voxels 3"]) -> float:
     return float(found.sum()) / len(coords)
 
 
-def _stage_shape(grid_shape: Int64[torch.Tensor, "3"], scale: int) -> Int64[torch.Tensor, "3"]:
-    """Return the grid size of a stage, the finest one divided by ``scale`` and rounded up."""
-    return (grid_shape + scale - 1) // scale
-
-
 def _best_cells(cells: Cells, count: int, score: Float32[torch.Tensor, " num_cells"]) -> Cells:
     """Return the ``count`` best-scoring cells."""
     return cells[score.argsort()[:count]]
@@ -118,7 +114,7 @@ def _fit_neighbors(
     cells: Cells,
     grid_shape: Int64[torch.Tensor, "3"],
     center: Float32[torch.Tensor, "3"],
-    scale: int,
+    depth: int,
     target_neighbors: float,
     generator: torch.Generator,
     keep: Callable[[Float32[torch.Tensor, " num_cells"]], Cells],
@@ -127,9 +123,9 @@ def _fit_neighbors(
 
     The noise weight is bisected until the picked cells have ``target_neighbors`` on average.
     """
-    distance = (cells + 0.5 - center / scale).norm(dim=1)
+    distance = (cells + 0.5 - center / (1 << depth)).norm(dim=1)
     noise = torch.rand(len(cells), generator=generator) * distance.max()
-    distance[~(cells < _stage_shape(grid_shape, scale)).all(dim=1)] = math.inf
+    distance[~(cells < pooled_sparse_shape(grid_shape, depth)).all(dim=1)] = math.inf
     low_weight, high_weight, tolerance = 0.0, 64.0, 1e-3
     while high_weight - low_weight > tolerance:
         noise_weight = (low_weight + high_weight) / 2
@@ -147,7 +143,7 @@ def voxel_layout(
 
     Stage by stage, coarsest first, keeps the cells nearest ``spec.center``, ranked with noise
     whose weight is bisected until the stage's mean neighbors reach the target. Every
-    stage's grid is the finest one divided by its scale, rounded up as the model pools it.
+    stage's grid is the finest one pooled by ``2 ** depth``, rounded up as the model pools it.
 
     Args:
         spec: Voxel counts, pooling strides, grid, neighbor targets and center.
@@ -161,25 +157,27 @@ def voxel_layout(
     """
     voxel_counts, pooling_strides = spec.voxel_counts, spec.pooling_strides
     grid_shape, target_neighbors = spec.grid_shape, spec.target_neighbors
-    scale = math.prod(pooling_strides)
-    cells = torch.cartesian_prod(*(torch.arange(int(n)) for n in _stage_shape(grid_shape, scale)))
+    depth = sum(stride.bit_length() - 1 for stride in pooling_strides)
+    cells = torch.cartesian_prod(
+        *(torch.arange(int(n)) for n in pooled_sparse_shape(grid_shape, depth))
+    )
     if voxel_counts[-1] > len(cells):
         raise ValueError(f"{voxel_counts[-1]} voxels cannot pool to a grid of {len(cells)} cells")
     layout = _fit_neighbors(
         cells,
         grid_shape,
         spec.center,
-        scale,
+        depth,
         target_neighbors[-1],
         generator,
         functools.partial(_best_cells, cells, voxel_counts[-1]),
     )
     for stage in reversed(range(len(voxel_counts) - 1)):
         stride = pooling_strides[stage]
-        scale //= stride
+        depth -= stride.bit_length() - 1
         offsets = torch.tensor(list(itertools.product(range(stride), repeat=3)))
         cells = (layout[:, None] * stride + offsets[None]).reshape(-1, 3)
-        inside = int((cells < _stage_shape(grid_shape, scale)).all(dim=1).sum())
+        inside = int((cells < pooled_sparse_shape(grid_shape, depth)).all(dim=1).sum())
         if not len(layout) <= voxel_counts[stage] <= inside:
             raise ValueError(
                 f"{voxel_counts[stage]} voxels cannot pool to {len(layout)} with stride {stride}"
@@ -188,7 +186,7 @@ def voxel_layout(
             cells,
             grid_shape,
             spec.center,
-            scale,
+            depth,
             target_neighbors[stage],
             generator,
             functools.partial(_best_children, cells, len(layout), voxel_counts[stage]),
