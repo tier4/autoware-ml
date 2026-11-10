@@ -1,0 +1,325 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Multi-rank tests of the StreamPETR loss normalization.
+
+They spawn gloo process groups on CPU so the collectives of ``reduce_mean_count`` run. The
+property under test: sharding a batch over the ranks gives the DDP-averaged loss and gradients
+of the whole batch on one process, and a rank without ground truth still joins the denoising
+collective.
+
+Scope: the head's loss. The gradient test wraps one linear layer in DDP and feeds the head's
+loss fixed features, so it checks the loss normalization, not distributed training of the
+model. ``reduce_mean_count`` itself is tested in ``utils/tests``.
+"""
+
+from __future__ import annotations
+
+import unittest
+
+import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
+
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    StreamPETRDenoisingOutputs,
+    StreamPETRHeadOutputs,
+)
+from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
+from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
+from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
+from autoware_ml.models.detection3d.task_modules.match_costs import (
+    BBox3DL1Cost,
+    ClassificationCost,
+    IoU3DCost,
+)
+from autoware_ml.utils.tests.distributed_fixtures import (
+    GLOO_AVAILABLE,
+    spawn_gloo_workers,
+)
+
+_CLASS_NAMES = ["car", "truck", "bus"]
+_NUM_CLASSES = len(_CLASS_NAMES)
+_NUM_QUERIES = 32
+# _build_head's decoder layers and denoising groups.
+_NUM_LAYERS = 3
+_SCALAR = 2
+_FEATURES = 16
+
+
+def _build_head() -> StreamPETRHead:
+    torch.manual_seed(0)
+    return StreamPETRHead(
+        class_names=_CLASS_NAMES,
+        in_channels=128,
+        hidden_dim=128,
+        num_queries=_NUM_QUERIES,
+        num_decoder_layers=3,
+        num_heads=4,
+        feedforward_channels=256,
+        memory_len=32,
+        topk_proposals=8,
+        num_propagated=8,
+        with_dn=True,
+        with_ego_pos=True,
+        depth_num=8,
+        LID=True,
+        position_range=[-12.0, -12.0, -6.0, 12.0, 12.0, 6.0],
+        scalar=2,
+        noise_scale=0.5,
+        dn_weight=1.0,
+        split=0.5,
+        bbox_coder=NMSFreeBBoxCoder3D(
+            pc_range=[-10.0, -10.0, -5.0, 10.0, 10.0, 5.0],
+            post_center_range=[-12.0, -12.0, -6.0, 12.0, 12.0, 6.0],
+            score_threshold=0.01,
+            max_num=16,
+        ),
+        assigner=HungarianAssigner3D(
+            cls_cost=ClassificationCost(weight=2.0),
+            reg_cost=BBox3DL1Cost(
+                weight=0.25, code_weights=(2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0)
+            ),
+            iou_cost=IoU3DCost(weight=0.0),
+            point_cloud_range=[-10.0, -10.0, -5.0, 10.0, 10.0, 5.0],
+        ),
+        point_cloud_range=[-10.0, -10.0, -5.0, 10.0, 10.0, 5.0],
+        code_weights=[2.0, 2.0] + [1.0] * 8,
+    )
+
+
+def _sample(
+    num_boxes: int, seed: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Deterministic (cls_scores, bbox_preds, gt_boxes, gt_labels) for one frame."""
+    generator = torch.Generator().manual_seed(seed)
+    cls_scores = torch.randn(_NUM_QUERIES, _NUM_CLASSES, generator=generator)
+    bbox_preds = torch.randn(_NUM_QUERIES, 10, generator=generator)
+    gt_boxes = torch.rand(num_boxes, 9, generator=generator) * 4.0 - 2.0
+    gt_boxes[:, 3:6] = gt_boxes[:, 3:6].abs() + 1.0  # positive dims
+    gt_labels = torch.arange(num_boxes, dtype=torch.long) % _NUM_CLASSES
+    return cls_scores, bbox_preds, gt_boxes, gt_labels
+
+
+def _matching_losses(
+    head: StreamPETRHead,
+    frames: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+) -> torch.Tensor:
+    """The (cls, bbox) losses of the frames as a batch, from one-layer head outputs."""
+    outputs = StreamPETRHeadOutputs(
+        all_cls_scores=torch.stack([frame[0] for frame in frames]).unsqueeze(0),
+        all_bbox_preds=torch.stack([frame[1] for frame in frames]).unsqueeze(0),
+        denoising=None,
+    )
+    losses = head.loss(
+        outputs,
+        [frame[2] for frame in frames],
+        [frame[3] for frame in frames],
+        padding_mask=torch.zeros(len(frames), dtype=torch.bool),
+    )
+    return torch.stack([losses["loss_cls"].detach(), losses["loss_bbox"].detach()])
+
+
+def _sharding_invariance_worker(rank: int, world_size: int) -> None:
+    head = _build_head().train()
+    frames = [_sample(2, seed=10), _sample(8, seed=20)]
+
+    sharded = _matching_losses(head, [frames[rank]])
+    gathered = [torch.zeros_like(sharded) for _ in range(world_size)]
+    dist.all_gather(gathered, sharded)
+    ddp_averaged = torch.stack(gathered).mean(dim=0)
+
+    # The whole batch on every rank: identical counts reduce to themselves.
+    combined = _matching_losses(head, frames)
+
+    torch.testing.assert_close(ddp_averaged, combined, rtol=1e-5, atol=1e-6)
+
+
+def _dn_mixed_gt_worker(rank: int, world_size: int) -> None:
+    head = _build_head().train()
+    if rank == 0:
+        _, _, gt_boxes, gt_labels = _sample(4, seed=30)
+    else:
+        gt_boxes = torch.zeros(0, 9)
+        gt_labels = torch.zeros(0, dtype=torch.long)
+
+    # The rank without boxes gets ``denoising=None``, as from the head, and must still
+    # reach the denoising count collective.
+    num_layers = head.num_decoder_layers
+    generator = torch.Generator().manual_seed(40)
+    all_cls_scores = torch.randn(num_layers, 1, _NUM_QUERIES, _NUM_CLASSES, generator=generator)
+    all_bbox_preds = torch.randn(num_layers, 1, _NUM_QUERIES, 10, generator=generator)
+    if rank == 0:
+        pad = 8
+        num_known = gt_labels.numel() * head.scalar
+        denoising = StreamPETRDenoisingOutputs(
+            cls_scores=torch.randn(num_layers, 1, pad, _NUM_CLASSES, generator=generator),
+            bbox_preds=torch.randn(num_layers, 1, pad, 10, generator=generator),
+            known_labels=gt_labels.repeat(head.scalar),
+            known_boxes=gt_boxes.repeat(head.scalar, 1),
+            batch_indices=torch.zeros(num_known, dtype=torch.long),
+            slot_indices=torch.arange(num_known),
+        )
+    else:
+        denoising = None
+    outputs = StreamPETRHeadOutputs(
+        all_cls_scores=all_cls_scores, all_bbox_preds=all_bbox_preds, denoising=denoising
+    )
+
+    losses = head.loss(
+        outputs, [gt_boxes], [gt_labels], padding_mask=torch.zeros(1, dtype=torch.bool)
+    )
+
+    # The worker runs in its own process, so it checks with a case of its own.
+    case = unittest.TestCase()
+    case.assertIn("dn_loss_cls", losses)
+    case.assertIn("dn_loss_bbox", losses)
+    if rank == 0:
+        case.assertGreater(losses["dn_loss_cls"].item(), 0.0)
+        case.assertGreater(losses["dn_loss_bbox"].item(), 0.0)
+    else:
+        case.assertEqual(losses["dn_loss_cls"].item(), 0.0)
+        case.assertEqual(losses["dn_loss_bbox"].item(), 0.0)
+
+
+def _frame(
+    num_boxes: int, seed: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Query and denoising features of one frame with its boxes and labels.
+
+    The denoising features hold ``_SCALAR`` queries per box, in the order of
+    ``labels.repeat(_SCALAR)``.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    queries = torch.randn(_NUM_LAYERS, _NUM_QUERIES, _FEATURES, generator=generator)
+    known = torch.randn(_NUM_LAYERS, _SCALAR * num_boxes, _FEATURES, generator=generator)
+    _, _, gt_boxes, gt_labels = _sample(num_boxes, seed)
+    return queries, known, gt_boxes, gt_labels
+
+
+def _layer_loss(
+    head: StreamPETRHead,
+    layer: torch.nn.Module,
+    frames: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+) -> torch.Tensor:
+    """Total head loss of the frames, every logit and box made by one call of ``layer``."""
+    sizes = [queries.shape[1] + known.shape[1] for queries, known, _, _ in frames]
+    num_known = [known.shape[1] for _, known, _, _ in frames]
+    outputs = layer(torch.cat([torch.cat(frame[:2], dim=1) for frame in frames], dim=1))
+    per_frame = outputs.split(sizes, dim=1)
+    known_outputs = torch.stack(
+        [
+            torch.nn.functional.pad(out[:, _NUM_QUERIES:], (0, 0, 0, max(num_known) - count))
+            for out, count in zip(per_frame, num_known)
+        ],
+        dim=1,
+    )
+    queries = torch.stack([out[:, :_NUM_QUERIES] for out in per_frame], dim=1)
+    # The head makes no denoising queries without boxes.
+    denoising = None
+    if sum(num_known) > 0:
+        denoising = StreamPETRDenoisingOutputs(
+            cls_scores=known_outputs[..., :_NUM_CLASSES],
+            bbox_preds=known_outputs[..., _NUM_CLASSES:],
+            known_labels=torch.cat([labels.repeat(_SCALAR) for *_, labels in frames]),
+            known_boxes=torch.cat([boxes.repeat(_SCALAR, 1) for _, _, boxes, _ in frames]),
+            batch_indices=torch.cat(
+                [
+                    torch.full((count,), index, dtype=torch.long)
+                    for index, count in enumerate(num_known)
+                ]
+            ),
+            slot_indices=torch.cat([torch.arange(count) for count in num_known]),
+        )
+    head_outputs = StreamPETRHeadOutputs(
+        all_cls_scores=queries[..., :_NUM_CLASSES],
+        all_bbox_preds=queries[..., _NUM_CLASSES:],
+        denoising=denoising,
+    )
+    return head.loss(
+        head_outputs,
+        [boxes for _, _, boxes, _ in frames],
+        [labels for *_, labels in frames],
+        padding_mask=torch.zeros(len(frames), dtype=torch.bool),
+    )["loss"]
+
+
+def _frames(
+    box_counts: tuple[int, ...],
+) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]]:
+    return [_frame(count, seed=70 + 10 * index) for index, count in enumerate(box_counts)]
+
+
+def _layer() -> torch.nn.Linear:
+    torch.manual_seed(0)
+    return torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
+
+
+def _whole_batch_gradients(box_counts: tuple[int, ...]) -> list[torch.Tensor]:
+    """The gradients of the loss of all the frames on one process, where no count is reduced."""
+    layer = _layer()
+    _layer_loss(_build_head().train(), layer, _frames(box_counts)).backward()
+    return [parameter.grad for parameter in layer.parameters()]
+
+
+def _ddp_gradient_worker(
+    rank: int, world_size: int, box_counts: tuple[int, ...], whole_gradients: list[torch.Tensor]
+) -> None:
+    layer = _layer()
+    # The wrapper must outlive the backward pass, which its hooks average over the ranks.
+    ddp_layer = DistributedDataParallel(layer)
+    _layer_loss(_build_head().train(), ddp_layer, [_frames(box_counts)[rank]]).backward()
+
+    for sharded, whole in zip(layer.parameters(), whole_gradients):
+        torch.testing.assert_close(sharded.grad, whole, rtol=1e-5, atol=1e-7)
+
+
+@unittest.skipUnless(GLOO_AVAILABLE, "gloo backend unavailable")
+class TestStreamPETRLossDistributed(unittest.TestCase):
+    def test_sharded_loss_matches_single_batch_equivalent(self) -> None:
+        """Test that the rank-averaged losses of frames with 2 and 8 boxes equal the losses of
+        the whole batch.
+
+        Rank-local counts would give every rank an equal vote whatever its object count.
+        """
+        spawn_gloo_workers(_sharding_invariance_worker)
+
+    def test_dn_collective_survives_rank_without_ground_truth(self) -> None:
+        """Test that a rank without ground truth joins the denoising count collective and logs
+        zero losses."""
+        spawn_gloo_workers(_dn_mixed_gt_worker)
+
+    def test_ddp_averaged_loss_gradients_match_the_whole_batch_on_one_process(self) -> None:
+        """Test that the DDP-averaged gradients of the loss of one frame per rank equal those
+        of the whole batch.
+
+        One linear layer wrapped in DDP makes every logit and box from fixed features, so the
+        matching and the denoising losses are both covered while nothing but the loss
+        normalization is under test. With one positive in the step, or none, flooring the
+        mean count instead of the sum would halve the gradient of the single positive, or of
+        the negatives. Four ranks check the division by the world size with a rank that has
+        no positive among ranks that have some.
+        """
+        for box_counts in [(10, 30), (1, 0), (0, 0), (10, 30, 0, 1)]:
+            with self.subTest(box_counts=box_counts):
+                spawn_gloo_workers(
+                    _ddp_gradient_worker,
+                    box_counts,
+                    _whole_batch_gradients(box_counts),
+                    world_size=len(box_counts),
+                )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 import math
 
+from jaxtyping import Float, Int
 import torch
 import torch.nn as nn
 
@@ -40,7 +41,9 @@ class StreamContinuity:
         self.scene_tokens: list[str] | None = None
         self.timestamps: torch.Tensor | None = None
 
-    def __call__(self, scene_tokens: Sequence[str], timestamp: torch.Tensor) -> torch.Tensor:
+    def __call__(
+        self, scene_tokens: Sequence[str], timestamp: Float[torch.Tensor, " batch_size"]
+    ) -> Float[torch.Tensor, " batch_size"]:
         """Compare the frames of the lanes with the lanes' previous frames.
 
         Args:
@@ -69,7 +72,9 @@ class StreamContinuity:
         return prev_exists
 
 
-def inverse_sigmoid(x: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
+def inverse_sigmoid(
+    x: Float[torch.Tensor, "*shape"], eps: float = 1e-4
+) -> Float[torch.Tensor, "*shape"]:
     """Apply the inverse sigmoid transform with clamping for stability."""
     dtype = x.dtype
     x = x.float().clamp(min=0.0, max=1.0)
@@ -78,14 +83,20 @@ def inverse_sigmoid(x: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
     return torch.log(x1 / x2).to(dtype=dtype)
 
 
-def memory_refresh(memory: torch.Tensor, prev_exists: torch.Tensor) -> torch.Tensor:
+def memory_refresh(
+    memory: Float[torch.Tensor, "batch_size num_slots *dims"],
+    prev_exists: Float[torch.Tensor, " batch_size"],
+) -> Float[torch.Tensor, "batch_size num_slots *dims"]:
     """Reset memory entries when the previous frame does not belong to the stream."""
     view_shape = [1] * memory.ndim
     prev_exists = prev_exists.view(-1, *view_shape[1:])
     return memory * prev_exists
 
 
-def topk_gather(features: torch.Tensor, topk_indices: torch.Tensor | None) -> torch.Tensor:
+def topk_gather(
+    features: Float[torch.Tensor, "batch_size num_slots *dims"],
+    topk_indices: Int[torch.Tensor, "batch_size k 1"] | None,
+) -> Float[torch.Tensor, "batch_size k *dims"]:
     """Gather the same top-k proposal indices across a feature tensor."""
     if topk_indices is None:
         return features
@@ -98,9 +109,9 @@ def topk_gather(features: torch.Tensor, topk_indices: torch.Tensor | None) -> to
 
 
 def transform_reference_points(
-    reference_points: torch.Tensor,
-    ego_pose: torch.Tensor,
-) -> torch.Tensor:
+    reference_points: Float[torch.Tensor, "batch_size num_slots 3"],
+    ego_pose: Float[torch.Tensor, "batch_size 4 4"],
+) -> Float[torch.Tensor, "batch_size num_slots 3"]:
     """Transform 3D reference points between ego frames.
 
     The bank keeps its reference points in the map frame, so like :func:`compose_poses` this is a
@@ -111,7 +122,9 @@ def transform_reference_points(
     return (ego_pose.unsqueeze(1) * homogeneous.unsqueeze(-2)).sum(-1)[..., :3]
 
 
-def compose_poses(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
+def compose_poses(
+    lhs: Float[torch.Tensor, "*batch 4 4"], rhs: Float[torch.Tensor, "*batch 4 4"]
+) -> Float[torch.Tensor, "*batch 4 4"]:
     """Compose batches of 4x4 poses, ``lhs @ rhs``, as a sum of elementwise products.
 
     A float32 ``@`` follows the global matmul precision, which the CLI runtime sets to
@@ -129,7 +142,9 @@ def compose_poses(lhs: torch.Tensor, rhs: torch.Tensor) -> torch.Tensor:
     return (lhs.unsqueeze(-1) * rhs.unsqueeze(-3)).sum(-2)
 
 
-def _sincos_posemb(component: torch.Tensor, num_pos_feats: int, temperature: int) -> torch.Tensor:
+def _sincos_posemb(
+    component: Float[torch.Tensor, "*batch"], num_pos_feats: int, temperature: int
+) -> Float[torch.Tensor, "*batch num_pos_feats"]:
     """Embed one scaled position component with interleaved sine/cosine pairs."""
     dim_t = torch.arange(num_pos_feats, dtype=torch.float32, device=component.device)
     dim_t = temperature ** (2 * torch.div(dim_t, 2, rounding_mode="floor") / num_pos_feats)
@@ -138,10 +153,10 @@ def _sincos_posemb(component: torch.Tensor, num_pos_feats: int, temperature: int
 
 
 def pos2posemb3d(
-    positions: torch.Tensor,
+    positions: Float[torch.Tensor, "*batch 3"],
     num_pos_feats: int = 128,
     temperature: int = 10000,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "*batch 3*num_pos_feats"]:
     """Convert 3D positions in ``[0, 1]`` space into sine/cosine embeddings.
 
     The output concatenates the (y, x, z) component embeddings in that order,
@@ -155,22 +170,26 @@ def pos2posemb3d(
 
 
 def pos2posemb1d(
-    positions: torch.Tensor,
+    positions: Float[torch.Tensor, "*batch 1"],
     num_pos_feats: int = 256,
     temperature: int = 10000,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "*batch num_pos_feats"]:
     """Convert 1D temporal positions into sine/cosine embeddings."""
     positions = positions * (2.0 * math.pi)
     return _sincos_posemb(positions[..., 0], num_pos_feats, temperature)
 
 
 def nerf_positional_encoding(
-    tensor: torch.Tensor,
+    tensor: Float[torch.Tensor, "*batch num_features"],
     num_encoding_functions: int = 6,
     include_input: bool = False,
     log_sampling: bool = True,
-) -> torch.Tensor:
-    """Apply NeRF-style positional encoding to pose and time features."""
+) -> Float[torch.Tensor, "*batch num_encoded"]:
+    """Apply NeRF-style positional encoding to pose and time features.
+
+    Every feature becomes ``2 * num_encoding_functions`` sines and cosines, after the feature
+    itself when ``include_input`` is set.
+    """
     encoding = [tensor] if include_input else []
     if log_sampling:
         frequency_bands = 2.0 ** torch.linspace(
@@ -204,7 +223,11 @@ class SELayerLinear(nn.Module):
         self.activation = nn.ReLU()
         self.gate = nn.Sigmoid()
 
-    def forward(self, x: torch.Tensor, gating: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: Float[torch.Tensor, "*batch channels"],
+        gating: Float[torch.Tensor, "*batch channels"],
+    ) -> Float[torch.Tensor, "*batch channels"]:
         """Apply channel-wise gating from the auxiliary ``gating`` tensor."""
         gating = self.reduce(gating)
         gating = self.activation(gating)
@@ -230,7 +253,11 @@ class ModulatedLayerNorm(nn.Module):
         nn.init.ones_(self.gamma.bias)
         nn.init.zeros_(self.beta.bias)
 
-    def forward(self, x: torch.Tensor, code: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: Float[torch.Tensor, "*batch feature_dim"],
+        code: Float[torch.Tensor, "*batch code_dim"],
+    ) -> Float[torch.Tensor, "*batch feature_dim"]:
         """Apply feature-wise affine modulation predicted from ``code``."""
         x = self.layer_norm(x)
         code = self.reduce(code)
