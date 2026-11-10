@@ -519,6 +519,8 @@ class PTv3Detection3DModel(PTv3BaseModel):
         Returns:
             The outputs of the task heads.
         """
+        if self.engines is not None:
+            return self.forward_engines(multi_task_batch_inputs)
         point = self.encode_batch(multi_task_batch_inputs)
         return ModelOutputs(
             detection3d_head_outputs=Detection3DHeadOutputs(

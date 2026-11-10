@@ -20,6 +20,13 @@ data_preprocessor:
       max_num_points: 32
       max_voxels: ${max_voxels}
       eval_max_voxels: ${max_voxels}
+    # Export-side preprocessing: what the deployed runtime computes before the exported graphs.
+    # Training skips it; deploy and the evaluation of deployed engines read it.
+    - _target_: autoware_ml.preprocessing.segmentation3d.ptv3_serialization.PTv3Serialization
+      grid_size: ${grid_size}
+      point_cloud_range: ${point_cloud_range}
+      strides: ${model.encoder.stride}
+      patch_sizes: ${model.encoder.enc_patch_size}
 
 optimizer:
   _target_: torch.optim.AdamW

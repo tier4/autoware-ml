@@ -166,6 +166,8 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             Segmentation head outputs with the voxel-level logits of shape
             ``(num_voxels, num_classes)``.
         """
+        if self.engines is not None:
+            return self.forward_engines(multi_task_batch_inputs)
         logits = self.seg3d_head(self.encode_batch(multi_task_batch_inputs))
         return ModelOutputs(segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=logits))
 

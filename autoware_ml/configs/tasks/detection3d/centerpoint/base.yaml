@@ -25,6 +25,14 @@ data_preprocessor:
       max_num_points: ${max_num_points}
       max_voxels: ${max_voxels}
       eval_max_voxels: ${eval_max_voxels}
+    # Export-side preprocessing: the decorated pillars the exported voxel encoder reads, which
+    # the deployed runtime computes before it.
+    - _target_: autoware_ml.preprocessing.detection3d.pillar_decoration.PillarDecoration
+      voxel_size: ${voxel_size}
+      point_cloud_range: ${point_cloud_range}
+      with_distance: ${model.pts_voxel_encoder.with_distance}
+      with_cluster_center: ${model.pts_voxel_encoder.with_cluster_center}
+      with_voxel_center: ${model.pts_voxel_encoder.with_voxel_center}
 
 trainer:
   max_epochs: ???

@@ -96,6 +96,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        engines: Mapping[str, Callable[[Mapping[str, torch.Tensor]], dict[str, torch.Tensor]]]
+        | None = None,
     ):
         """Initialize base model.
 
@@ -110,6 +112,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 ``interval`` or ``monitor``.
             metrics: Task metrics accumulated during validation and test. Empty
                 or ``None`` logs only losses.
+            engines: Deployed graphs keyed by their export module names, such as TensorRT
+                engines, called with and returning named tensors. When set, the model runs them
+                in place of the modules they were exported from. ``None`` runs the modules.
         """
         super().__init__(metrics=metrics)
         self._data_preprocessor = data_preprocessor
@@ -120,6 +125,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
         self.log_dict_configs = log_dict_configs
+        self.engines = dict(engines) if engines is not None else None
 
     def setup(self, stage: str) -> None:
         """Check the datamodule against the needs of the model.

@@ -117,6 +117,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        engines: Mapping[str, Any] | None = None,
     ) -> None:
         """
         Initialize CenterPoint.
@@ -132,6 +133,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             metrics: Detection metrics accumulated during validation and test.
+            engines: Deployed graphs of the exported modules, see :class:`ModuleBaseModel`.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -139,6 +141,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             scheduler=scheduler,
             metrics=metrics,
             log_dict_configs=log_dict_configs,
+            engines=engines,
         )
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder
@@ -173,13 +176,23 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             )
 
         batch_size = multi_task_batch_inputs.multi_task_gt_batch.batch_size
-        pillar_features = self.pts_voxel_encoder(multi_task_batch_inputs.voxels_data)
+        input_features = self._decorated_pillars(multi_task_batch_inputs)
+        if self.engines is None:
+            pillar_features = self.pts_voxel_encoder.encode_decorated(input_features)
+        else:
+            pillar_features = self.engines["pts_voxel_encoder_centerpoint"](
+                {"input_features": input_features}
+            )["pillar_features"]
         bev_features = self.pts_middle_encoder(
-            pillar_features=pillar_features,
+            pillar_features=pillar_features.squeeze(1),
             coords=multi_task_batch_inputs.voxels_data.coords,
             batch_indices=multi_task_batch_inputs.voxels_data.batch_indices,
             batch_size=batch_size,
         )
+        if self.engines is not None:
+            return self.outputs_from_export_tensors(
+                self.engines["pts_backbone_neck_head_centerpoint"]({"spatial_features": bev_features})
+            )
         bev_features = self.pts_backbone(bev_features)
         bev_features = self.pts_neck(bev_features)
         head_outputs = self.bbox_head(bev_features)
@@ -188,6 +201,25 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 center_head_outputs=head_outputs, transfusion_head_outputs=None
             )
         )
+
+    def _decorated_pillars(self, batch: ModelBatchInputs) -> torch.Tensor:
+        """Read the decorated pillars the PillarDecoration preprocessing added to the batch.
+
+        Raises:
+            ValueError: If the batch has none, or their channels do not fit the encoder.
+        """
+        if batch.decorated_pillars is None:
+            raise ValueError(
+                "CenterPoint reads decorated pillars; add PillarDecoration after the voxelizer "
+                "in data_preprocessor.preprocessor_modules."
+            )
+        channels = batch.decorated_pillars.shape[-1]
+        if channels != self.pts_voxel_encoder.feature_channels:
+            raise ValueError(
+                f"The decorated pillars have {channels} channels, the voxel encoder reads "
+                f"{self.pts_voxel_encoder.feature_channels}."
+            )
+        return batch.decorated_pillars
 
     def compute_metrics(
         self, multi_task_batch_inputs: ModelBatchInputs, multi_task_outputs: ModelOutputs
@@ -273,8 +305,8 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 "ModelBatchInputs must contain voxels_data to build CenterPoint export specs."
             )
 
+        input_features = self._decorated_pillars(multi_task_batch_inputs)
         with torch.no_grad():
-            input_features = self.pts_voxel_encoder.encode(voxels_data)
             pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
             # Sized by the batch, as in forward(): the voxel batch indices miss a sample
             # without voxels.

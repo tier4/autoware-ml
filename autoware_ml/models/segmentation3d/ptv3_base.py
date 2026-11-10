@@ -12,6 +12,7 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
@@ -166,6 +167,64 @@ class PTv3BaseModel(ModuleBaseModel):
         if self.freeze_encoder:
             self.encoder.requires_grad_(False)
             self.encoder.eval()
+        self._check_serialization_preprocessing()
+
+    def _check_serialization_preprocessing(self) -> None:
+        """Refuse a PTv3Serialization preprocessing that serializes unlike the exported graphs.
+
+        Raises:
+            ValueError: Naming the settings of the preprocessing that differ from the model's.
+        """
+        from autoware_ml.preprocessing.segmentation3d.ptv3_serialization import PTv3Serialization
+
+        for module in self._data_preprocessor.preprocessor_modules:
+            if not isinstance(module, PTv3Serialization):
+                continue
+            expected = {
+                "orders": tuple(self.EXPORT_ORDER),
+                "strides": tuple(int(stride) for stride in self.encoder.stride),
+                "patch_sizes": tuple(export_patch_sizes(self)),
+            }
+            if self.grid_size is not None and self.point_cloud_range is not None:
+                expected |= {
+                    "grid_size": float(self.grid_size),
+                    "point_cloud_range": self.point_cloud_range,
+                }
+            differing = {
+                name: (getattr(module, name), value)
+                for name, value in expected.items()
+                if getattr(module, name) != value
+            }
+            if differing:
+                raise ValueError(
+                    "PTv3Serialization differs from the model in (preprocessing, model): "
+                    f"{differing}."
+                )
+
+    def serialized_voxels(self, batch_inputs: ModelBatchInputs) -> tuple[PTv3ExportInputs, ...]:
+        """Read the per-sample inputs of the exported graphs from the batch.
+
+        Raises:
+            ValueError: If the PTv3Serialization preprocessing did not run on the batch.
+        """
+        if batch_inputs.serialized_voxels is None:
+            raise ValueError(
+                "The exported PTv3 graphs read serialized voxels; add PTv3Serialization after "
+                "the voxelizer in data_preprocessor.preprocessor_modules (it skips training)."
+            )
+        return batch_inputs.serialized_voxels
+
+    def forward_engines(self, batch_inputs: ModelBatchInputs) -> ModelOutputs:
+        """Run the deployed graphs of :attr:`engines` on every sample of the batch.
+
+        Args:
+            batch_inputs: Model inputs holding the serialized voxels.
+
+        Returns:
+            The model outputs rebuilt from the graphs' outputs.
+        """
+        tensors = run_export_graphs(list(self.engines.values()), self.serialized_voxels(batch_inputs))
+        return self.outputs_from_export_tensors(tensors)
 
     def train(self, mode: bool = True) -> PTv3BaseModel:
         """Keep the frozen encoder in eval mode during training.
@@ -271,17 +330,6 @@ class PTv3BaseModel(ModuleBaseModel):
                 "is kept."
             )
         return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
-
-    def _compute_export_geometry(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute sparse shape and serialization depth for export.
-
-        Args:
-            device: Device of the voxels of the example batch.
-
-        Returns:
-            ``(sparse_shape, serialization_depth)`` as long tensors on ``device``.
-        """
-        return ptv3_export_geometry(self.grid_size, self.point_cloud_range, device)
 
     def _prepare_encoder_export(self) -> PointTransformerV3Encoder:
         """Return an export-ready copy of the encoder.
@@ -824,22 +872,13 @@ def seg3d_head_outputs_from_export(
 def prepare_ptv3_export_inputs(
     model: "PTv3BaseModel", batch_inputs: ModelBatchInputs
 ) -> PTv3ExportInputs:
-    """Serialize a single-sample voxel batch and precompute its pooling metadata."""
-    voxels_data = _voxels_data(batch_inputs)
-    require_single_sample_export_batch(
-        {"offset": batch_to_offset(voxels_data.batch_indices.long())}
-    )
-    sparse_shape, serialization_depth = model._compute_export_geometry(voxels_data.voxels.device)
-    return serialize_voxels(
-        voxels_data.voxels,
-        voxels_data.num_points,
-        voxels_data.coords,
-        sparse_shape,
-        serialization_depth,
-        model.EXPORT_ORDER,
-        model.encoder.stride,
-        export_patch_sizes(model),
-    )
+    """Return the serialized voxels of a single-sample batch, see :class:`PTv3Serialization`."""
+    samples = model.serialized_voxels(batch_inputs)
+    if len(samples) != 1:
+        raise ValueError(
+            f"PTv3 export supports only single-sample export batches, got {len(samples)} samples."
+        )
+    return samples[0]
 
 
 @dataclass(frozen=True)

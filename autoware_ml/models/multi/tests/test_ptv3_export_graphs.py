@@ -13,7 +13,10 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     TransFusionHeadOutputs,
 )
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
-from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import build_inputs
+from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
+    build_inputs,
+    with_serialized_voxels,
+)
 from autoware_ml.models.multi.tests.test_ptv3_det3d_seg3d_export import _build_det3d_seg3d_model
 from autoware_ml.models.segmentation3d.ptv3_base import (
     prepare_ptv3_export_inputs,
@@ -110,7 +113,9 @@ def test_split_voxels_by_sample_refuses_ungrouped_or_empty_samples(
 )
 def test_export_graphs_on_named_tensors_rebuild_the_model_outputs() -> None:
     model = _build_det3d_seg3d_model().cuda().eval()
-    batch = build_inputs(device=torch.device("cuda"), is_training=False)
+    batch = with_serialized_voxels(
+        model, build_inputs(device=torch.device("cuda"), is_training=False)
+    )
     specs = model.build_export_specs(batch)
     graphs = [TorchGraph(spec) for spec in specs.values()]
 

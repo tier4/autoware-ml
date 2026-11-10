@@ -175,6 +175,8 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         Returns:
             The outputs of the task heads.
         """
+        if self.engines is not None:
+            return self.forward_engines(multi_task_batch_inputs)
         point = self.encode_batch(multi_task_batch_inputs)
         # The BEV neck must read the encoder chain before the segmentation
         # decoder: SerializedUnpooling pops the chain and overwrites parent

@@ -1,0 +1,16 @@
+# @package _global_
+# Evaluate the TensorRT engines of a deploy run in place of the modules they were exported from:
+#   autoware-ml test --config-name <task> --weights <ckpt> deployed=tensorrt \
+#     deployed.engine_dir=<dir with one <module>.engine per deploy.onnx.modules entry>
+# The data preprocessing already computes the inputs of the exported graphs.
+deployed:
+  engine_dir: ???
+  # Plugin libraries the engines need, e.g. those of autoware_tensorrt_plugins.
+  plugin_paths: []
+
+model:
+  engines:
+    _target_: autoware_ml.deployment.tensorrt_engine.load_engines
+    engine_dir: ${deployed.engine_dir}
+    names: ${oc.dict.keys:deploy.onnx.modules}
+    plugin_paths: ${deployed.plugin_paths}
