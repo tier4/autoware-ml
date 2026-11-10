@@ -64,8 +64,7 @@ def main(cfg: DictConfig) -> None:
         NotImplementedError: If the configured model is not a PTv3 model.
         ValueError: If the model inputs carry no voxels, or a stage of ``cfg.voxel_counts``
             cannot pool to the next.
-        RuntimeError: If the voxelizer dropped voxels, or the stages do not hold
-            ``cfg.voxel_counts`` voxels.
+        RuntimeError: If the stages do not hold ``cfg.voxel_counts`` voxels.
     """
     validate_cuda_available()
     configure_torch_runtime()
@@ -115,14 +114,9 @@ def main(cfg: DictConfig) -> None:
         padding_mask=torch.zeros(1, dtype=torch.bool),
     )
     batch_inputs = model.on_after_batch_transfer(batch.to_device(device), dataloader_idx=0)
-    if batch_inputs.voxels_data is None:
-        raise ValueError("PTv3 needs the voxels of a voxelizer in the model inputs.")
-    dropped = int(batch_inputs.voxels_data.num_dropped_voxels)
-    if dropped:
-        raise RuntimeError(f"The voxelizer dropped {dropped} voxels; raise its 'max_voxels'.")
 
     inputs = prepare_ptv3_export_inputs(model, batch_inputs)
-    stages = [inputs.grid_coord.cpu(), *(meta.grid_coord.cpu() for meta in inputs.pooling_metadata)]
+    stages = [inputs.grid_coord, *(meta.grid_coord for meta in inputs.pooling_metadata)]
     counts = [len(stage) for stage in stages]
     if counts != list(spec.voxel_counts):
         raise RuntimeError(f"The stages hold {counts} voxels, not {spec.voxel_counts}.")
