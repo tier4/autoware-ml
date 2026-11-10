@@ -40,24 +40,6 @@ from autoware_ml.metrics.report import MetricKey
 from autoware_ml.types.metrics import MatchCost
 
 
-def _errors(ate: float, aoe: float = 0.0, ase: float = 0.0, ave: float = 0.0) -> TpErrorSet:
-    """An error set with the neutral attribute error."""
-    return TpErrorSet(ate=ate, aoe=aoe, ase=ase, ave=ave, aae=1.0)
-
-
-def _perfect_state() -> Detection3DState:
-    """One frame of ten car boxes predicted exactly where they are, scores descending."""
-    boxes = torch.tensor([[float(i), 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0] for i in range(10)])
-    sample = Detection3DSample(
-        pred_boxes=boxes.clone(),
-        pred_scores=torch.tensor([1.0 - 0.01 * i for i in range(10)]),
-        pred_labels=torch.zeros(10, dtype=torch.long),
-        gt_boxes=boxes.clone(),
-        gt_labels=torch.zeros(10, dtype=torch.long),
-    )
-    return Detection3DState(samples=[sample], class_names=("car",))
-
-
 class TestTpErrorSet(unittest.TestCase):
     """The five nuScenes true-positive errors as one typed value."""
 
@@ -68,7 +50,7 @@ class TestTpErrorSet(unittest.TestCase):
         the metric keys keep their established order.
         Check: the names and the paired values.
         """
-        named = _errors(0.5, aoe=0.25).named()
+        named = TpErrorSet(ate=0.5, aoe=0.25, ase=0.0, ave=0.0, aae=1.0).named()
         self.assertEqual([name for name, _ in named], ["ATE", "AOE", "ASE", "AVE", "AAE"])
         self.assertEqual(dict(named), {"ATE": 0.5, "AOE": 0.25, "ASE": 0.0, "AVE": 0.0, "AAE": 1.0})
 
@@ -88,7 +70,7 @@ class TestTpErrorSet(unittest.TestCase):
         Expected: an error cannot be reassigned after construction.
         Check: pydantic raises on the assignment.
         """
-        errors = _errors(0.5)
+        errors = TpErrorSet(ate=0.5, aoe=0.0, ase=0.0, ave=0.0, aae=1.0)
         with self.assertRaises(ValidationError):
             errors.ate = 1.0  # type: ignore[misc]
 
@@ -102,7 +84,12 @@ class TestMeanTpErrorsAndNds(unittest.TestCase):
         Expected: each error is averaged on its own and a NaN entry leaves the mean of the others.
         Check: the mean translation, orientation and attribute errors.
         """
-        mean = mean_tp_errors([_errors(0.2, aoe=1.0), _errors(0.4, aoe=float("nan"))])
+        mean = mean_tp_errors(
+            [
+                TpErrorSet(ate=0.2, aoe=1.0, ase=0.0, ave=0.0, aae=1.0),
+                TpErrorSet(ate=0.4, aoe=float("nan"), ase=0.0, ave=0.0, aae=1.0),
+            ]
+        )
         self.assertAlmostEqual(mean.ate, 0.3)
         self.assertAlmostEqual(mean.aoe, 1.0)
         self.assertAlmostEqual(mean.aae, 1.0)
@@ -123,8 +110,12 @@ class TestMeanTpErrorsAndNds(unittest.TestCase):
         scores 0 instead of going negative, and NaN errors contribute nothing.
         Check: the three detection scores.
         """
-        self.assertAlmostEqual(nds(1.0, _errors(0.0)), 0.9)
-        self.assertAlmostEqual(nds(1.0, _errors(5.0)), 0.8)
+        self.assertAlmostEqual(
+            nds(1.0, TpErrorSet(ate=0.0, aoe=0.0, ase=0.0, ave=0.0, aae=1.0)), 0.9
+        )
+        self.assertAlmostEqual(
+            nds(1.0, TpErrorSet(ate=5.0, aoe=0.0, ase=0.0, ave=0.0, aae=1.0)), 0.8
+        )
         self.assertAlmostEqual(nds(0.0, TpErrorSet.nan()), 0.0)
 
 
@@ -163,6 +154,20 @@ class TestRecallTarget(unittest.TestCase):
 class TestTpErrorsMetric(unittest.TestCase):
     """The TP error metric reports the configured recall targets and the optimal point."""
 
+    def setUp(self) -> None:
+        """One frame of ten car boxes predicted exactly where they are, scores descending."""
+        boxes = torch.tensor(
+            [[float(i), 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0] for i in range(10)]
+        )
+        sample = Detection3DSample(
+            pred_boxes=boxes.clone(),
+            pred_scores=torch.tensor([1.0 - 0.01 * i for i in range(10)]),
+            pred_labels=torch.zeros(10, dtype=torch.long),
+            gt_boxes=boxes.clone(),
+            gt_labels=torch.zeros(10, dtype=torch.long),
+        )
+        self.perfect_state = Detection3DState(samples=[sample], class_names=("car",))
+
     def test_reports_each_recall_target_and_the_optimal_point(self) -> None:
         """
         Input: ten perfectly predicted car boxes and one recall target named low at 0.1.
@@ -176,7 +181,7 @@ class TestTpErrorsMetric(unittest.TestCase):
             thresholds=(2.0,),
             tp_threshold=2.0,
         )
-        out = metric.evaluate(_perfect_state(), EvalStage.TEST)
+        out = metric.evaluate(self.perfect_state, EvalStage.TEST)
         self.assertAlmostEqual(out.metric_value(MetricKey(name="mATE_low")), 0.0)
         self.assertAlmostEqual(out.metric_value(MetricKey(name="mATE_optimal")), 0.0)
         self.assertAlmostEqual(
