@@ -87,8 +87,8 @@ def mean_neighbors(coords: Int[torch.Tensor, "num_voxels 3"]) -> float:
     neighbor_cells = cells[:, None] + _NEIGHBOR_OFFSETS.to(cells.device)
     span = int(neighbor_cells.max()) + 1
     weights = torch.tensor([span * span, span, 1], device=cells.device)
-    keys = (cells @ weights).sort().values
-    neighbor_keys = neighbor_cells @ weights
+    keys = (cells * weights).sum(dim=-1).sort().values
+    neighbor_keys = (neighbor_cells * weights).sum(dim=-1)
     found = keys[torch.searchsorted(keys, neighbor_keys).clamp(max=len(keys) - 1)] == neighbor_keys
     return float(found.sum()) / len(coords)
 

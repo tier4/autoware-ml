@@ -148,6 +148,21 @@ class TestVoxelLayout(unittest.TestCase):
         self.assertEqual(grid.max(dim=0).values.tolist(), [7, 7, 4])
 
 
+class TestMeanNeighbors(unittest.TestCase):
+    """Unit tests for mean_neighbors."""
+
+    @unittest.skipUnless(torch.cuda.is_available(), "needs CUDA")
+    def test_counts_neighbors_of_voxels_on_the_gpu(self) -> None:
+        """
+        Input: every cell of a 16^3 cube as int64 coordinates on the GPU.
+        Expected: the cube's mean neighbors, as on the CPU.
+        Check: ((3 * 16 - 2) / 16)^3 - 1 neighbors.
+        """
+        grid = torch.cartesian_prod(*[torch.arange(16)] * 3).cuda()
+
+        self.assertAlmostEqual(mean_neighbors(grid), ((3 * 16 - 2) / 16) ** 3 - 1)
+
+
 class TestWriteExportInputs(unittest.TestCase):
     """Unit tests for write_export_inputs."""
 
