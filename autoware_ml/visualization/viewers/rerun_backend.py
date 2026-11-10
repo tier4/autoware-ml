@@ -521,7 +521,8 @@ class _RerunVisualizationBackendBase:
 
     def _save_synced_blueprint(self, file_name: str, layout: ViewSpec | LayoutGroup) -> str:
         """Write one side layout as a blueprint file and return its file name."""
-        assert self._synced_server is not None
+        if self._synced_server is None:
+            raise RuntimeError("The synced viewer server must be started before saving a blueprint")
         blueprint = self.rr.blueprint.Blueprint(
             self._convert_layout(layout),
             self.rr.blueprint.BlueprintPanel(expanded=False),

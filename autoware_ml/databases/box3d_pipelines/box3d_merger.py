@@ -44,9 +44,11 @@ class Box3DMerger(Box3DPipeline):
                     f"must have exactly 2 labels, but it's {len(source_labels)}"
                 )
 
-        assert self.proximity_distance_threshold > 0, (
-            "Proximity distance threshold must be positive"
-        )
+        if self.proximity_distance_threshold <= 0:
+            raise ValueError(
+                "Proximity distance threshold must be positive, "
+                f"but it's {self.proximity_distance_threshold}"
+            )
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """

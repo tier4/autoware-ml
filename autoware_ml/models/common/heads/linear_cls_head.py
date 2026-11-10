@@ -66,7 +66,8 @@ class ClsHead(nn.Module):
             Features ready for the final classification layer.
         """
         if isinstance(feats, (tuple, list)):
-            assert len(feats) > 0, "Tuple/list input must not be empty"
+            if not feats:
+                raise ValueError("Tuple/list input must not be empty")
             feats = feats[-1]
         return feats
 

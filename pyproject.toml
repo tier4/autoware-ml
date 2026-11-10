@@ -166,10 +166,15 @@ consider_namespace_packages = true
 ignore = ["F722"]
 extend-select = [
     "PGH003",  # `# type: ignore[code]`, not a blanket ignore
+    "S101",  # raise instead of assert
     "T201",  # log instead of print
     "TID251",  # banned APIs, listed below
     "UP045",  # `X | None` instead of `Optional[X]`
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests check with assert, the code raises (assert is removed under `python -O`).
+"**/tests/**" = ["S101"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "warnings.warn".msg = "Raise an exception, or log through logging.getLogger(__name__)."
