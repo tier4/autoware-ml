@@ -23,6 +23,9 @@ import torch.nn as nn
 class ConvModule(nn.Module):
     """Convolution, batch normalization, and ReLU activation composed into one block."""
 
+    #: Lets ``utils/bn_fusion.py`` fold ``norm`` into ``conv``.
+    bn_fusion_pairs = (("conv", "norm"),)
+
     def __init__(
         self,
         in_channels: int,
