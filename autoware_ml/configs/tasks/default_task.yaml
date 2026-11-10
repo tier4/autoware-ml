@@ -10,6 +10,8 @@ defaults:
   - /defaults/modules/model
   - /defaults/modules/paths
   - /defaults/modules/run
+  # Replaces the trained modules by deployed engines when set, e.g. deployed=tensorrt.
+  - /deployed: null
   - override /hydra/hydra_logging: none # Disable hydra's logging
   - _self_
 

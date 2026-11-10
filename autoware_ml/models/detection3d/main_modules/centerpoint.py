@@ -22,7 +22,7 @@ around the reusable PointPillars and CenterPoint detection components.
 from __future__ import annotations
 
 from types import MappingProxyType
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from jaxtyping import Float32
@@ -31,10 +31,15 @@ from torch import nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
+from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    CenterHeadOutputs,
+    Detection3DHeadOutputs,
+)
+from autoware_ml.deployment.tensorrt_engine import TensorRTModelMixin
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -170,13 +175,25 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             )
 
         batch_size = multi_task_batch_inputs.multi_task_gt_batch.batch_size
-        pillar_features = self.pts_voxel_encoder(multi_task_batch_inputs.voxels_data)
+        pillar_features = self.encode_pillars(multi_task_batch_inputs.voxels_data)
         bev_features = self.pts_middle_encoder(
             pillar_features=pillar_features,
             coords=multi_task_batch_inputs.voxels_data.coords,
             batch_indices=multi_task_batch_inputs.voxels_data.batch_indices,
             batch_size=batch_size,
         )
+        return self.predict_from_bev(bev_features)
+
+    def encode_pillars(
+        self, voxels_data: VoxelsData
+    ) -> Float32[torch.Tensor, "num_pillars num_channels"]:
+        """Encode the pillars, the stage exported as ``pts_voxel_encoder_centerpoint``."""
+        return self.pts_voxel_encoder(voxels_data)
+
+    def predict_from_bev(
+        self, bev_features: Float32[torch.Tensor, "batch_size num_channels height width"]
+    ) -> ModelOutputs:
+        """Run backbone, neck and head, the stage exported as ``pts_backbone_neck_head_centerpoint``."""
         bev_features = self.pts_backbone(bev_features)
         bev_features = self.pts_neck(bev_features)
         head_outputs = self.bbox_head(bev_features)
@@ -226,6 +243,14 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             outputs=outputs.detection3d_head_outputs
         )
         return multi_task_predictions
+
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the detection outputs from the exported head's outputs."""
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                center_head_outputs=CenterHeadOutputs.from_export_tensors(tensors)
+            )
+        )
 
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
@@ -301,3 +326,27 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 },
             ),
         }
+
+
+class CenterPointTensorRTModel(TensorRTModelMixin, CenterPointDetection3DModel):
+    """CenterPoint whose exported stages run as TensorRT engines, see :class:`TensorRTModelMixin`.
+
+    The scatter between them, the decoding and the metrics stay those of the trained model.
+    """
+
+    ENGINE_NAMES = ("pts_voxel_encoder_centerpoint", "pts_backbone_neck_head_centerpoint")
+
+    def encode_pillars(
+        self, voxels_data: VoxelsData
+    ) -> Float32[torch.Tensor, "num_pillars num_channels"]:
+        """Decorate the pillars as the export does and run the voxel encoder engine."""
+        input_features = self.pts_voxel_encoder.encode(voxels_data)
+        engine = self.engines["pts_voxel_encoder_centerpoint"]
+        return engine({"input_features": input_features})["pillar_features"].squeeze(1)
+
+    def predict_from_bev(
+        self, bev_features: Float32[torch.Tensor, "batch_size num_channels height width"]
+    ) -> ModelOutputs:
+        """Run the backbone-neck-head engine and rebuild the head outputs."""
+        engine = self.engines["pts_backbone_neck_head_centerpoint"]
+        return self.outputs_from_export_tensors(engine({"spatial_features": bev_features}))

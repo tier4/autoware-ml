@@ -36,7 +36,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
-from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    Detection3DHeadOutputs,
+    TransFusionHeadOutputs,
+)
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
@@ -55,6 +58,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    PTv3TensorRTMixin,
     SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
     PTv3EncoderExportBase,
@@ -64,6 +68,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_input_dynamic_axes,
     build_seg3d_head_export_spec,
     prepare_ptv3_export_inputs,
+    seg3d_head_outputs_from_export,
     split_block_parameters,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -357,6 +362,15 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
             )
         return list(self._export_output_names)
 
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the outputs of both heads from the exported heads' outputs."""
+        return ModelOutputs(
+            detection3d_head_outputs=Detection3DHeadOutputs(
+                transfusion_head_outputs=TransFusionHeadOutputs.from_export_tensors(tensors)
+            ),
+            segmentation3d_head_outputs=seg3d_head_outputs_from_export(tensors),
+        )
+
     def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the ONNX export spec for joint PTv3 segmentation+detection.
 
@@ -502,3 +516,9 @@ class _PTv3Det3DSeg3DExportModule(PTv3EncoderExportBase):
         detection = dict(zip(detection3d_names, det3d_outputs.export_tensors(detection3d_names)))
         outputs = segmentation | detection
         return tuple(outputs[name] for name in self.output_names)
+
+
+class PTv3Det3DSeg3DTensorRTModel(PTv3TensorRTMixin, PTv3Det3DSeg3DModel):
+    """PTv3 detection and segmentation whose exported graphs run as TensorRT engines."""
+
+    ENGINE_NAMES = ("ptv3_encoder", "ptv3_seg3d_head", "ptv3_det3d_head")

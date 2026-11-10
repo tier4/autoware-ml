@@ -432,3 +432,18 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             Ordered mapping of module name to export specification.
         """
         return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
+
+    def outputs_from_export_tensors(self, tensors: Mapping[str, torch.Tensor]) -> ModelOutputs:
+        """Rebuild the model outputs from the outputs of the exported graphs.
+
+        The inverse of how the export specs flatten the outputs, so deployed graphs are
+        decoded and scored like :meth:`forward`. Models that support deployed evaluation
+        override this hook.
+
+        Args:
+            tensors: Outputs of the exported graphs keyed by their export names.
+
+        Returns:
+            Model outputs as :meth:`forward` returns them.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not rebuild exported outputs.")
