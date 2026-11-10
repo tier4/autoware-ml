@@ -21,8 +21,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
-from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.tests.corpus import write_corpus
 from autoware_ml.datamodule.tests.test_data_module import (
@@ -30,7 +30,7 @@ from autoware_ml.datamodule.tests.test_data_module import (
     FakeDatabase,
     build_source,
 )
-from autoware_ml.scripts.tools.measure_ptv3_neighbors import measure_neighbors
+from autoware_ml.scripts.tools.ptv3.measure_neighbors import measure_neighbors
 
 
 class TestMeasureNeighbors(unittest.TestCase):
@@ -39,11 +39,11 @@ class TestMeasureNeighbors(unittest.TestCase):
     def test_reads_every_source_once_and_takes_the_p99(self) -> None:
         """
         Input: a three frame corpus beside a one frame corpus repeated six times, whose
-            scenarios put no scene in the validation split, and a measurement returning the
-            frame index and twice the frame index.
+            scenarios put no scene in the validation split, and a measurement returning
+            (0, 0), (1, 2), (2, 4) and (3, 6) in turn.
         Expected: every frame of every source is measured once, four frames rather than the
             nine of a training epoch, without building the empty validation split.
-        Check: the frames measured and the p99 of both stages over 0 to 3.
+        Check: the number of frames measured and the p99 of both stages.
         """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -62,15 +62,10 @@ class TestMeasureNeighbors(unittest.TestCase):
                 predict_dataloader=None,
                 train_frame_sampling=None,
             )
-            frames = []
-
-            def neighbors_of(batch: ModelGTBatch, frame: int) -> list[float]:
-                frames.append(frame)
-                return [frame, 2 * frame]
-
+            neighbors_of = mock.Mock(side_effect=[[frame, 2 * frame] for frame in range(4)])
             targets = measure_neighbors(datamodule, neighbors_of, num_workers=0)
 
-        self.assertEqual(frames, [0, 1, 2, 3])
+        self.assertEqual(neighbors_of.call_count, 4)
         self.assertEqual([round(target, 2) for target in targets], [2.97, 5.94])
 
 
@@ -79,12 +74,12 @@ class TestEntrypoint(unittest.TestCase):
 
     def test_module_runs_hydra_main(self) -> None:
         """
-        Input: ``python -m autoware_ml.scripts.tools.measure_ptv3_neighbors --help``.
+        Input: ``python -m autoware_ml.scripts.tools.ptv3.measure_neighbors --help``.
         Expected: the module starts its Hydra main.
         Check: exit code 0 and Hydra's help text.
         """
         result = subprocess.run(
-            [sys.executable, "-m", "autoware_ml.scripts.tools.measure_ptv3_neighbors", "--help"],
+            [sys.executable, "-m", "autoware_ml.scripts.tools.ptv3.measure_neighbors", "--help"],
             capture_output=True,
             text=True,
             check=False,

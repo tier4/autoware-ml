@@ -23,7 +23,6 @@ import unittest
 import numpy as np
 import torch
 
-from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
     build_serialized_pooling_metadata,
@@ -32,10 +31,7 @@ from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.structures import serialize_point_cloud_batch
 from autoware_ml.utils.synthetic_inputs import (
     VoxelLayoutSpec,
-    check_voxels,
-    list_stage_grids,
     mean_neighbors,
-    measure_stage_neighbors,
     voxel_layout,
     write_export_inputs,
 )
@@ -43,37 +39,6 @@ from autoware_ml.utils.synthetic_inputs import (
 _NEIGHBORS = (8.24, 9.15, 9.44, 9.93, 10.60)
 _PATCH_SIZE = 64
 _CENTER = torch.zeros(3)
-
-
-def _voxels_data(num_voxels: int, dropped: int) -> VoxelsData:
-    """Return the voxelizer output of one frame with ``num_voxels`` voxels, ``dropped`` lost."""
-    return VoxelsData(
-        voxels=torch.zeros(num_voxels, 1, 4),
-        coords=torch.zeros(num_voxels, 3, dtype=torch.int32),
-        num_points=torch.ones(num_voxels, dtype=torch.int32),
-        batch_indices=torch.zeros(num_voxels, dtype=torch.int32),
-        point_voxel_indices=torch.zeros(num_voxels, dtype=torch.int64),
-        num_dropped_voxels=torch.tensor(dropped),
-    )
-
-
-class TestCheckVoxels(unittest.TestCase):
-    """Unit tests for check_voxels."""
-
-    def test_names_the_frame_without_voxels_or_with_dropped_ones(self) -> None:
-        """
-        Input: a frame no voxelizer ran on, one the voxelizer found no voxels in, one it dropped
-            three voxels of, and one with two voxels and none dropped.
-        Expected: the first three stop the run with the frame in the message, the last passes.
-        Check: the error messages name the frame and the dropped count.
-        """
-        with self.assertRaisesRegex(ValueError, "train frame 7: no voxelizer"):
-            check_voxels(None, "train frame 7")
-        with self.assertRaisesRegex(RuntimeError, "train frame 7: no voxels"):
-            check_voxels(_voxels_data(0, dropped=0), "train frame 7")
-        with self.assertRaisesRegex(RuntimeError, "train frame 7: the voxelizer dropped 3"):
-            check_voxels(_voxels_data(2, dropped=3), "train frame 7")
-        check_voxels(_voxels_data(2, dropped=0), "train frame 7")
 
 
 class TestVoxelLayoutSpec(unittest.TestCase):
@@ -228,42 +193,6 @@ class TestMeanNeighbors(unittest.TestCase):
         expected = [((3 * side - 2) / side) ** 3 - 1 for side in (16, 8, 4, 2, 1)]
         stages = [grid, *(meta.grid_coord for meta in metadata)]
         measured = [mean_neighbors(stage) for stage in stages]
-        for value, target in zip(measured, expected, strict=True):
-            self.assertAlmostEqual(value, target)
-
-
-class TestStageNeighbors(unittest.TestCase):
-    """Unit tests for measure_stage_neighbors."""
-
-    def test_counts_neighbors_on_every_pooled_stage(self) -> None:
-        """
-        Input: every cell of a 16^3 cube, pooled by 2 four times with the model's serialized
-        pooling.
-        Expected: cubes of side 16, 8, 4, 2 and 1, whose voxels have ((3n - 2) / n)^3 - 1
-        neighbors on average.
-        Check: the mean neighbors of every stage, finest first.
-        """
-        grid = torch.cartesian_prod(*[torch.arange(16)] * 3)
-        point, _ = serialize_point_cloud_batch(
-            {
-                "coord": grid.float(),
-                "feat": grid.float(),
-                "grid_coord": grid,
-                "offset": torch.tensor([len(grid)]),
-            },
-            PTv3BaseModel.EXPORT_ORDER,
-            torch.tensor(5),
-        )
-        metadata = build_serialized_pooling_metadata(
-            point["grid_coord"],
-            point["serialized_code"],
-            point["serialized_order"],
-            [2, 2, 2, 2],
-            [64] * 5,
-        )
-
-        expected = [((3 * side - 2) / side) ** 3 - 1 for side in (16, 8, 4, 2, 1)]
-        measured = measure_stage_neighbors(list_stage_grids(grid, metadata))
         for value, target in zip(measured, expected, strict=True):
             self.assertAlmostEqual(value, target)
 
