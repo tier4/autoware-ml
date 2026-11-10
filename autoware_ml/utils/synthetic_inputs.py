@@ -14,8 +14,8 @@
 
 """Synthetic model inputs at set voxel counts and densities.
 
-The voxel layout pools stage by stage as a hierarchical encoder does, and the raw files it
-writes are the inputs of a trtexec latency benchmark.
+The voxel layout pools stage by stage as a hierarchical encoder does, and the inputs of every
+exported module are written as raw files.
 """
 
 # TODO(JonnaMat): Move the synthetic input helpers into a SyntheticDataBase class.
