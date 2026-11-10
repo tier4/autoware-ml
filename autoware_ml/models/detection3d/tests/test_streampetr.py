@@ -1346,3 +1346,28 @@ def test_partial_annotations_mask_the_cone_barrier_terms_of_unannotated_frames()
     assert ignored["dn_loss_cls"] < annotated["dn_loss_cls"]
     for key in ("loss_bbox", "dn_loss_bbox"):
         assert torch.equal(ignored[key], annotated[key]), key
+
+
+@pytest.mark.parametrize(
+    "class_names",
+    [
+        # Only the two partially annotated classes swap, which happens to mask the same columns.
+        ["car", "barrier", "traffic_cone"],
+        # The car column would be masked in the unannotated frames and the traffic cone never.
+        ["traffic_cone", "car", "barrier"],
+        ["car", "traffic_cone", "barrier", "truck"],
+    ],
+    ids=["partial_classes_swapped", "partial_class_moved", "one_class_more"],
+)
+def test_partial_annotations_must_list_the_classes_of_the_head_in_order(
+    class_names: list[str],
+) -> None:
+    """
+    Input: partial annotations over the head's classes in another order, or over one class
+    more.
+    Expected: the annotated class masks index the logits by position, so the model refuses
+    them when it is built instead of leaving other classes unsupervised.
+    Check: the ValueError naming both class lists.
+    """
+    with pytest.raises(ValueError, match=r"bbox_head\.class_names in the same order"):
+        _build_model(partial_annotations=_cone_barrier_annotations(class_names))

@@ -198,12 +198,12 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         img_neck: nn.Module,
         bbox_head: StreamPETRHead,
         log_dict_configs: LogDictConfigs,
-        partial_annotations: PartialAnnotations | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        partial_annotations: PartialAnnotations | None = None,
     ) -> None:
         """Initialize StreamPETR.
 
@@ -213,14 +213,18 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             img_neck: Image neck producing the tokens the head attends to.
             bbox_head: StreamPETR query head.
             log_dict_configs: Logging configuration for training and validation.
-            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
-                the head must not supervise in that sample. None supervises every class.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             optimizer_group_overrides: Optimizer overrides keyed by the groups of
                 :meth:`build_optimizer_groups`.
             scheduler_config: Lightning scheduler metadata such as ``interval``.
             metrics: Detection metrics accumulated during validation and test.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
+
+        Raises:
+            ValueError: If ``partial_annotations`` does not list the classes of the head in
+                the head's order.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -237,6 +241,16 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             img_backbone=img_backbone, img_neck=img_neck
         )
         self.bbox_head = bbox_head
+        # The masks index the logits by position, so another order would leave the wrong
+        # classes unsupervised.
+        if (
+            partial_annotations is not None
+            and partial_annotations.class_names != bbox_head.class_names
+        ):
+            raise ValueError(
+                "partial_annotations.class_names must equal bbox_head.class_names in the same "
+                f"order, got {partial_annotations.class_names} and {bbox_head.class_names}."
+            )
         self.partial_annotations = partial_annotations
 
     def _start_streams(self) -> None:
@@ -345,7 +359,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             Loss dictionary produced by the detection head.
 
         Raises:
-            ValueError: If the batch carries no detection ground truth.
+            ValueError: If the batch carries no detection ground truth, or no annotation flag
+                while ``partial_annotations`` is configured.
         """
         gt_batch = multi_task_batch_inputs.multi_task_gt_batch
         if gt_batch.detection3d_gt_batch is None:
