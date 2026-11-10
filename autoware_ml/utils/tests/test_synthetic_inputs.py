@@ -37,6 +37,7 @@ from autoware_ml.utils.synthetic_inputs import (
 )
 
 _NEIGHBORS = (8.24, 9.15, 9.44, 9.93, 10.60)
+_PATCH_SIZE = 64
 _CENTER = torch.zeros(3)
 
 
@@ -99,7 +100,7 @@ class TestVoxelLayout(unittest.TestCase):
             point["serialized_code"],
             point["serialized_order"],
             strides,
-            [512] * len(counts),
+            [_PATCH_SIZE] * len(counts),
         )
         stages = [grid, *(meta.grid_coord for meta in metadata)]
         self.assertEqual([len(stage) for stage in stages], counts)
@@ -161,6 +162,39 @@ class TestMeanNeighbors(unittest.TestCase):
         grid = torch.cartesian_prod(*[torch.arange(16)] * 3).cuda()
 
         self.assertAlmostEqual(mean_neighbors(grid), ((3 * 16 - 2) / 16) ** 3 - 1)
+
+    def test_counts_neighbors_on_every_pooled_stage(self) -> None:
+        """
+        Input: every cell of a 16^3 cube, pooled by 2 four times with the model's serialized
+        pooling.
+        Expected: cubes of side 16, 8, 4, 2 and 1, whose voxels have ((3n - 2) / n)^3 - 1
+        neighbors on average.
+        Check: the mean neighbors of every stage, finest first.
+        """
+        grid = torch.cartesian_prod(*[torch.arange(16)] * 3)
+        point, _ = serialize_point_cloud_batch(
+            {
+                "coord": grid.float(),
+                "feat": grid.float(),
+                "grid_coord": grid,
+                "offset": torch.tensor([len(grid)]),
+            },
+            PTv3BaseModel.EXPORT_ORDER,
+            torch.tensor(5),
+        )
+        metadata = build_serialized_pooling_metadata(
+            point["grid_coord"],
+            point["serialized_code"],
+            point["serialized_order"],
+            [2, 2, 2, 2],
+            [_PATCH_SIZE] * 5,
+        )
+
+        expected = [((3 * side - 2) / side) ** 3 - 1 for side in (16, 8, 4, 2, 1)]
+        stages = [grid, *(meta.grid_coord for meta in metadata)]
+        measured = [mean_neighbors(stage) for stage in stages]
+        for value, target in zip(measured, expected, strict=True):
+            self.assertAlmostEqual(value, target)
 
 
 class TestWriteExportInputs(unittest.TestCase):

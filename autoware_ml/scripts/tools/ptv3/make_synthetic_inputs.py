@@ -69,11 +69,10 @@ def main(cfg: DictConfig) -> None:
     validate_cuda_available()
     configure_torch_runtime()
     set_seed(cfg)
-    device = torch.device("cuda")
     model = build_model(
         cfg,
         data_preprocessor=build_data_preprocessor(cfg),
-        device=device,
+        device=torch.device("cuda"),
         weights_path=None,
         resume_checkpoint_path=None,
         set_eval=True,
@@ -113,7 +112,7 @@ def main(cfg: DictConfig) -> None:
         image_gt_batch=None,
         padding_mask=torch.zeros(1, dtype=torch.bool),
     )
-    batch_inputs = model.on_after_batch_transfer(batch.to_device(device), dataloader_idx=0)
+    batch_inputs = model.on_after_batch_transfer(batch.to_device(model.device), dataloader_idx=0)
 
     inputs = prepare_ptv3_export_inputs(model, batch_inputs)
     stages = [inputs.grid_coord, *(meta.grid_coord for meta in inputs.pooling_metadata)]
