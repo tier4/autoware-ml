@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.stats import rankdata
 import torch
 
 from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.segmentation3d.calibration import CalibrationError
 from autoware_ml.metrics.segmentation3d.confident_error import ConfidentErrorRate
-from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness
+from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness, binned_auroc
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
 from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.partial_detection3d import PartialDetection3DScore
@@ -26,6 +27,7 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
     confidence,
     normalized_entropy,
 )
+from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
 from autoware_ml.metrics.report import MetricKey
 
 CLASS_NAMES = ("road", "obstacle")
@@ -409,8 +411,6 @@ def test_partial_detection3d_requires_the_shared_taxonomy_prefix() -> None:
 def test_tolerant_error_mask_equals_brute_force_reference() -> None:
     # The per-class nearest-neighbour formulation must reproduce the direct
     # definition: wrong, and no point predicted the true class within radius.
-    from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
-
     rng = np.random.default_rng(3)
     coord = rng.uniform(-20, 20, (2000, 3))
     target = rng.integers(0, 3, 2000)
@@ -436,11 +436,6 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
 def test_entropy_auroc_binned_matches_rankdata_reference() -> None:
     # The histogram closed form must agree with exact tie-aware ranking to well
     # under one bin width.
-    import numpy as np
-    from scipy.stats import rankdata
-
-    from autoware_ml.metrics.segmentation3d.entropy_auroc import binned_auroc
-
     rng = np.random.default_rng(5)
     entropy = rng.beta(2.0, 5.0, 50_000)
     wrong = rng.random(50_000) < 0.2

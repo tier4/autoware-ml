@@ -166,6 +166,7 @@ consider_namespace_packages = true
 ignore = ["F722"]
 extend-select = [
     "PGH003",  # `# type: ignore[code]`, not a blanket ignore
+    "PLC0415",  # imports at the top of the file
     "S101",  # raise instead of assert
     "T201",  # log instead of print
     "TID251",  # banned APIs, listed below

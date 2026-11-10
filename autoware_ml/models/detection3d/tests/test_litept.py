@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from omegaconf import OmegaConf
+import onnx
 import pytest
 import torch
 
@@ -26,6 +28,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     rope_span,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.utils.deploy import export_to_onnx
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_litept_encoder,
     build_litept_seg3d_model,
@@ -298,11 +301,6 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
     unread and the exporter prunes exactly that part, so a gated artifact declares
     a subset of the contract - which is what the deployed node accepts.
     """
-    import onnx
-    from omegaconf import OmegaConf
-
-    from autoware_ml.utils.deploy import export_to_onnx
-
     onnx_cfg = OmegaConf.create(
         {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
     )

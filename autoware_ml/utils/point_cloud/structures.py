@@ -123,7 +123,7 @@ class Point(dict[str, torch.Tensor]):
                 "spconv is required for Point.sparsify() but is not installed."
             )
 
-        import spconv.pytorch as spconv
+        import spconv.pytorch as spconv  # noqa: PLC0415 (optional, 2 s to import)
 
         if "batch" not in self:
             self["batch"] = offset_to_batch(self["offset"], self["coord"])

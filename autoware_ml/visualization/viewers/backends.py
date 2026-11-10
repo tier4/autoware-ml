@@ -60,7 +60,9 @@ def create_visualization_backend(
     if config.backend == "noop":
         return NoOpVisualizationBackend()
     if config.backend == "rerun":
-        from autoware_ml.visualization.viewers.rerun_backend import RerunVisualizationBackend
+        from autoware_ml.visualization.viewers.rerun_backend import (  # noqa: PLC0415
+            RerunVisualizationBackend,
+        )
 
         return RerunVisualizationBackend(config)
     raise ValueError(f"Unknown visualization backend: {config.backend}")
