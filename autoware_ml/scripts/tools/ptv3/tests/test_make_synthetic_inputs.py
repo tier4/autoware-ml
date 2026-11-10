@@ -26,7 +26,7 @@ class TestEntrypoint(unittest.TestCase):
 
     def test_module_runs_hydra_main(self) -> None:
         """
-        Input: ``python -m autoware_ml.scripts.tools.make_ptv3_synthetic_inputs --help``.
+        Input: ``python -m autoware_ml.scripts.tools.ptv3.make_synthetic_inputs --help``.
         Expected: the module starts its Hydra main.
         Check: exit code 0 and Hydra's help text.
         """
@@ -34,7 +34,7 @@ class TestEntrypoint(unittest.TestCase):
             [
                 sys.executable,
                 "-m",
-                "autoware_ml.scripts.tools.make_ptv3_synthetic_inputs",
+                "autoware_ml.scripts.tools.ptv3.make_synthetic_inputs",
                 "--help",
             ],
             capture_output=True,
