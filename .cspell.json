@@ -177,6 +177,7 @@
     "keepdims",
     "killpg",
     "kmax",
+    "KRSC",
     "ksize",
     "LAPACK",
     "lidarseg",
