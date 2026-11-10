@@ -12,15 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the partial annotations of the StreamPETR head."""
+"""Unit tests of the annotated class masks in the StreamPETR head loss.
+
+The head takes the ``(batch_size, num_classes)`` mask of the classes annotated in every sample;
+``PartialAnnotations``, which builds it from the dataset flag, is tested in ``task_modules``.
+Every term of the sigmoid focal loss is independent of the others, so the masks are checked term
+by term: with them, the gradient of every logit is the gradient without them times the weight its
+term should have.
+"""
 
 from __future__ import annotations
 
-import pytest
+from typing import NamedTuple
+import unittest
+
 import torch
 
-from autoware_ml.dataclasses.models.detection3d.head_outputs import StreamPETRHeadOutputs
-from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
+from autoware_ml.dataclasses.models.detection3d.head_outputs import (
+    StreamPETRDenoisingOutputs,
+    StreamPETRHeadOutputs,
+)
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
@@ -29,37 +40,34 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
     ClassificationCost,
     IoU3DCost,
 )
-from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 
 CLASS_NAMES = ["car", "truck", "bus", "bicycle", "pedestrian", "traffic_cone", "barrier"]
-PARTIAL_ANNOTATIONS = PartialAnnotations(CLASS_NAMES, ["traffic_cone", "barrier"])
+NUM_CLASSES = len(CLASS_NAMES)
+TRAFFIC_CONE, BARRIER = 5, 6
+NUM_QUERIES = 16
+NUM_LAYERS = 2
+SCALAR = 2
 POINT_CLOUD_RANGE = [-10.0, -10.0, -5.0, 10.0, 10.0, 5.0]
 
 
-def _masks(status: list[bool]) -> torch.Tensor:
-    return PARTIAL_ANNOTATIONS.build_annotated_class_masks(torch.tensor(status))
-
-
 def _build_head() -> StreamPETRHead:
+    torch.manual_seed(0)
     return StreamPETRHead(
         class_names=CLASS_NAMES,
         in_channels=32,
         hidden_dim=32,
-        num_queries=16,
-        num_decoder_layers=2,
+        num_queries=NUM_QUERIES,
+        num_decoder_layers=NUM_LAYERS,
         num_heads=4,
         feedforward_channels=64,
         memory_len=16,
         topk_proposals=4,
         num_propagated=4,
         with_dn=True,
-        with_ego_pos=True,
         depth_num=8,
-        LID=True,
         position_range=[-12.0, -12.0, -6.0, 12.0, 12.0, 6.0],
-        scalar=2,
+        scalar=SCALAR,
         noise_scale=0.5,
-        dn_weight=1.0,
         split=0.5,
         bbox_coder=NMSFreeBBoxCoder3D(
             pc_range=POINT_CLOUD_RANGE,
@@ -75,192 +83,226 @@ def _build_head() -> StreamPETRHead:
         ),
         point_cloud_range=POINT_CLOUD_RANGE,
         code_weights=[2.0, 2.0] + [1.0] * 8,
+    ).train()
+
+
+class _Batch(NamedTuple):
+    """Head outputs of a three-sample batch with its ground truth and masks."""
+
+    cls_scores: torch.Tensor
+    bbox_preds: torch.Tensor
+    gt_boxes: list[torch.Tensor]
+    gt_labels: list[torch.Tensor]
+    padding_mask: torch.Tensor
+    annotated_class_masks: torch.Tensor
+    # The denoising queries, None without boxes: (logits, boxes, labels, samples, slots).
+    denoising: tuple[torch.Tensor, ...] | None
+
+
+def _batch(with_boxes: bool) -> _Batch:
+    """Sample 0 is annotated with every class and holds a car and a traffic cone; sample 1 is
+    annotated without traffic cones and barriers and still holds a truck and a traffic cone;
+    sample 2 pads the batch and is flagged as annotated with every class.
+
+    Without boxes the samples hold none, so every query is unmatched and there is no denoising.
+    """
+    generator = torch.Generator().manual_seed(0)
+    labels = [torch.tensor([0, TRAFFIC_CONE]), torch.tensor([1, TRAFFIC_CONE])]
+    if not with_boxes:
+        labels = [torch.zeros(0, dtype=torch.long)] * 2
+    labels.append(torch.zeros(0, dtype=torch.long))
+    boxes = []
+    for sample_labels in labels:
+        sample_boxes = torch.rand(sample_labels.numel(), 9, generator=generator) * 8.0 - 4.0
+        sample_boxes[:, 3:6] = sample_boxes[:, 3:6].abs() + 0.5
+        boxes.append(sample_boxes)
+    annotated_class_masks = torch.ones(3, NUM_CLASSES, dtype=torch.bool)
+    annotated_class_masks[1, [TRAFFIC_CONE, BARRIER]] = False
+
+    denoising = None
+    if with_boxes:
+        # One query per box and group, laid out as the head lays them out (two slots per
+        # sample and group); three of them are noised into the background.
+        known_labels = torch.cat(labels).repeat(SCALAR)
+        known_labels[[1, 3, 6]] = NUM_CLASSES
+        denoising = (
+            torch.randn(NUM_LAYERS, 3, 2 * SCALAR, NUM_CLASSES, generator=generator),
+            torch.randn(NUM_LAYERS, 3, 2 * SCALAR, 10, generator=generator),
+            known_labels,
+            torch.tensor([0, 0, 1, 1]).repeat(SCALAR),
+            torch.tensor([0, 1, 0, 1, 2, 3, 2, 3]),
+        )
+    return _Batch(
+        cls_scores=torch.randn(NUM_LAYERS, 3, NUM_QUERIES, NUM_CLASSES, generator=generator),
+        bbox_preds=torch.randn(NUM_LAYERS, 3, NUM_QUERIES, 10, generator=generator),
+        gt_boxes=boxes,
+        gt_labels=labels,
+        padding_mask=torch.tensor([False, False, True]),
+        annotated_class_masks=annotated_class_masks,
+        denoising=denoising,
     )
 
 
-def test_partial_annotations_mask_only_the_cone_and_barrier_columns() -> None:
-    """
-    Input: the traffic-cone and barrier status of two frames over the seven classes, True for
-    the first frame and False for the second.
-    Expected: the first frame supervises every class, the second one every class but
-    traffic_cone and barrier.
-    Check: the mask shape, every column of the first row, and columns 5 and 6 against the first
-    five of the second row.
-    """
-    masks = _masks([True, False])
-    assert masks.shape == (2, 7)
-    assert masks[0].all()
-    assert not masks[1, [5, 6]].any()
-    assert masks[1, :5].all()
-
-
-def test_sigmoid_focal_loss_classwise_weights_zero_masked_columns() -> None:
-    """
-    Input: random logits of four queries over seven classes, all background, scored without
-    weights, with weights of one, and with weights of zero on columns 5 and 6.
-    Expected: weights of one change nothing, and zero-weighted columns drop out of the loss as
-    if their classes did not exist.
-    Check: the unweighted loss against the one with weights of one, and the masked loss against
-    the loss of the first five columns alone.
-    """
-    loss_fn = SigmoidFocalLoss()
-    logits = torch.randn(4, 7)
-    targets = torch.zeros(4, 7)
-    ones = torch.ones(4, 7)
-    baseline = loss_fn(logits, targets, avg_factor=1.0)
-    weighted = loss_fn(logits, targets, weights=ones, avg_factor=1.0)
-    assert torch.allclose(baseline, weighted)
-
-    masked_weights = ones.clone()
-    masked_weights[:, [5, 6]] = 0.0
-    masked = loss_fn(logits, targets, weights=masked_weights, avg_factor=1.0)
-    manual = loss_fn(logits[:, :5], targets[:, :5], avg_factor=1.0)
-    assert torch.allclose(masked, manual, atol=1e-6)
-
-
-def test_get_targets_weights_every_query_by_the_mask_of_its_frame() -> None:
-    """
-    Input: the classification targets of a frame with one box, built with the mask of a frame
-    annotated without traffic cones and barriers, without a mask, and for a batch of two frames,
-    the first annotated with them and the second without.
-    Expected: every query of a frame annotated without them but the matched one loses only the
-    cone and barrier columns of its classification weights, while the matched query keeps every
-    column; no mask keeps the weights uniform, and in a batch every frame weights its queries by
-    its own mask.
-    Check: the label weights of the masked frame by query and column, None without a mask, and
-    the weights of both frames of the batch.
-    """
-    head = _build_head()
-    num_queries = 16
-    cls_logits = torch.randn(1, num_queries, 7)
-    box_params = torch.randn(1, num_queries, 10)
-    box_params[..., :3] = 0.0
-    gt_boxes = [torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.1, 0.0, 0.0]], dtype=torch.float32)]
-    gt_labels = [torch.tensor([0], dtype=torch.long)]
-
-    targets = head._get_targets(cls_logits, box_params, gt_boxes, gt_labels, _masks([False]))[0]
-    assert targets.label_weights is not None
-    assert targets.label_weights.shape == (num_queries, 7)
-
-    # Every query of the un-annotated frame but the matched one loses only the cone/barrier
-    # columns; the matched query is vouched for by its box.
-    matched = targets.labels >= 0
-    assert int(matched.sum()) == 1
-    assert torch.all(targets.label_weights[matched] == 1.0)
-    assert torch.all(targets.label_weights[~matched][:, [5, 6]] == 0.0)
-    assert torch.all(targets.label_weights[:, :5] == 1.0)
-
-    # Without a mask the weights stay uniform (None).
-    plain = head._get_targets(cls_logits, box_params, gt_boxes, gt_labels)[0]
-    assert plain.label_weights is None
-
-    # In a mixed batch every sample carries its own row.
-    mixed = head._get_targets(
-        cls_logits.repeat(2, 1, 1),
-        box_params.repeat(2, 1, 1),
-        gt_boxes * 2,
-        gt_labels * 2,
-        _masks([True, False]),
-    )
-    assert torch.all(mixed[0].label_weights == 1.0)
-    assert torch.all(mixed[1].label_weights[mixed[1].labels < 0][:, [5, 6]] == 0.0)
-
-
-def test_dn_label_weights_mask_every_denoising_query_of_unannotated_samples() -> None:
-    """
-    Input: six denoising queries of two samples, sample 1 annotated without traffic cones and
-    barriers; one of its queries keeps the label of its box (a traffic cone), two are noised
-    into the background.
-    Expected: the background queries of sample 1 lose the cone and barrier columns, its query
-    with a label keeps every column, the queries of sample 0 stay fully weighted, and no mask
-    gives no weights.
-    Check: the weights of the queries of each sample by column, and None without a mask.
-    """
-    head = _build_head()
-    cls_scores = torch.randn(6, 7)
-    known_bids = torch.tensor([0, 0, 1, 1, 1, 0])
-    # 7 is the background label of the 7 classes.
-    known_labels = torch.tensor([0, 7, 5, 7, 7, 0])
-    weights = head._dn_label_weights(cls_scores, known_bids, known_labels, _masks([True, False]))
-    assert weights is not None
-    # The background rows of sample 1 (indices 3, 4) are masked on columns 5/6.
-    assert torch.all(weights[[3, 4]][:, [5, 6]] == 0.0)
-    assert torch.all(weights[[3, 4]][:, :5] == 1.0)
-    # Its traffic cone row and the rows of the annotated sample 0 stay fully weighted.
-    assert torch.all(weights[[0, 1, 2, 5]] == 1.0)
-
-    assert head._dn_label_weights(cls_scores, known_bids, known_labels, None) is None
-
-
-def test_a_matched_query_of_an_unannotated_class_keeps_its_terms() -> None:
-    """
-    Input: one traffic cone in a frame annotated without traffic cones and barriers, scored by
-    the StreamPETR head loss.
-    Expected: the query matched to the cone is vouched for by its box and keeps every
-    classification term, as in TransFusion, so the cone is learned even there; every other
-    query loses its cone and barrier terms.
-    Check: the gradient of the classification loss on the cone and barrier logits of the last
-    decoder layer, non-zero on exactly one query.
-    """
-    torch.manual_seed(0)
-    head = _build_head().eval()
-    cls_scores = torch.randn(2, 1, 16, 7, requires_grad=True)
+def _losses_and_gradients(
+    head: StreamPETRHead, batch: _Batch, masks: torch.Tensor | None
+) -> tuple[dict[str, torch.Tensor], list[torch.Tensor]]:
+    """The losses of the batch and the gradients of the logits and boxes, denoising ones last."""
+    leaves = [batch.cls_scores.clone().requires_grad_(), batch.bbox_preds.clone().requires_grad_()]
+    denoising = None
+    if batch.denoising is not None:
+        dn_cls_scores, dn_bbox_preds, known_labels, batch_indices, slot_indices = batch.denoising
+        leaves += [dn_cls_scores.clone().requires_grad_(), dn_bbox_preds.clone().requires_grad_()]
+        denoising = StreamPETRDenoisingOutputs(
+            cls_scores=leaves[2],
+            bbox_preds=leaves[3],
+            known_labels=known_labels,
+            known_boxes=torch.cat(batch.gt_boxes).repeat(SCALAR, 1),
+            batch_indices=batch_indices,
+            slot_indices=slot_indices,
+        )
     outputs = StreamPETRHeadOutputs(
-        all_cls_scores=cls_scores, all_bbox_preds=torch.rand(2, 1, 16, 10), denoising=None
+        all_cls_scores=leaves[0], all_bbox_preds=leaves[1], denoising=denoising
     )
-    gt_boxes = [torch.tensor([[0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 0.1, 0.0, 0.0]], dtype=torch.float32)]
-    gt_labels = [torch.tensor([5], dtype=torch.long)]
-
     losses = head.loss(
         outputs,
-        gt_boxes,
-        gt_labels,
-        padding_mask=torch.zeros(1, dtype=torch.bool),
-        gt_annotated_class_masks=_masks([False]),
+        batch.gt_boxes,
+        batch.gt_labels,
+        padding_mask=batch.padding_mask,
+        gt_annotated_class_masks=masks,
     )
+    losses["loss"].backward()
+    return losses, [leaf.grad for leaf in leaves]
 
-    (grad,) = torch.autograd.grad(losses["loss_cls"], cls_scores)
-    assert torch.count_nonzero(grad[-1, 0, :, 5:7].abs().sum(dim=-1)) == 1
 
+def _expected_weights(head: StreamPETRHead, batch: _Batch) -> list[torch.Tensor]:
+    """The weight every classification term should have, for the queries and the denoising ones.
 
-def test_head_loss_applies_the_annotated_class_masks() -> None:
+    Every query weights its terms by the annotated classes of its sample, none for a padding
+    sample. A query the assigner matches to a box, or a denoising query that keeps the label of
+    its box, is vouched for by the box and keeps every term.
     """
-    Input: the StreamPETR head loss of one frame with one box, without a mask, with the mask of
-    a frame annotated with traffic cones and barriers, with the mask of a frame annotated
-    without them, and with the masks of two frames.
-    Expected: the mask of an annotated frame gives the plain loss, and the other mask removes
-    non-negative background terms from the classification loss only; masks of another batch size
-    are refused.
-    Check: the total losses, the classification and regression losses, and a ValueError naming
-    the expected shape.
-    """
-    torch.manual_seed(0)
-    head = _build_head().eval()
-    outputs = StreamPETRHeadOutputs(
-        all_cls_scores=torch.randn(2, 1, 16, 7),
-        all_bbox_preds=torch.rand(2, 1, 16, 10),
-        denoising=None,
-    )
-    gt_boxes = [torch.tensor([[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.1, 0.0, 0.0]], dtype=torch.float32)]
-    gt_labels = [torch.tensor([0], dtype=torch.long)]
-    real = torch.zeros(1, dtype=torch.bool)
-
-    plain = head.loss(outputs, gt_boxes, gt_labels, padding_mask=real)
-    annotated = head.loss(
-        outputs, gt_boxes, gt_labels, padding_mask=real, gt_annotated_class_masks=_masks([True])
-    )
-    ignored = head.loss(
-        outputs, gt_boxes, gt_labels, padding_mask=real, gt_annotated_class_masks=_masks([False])
-    )
-    torch.testing.assert_close(annotated["loss"], plain["loss"])
-    assert ignored["loss_cls"] < annotated["loss_cls"]
-    assert torch.allclose(ignored["loss_bbox"], annotated["loss_bbox"])
-
-    with pytest.raises(ValueError, match="batch_size, num_classes"):
-        head.loss(
-            outputs,
-            gt_boxes,
-            gt_labels,
-            padding_mask=real,
-            gt_annotated_class_masks=_masks([True, False]),
+    supervised = (batch.annotated_class_masks & ~batch.padding_mask.unsqueeze(-1)).float()
+    weights = supervised[None, :, None, :].repeat(NUM_LAYERS, 1, NUM_QUERIES, 1)
+    for layer in range(NUM_LAYERS):
+        targets = head._get_targets(
+            batch.cls_scores[layer], batch.bbox_preds[layer], batch.gt_boxes, batch.gt_labels
         )
+        for sample, sample_targets in enumerate(targets):
+            weights[layer, sample, sample_targets.labels >= 0] = 1.0
+    if batch.denoising is None:
+        return [weights]
+    dn_cls_scores, _, known_labels, batch_indices, slot_indices = batch.denoising
+    dn_weights = torch.zeros_like(dn_cls_scores)
+    for label, sample, slot in zip(known_labels, batch_indices, slot_indices):
+        dn_weights[:, sample, slot] = 1.0 if label < NUM_CLASSES else supervised[sample]
+    return [weights, dn_weights]
+
+
+class TestStreamPETRPartialAnnotations(unittest.TestCase):
+    def test_every_classification_term_takes_the_annotated_classes_of_its_sample(self) -> None:
+        """
+        Input: a batch of a sample annotated with every class, a sample annotated without
+            traffic cones and barriers that still holds a traffic cone, and a padding sample
+            flagged as annotated; with boxes and denoising queries, and without any box.
+        Expected: a matched query and a denoising query that keeps its label keep every term,
+            the traffic cone of the unannotated sample included; the other queries and the
+            denoising queries noised into the background keep the annotated classes of their
+            sample; the padding sample keeps none.
+        Check: every classification gradient with the masks against the gradient without them
+            times the expected weight, to the bit; that some terms are dropped, and that in the
+            unannotated sample exactly its two matched queries keep the traffic-cone and barrier
+            terms.
+        """
+        head = _build_head()
+        for with_boxes in (True, False):
+            with self.subTest(with_boxes=with_boxes):
+                batch = _batch(with_boxes)
+                _, plain = _losses_and_gradients(head, batch, None)
+                _, masked = _losses_and_gradients(head, batch, batch.annotated_class_masks)
+                weights = _expected_weights(head, batch)
+
+                # The logits are the first and, with denoising, the third leaves.
+                for observed, unmasked, weight in zip(masked[::2], plain[::2], weights):
+                    torch.testing.assert_close(observed, unmasked * weight, rtol=0.0, atol=0.0)
+                self.assertTrue(torch.any((weights[0] == 0.0) & (plain[0] != 0.0)))
+                kept = masked[0][:, 1, :, [TRAFFIC_CONE, BARRIER]].ne(0.0).any(dim=-1)
+                self.assertEqual(kept.sum(dim=-1).tolist(), [2 if with_boxes else 0] * NUM_LAYERS)
+
+    def test_masks_change_neither_the_regression_nor_the_counts(self) -> None:
+        """
+        Input: the batch with boxes and denoising queries, with and without the masks.
+        Expected: the masks only drop classification terms, so the regression losses, divided
+            by the same counts, stay the same.
+        Check: the regression losses and the gradients of every box, to the bit.
+        """
+        head = _build_head()
+        batch = _batch(with_boxes=True)
+        plain_losses, plain = _losses_and_gradients(head, batch, None)
+        masked_losses, masked = _losses_and_gradients(head, batch, batch.annotated_class_masks)
+
+        for key in [key for key in plain_losses if "bbox" in key]:
+            self.assertTrue(torch.equal(masked_losses[key], plain_losses[key]), key)
+        for observed, unmasked in zip(masked[1::2], plain[1::2]):
+            self.assertTrue(torch.equal(observed, unmasked))
+
+    def test_masks_with_every_class_annotated_give_the_loss_without_masks(self) -> None:
+        """
+        Input: the batch with boxes and denoising queries, without masks and with masks that
+            annotate every class of every sample.
+        Expected: nothing is dropped, so the losses are those without masks.
+        Check: every loss term and every gradient, to the bit.
+        """
+        head = _build_head()
+        batch = _batch(with_boxes=True)
+        plain_losses, plain = _losses_and_gradients(head, batch, None)
+        full_losses, full = _losses_and_gradients(
+            head, batch, torch.ones(3, NUM_CLASSES, dtype=torch.bool)
+        )
+
+        self.assertEqual(full_losses.keys(), plain_losses.keys())
+        for key, value in plain_losses.items():
+            self.assertTrue(torch.equal(full_losses[key], value), key)
+        for observed, unmasked in zip(full, plain):
+            self.assertTrue(torch.equal(observed, unmasked))
+
+    def test_masks_of_another_shape_are_refused(self) -> None:
+        """
+        Input: annotated class masks of another batch size or class count, and a padding mask
+            of another batch size.
+        Expected: such a mask would weight the wrong samples or classes, so the head refuses it.
+        Check: the ValueError naming the expected shape.
+        """
+        head = _build_head()
+        batch = _batch(with_boxes=False)
+        cases = {
+            "masks of another batch size": (
+                {"gt_annotated_class_masks": torch.ones(2, NUM_CLASSES, dtype=torch.bool)},
+                r"\(3, 7\)",
+            ),
+            "masks of another class count": (
+                {"gt_annotated_class_masks": torch.ones(3, 3, dtype=torch.bool)},
+                r"\(3, 7\)",
+            ),
+            "padding mask of another batch size": (
+                {"padding_mask": torch.zeros(2, dtype=torch.bool)},
+                r"\(3,\)",
+            ),
+        }
+        for case, (overrides, expected_shape) in cases.items():
+            arguments = {"padding_mask": batch.padding_mask, **overrides}
+            with self.subTest(case):
+                with self.assertRaisesRegex(ValueError, expected_shape):
+                    head.loss(
+                        StreamPETRHeadOutputs(
+                            all_cls_scores=batch.cls_scores,
+                            all_bbox_preds=batch.bbox_preds,
+                            denoising=None,
+                        ),
+                        batch.gt_boxes,
+                        batch.gt_labels,
+                        **arguments,
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

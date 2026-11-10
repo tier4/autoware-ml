@@ -150,8 +150,6 @@ class StreamPETRTargets:
 
     labels: torch.Tensor  # [Q] assigned class, -1 for unmatched queries
     bbox_targets: torch.Tensor  # [Q, 9] matched ground-truth box, zeros where unmatched
-    # [Q, C] classwise weights; None means uniform classification weights.
-    label_weights: torch.Tensor | None = None
 
 
 class StreamPETRHead(nn.Module):
@@ -834,14 +832,11 @@ class StreamPETRHead(nn.Module):
         box_params: torch.Tensor,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
-        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
     ) -> list[StreamPETRTargets]:
         """Match the queries of one decoder layer to the ground truth of every sample.
 
         The assigner works on the padded ``[batch, max_num_gts]`` layout, so the per-sample
         lists are padded for one call per layer and the matches are read back per sample.
-        Classes not annotated in a sample have no negative classification supervision;
-        queries matched to explicit boxes still retain all their classification terms.
         """
         batch_size, num_queries = cls_logits.shape[:2]
         max_num_gts = max(boxes.shape[0] for boxes in gt_boxes)
@@ -875,20 +870,7 @@ class StreamPETRHead(nn.Module):
                 matched_gt_inds = assigned.gt_inds[index, pos_inds] - 1
                 labels[pos_inds] = padded_labels[index, matched_gt_inds]
                 bbox_targets[pos_inds] = padded_boxes[index, matched_gt_inds]
-            label_weights = None
-            if gt_annotated_class_masks is not None:
-                label_weights = (
-                    gt_annotated_class_masks[index]
-                    .to(dtype=cls_logits.dtype)
-                    .expand(num_queries, self.num_classes)
-                    .clone()
-                )
-                label_weights[pos_inds] = 1.0
-            targets.append(
-                StreamPETRTargets(
-                    labels=labels, bbox_targets=bbox_targets, label_weights=label_weights
-                )
-            )
+            targets.append(StreamPETRTargets(labels=labels, bbox_targets=bbox_targets))
         return targets
 
     def _loss_single(
@@ -897,31 +879,32 @@ class StreamPETRHead(nn.Module):
         bbox_preds: torch.Tensor,
         gt_boxes: list[torch.Tensor],
         gt_labels: list[torch.Tensor],
-        label_weights: torch.Tensor,
+        class_weights: torch.Tensor,
         total_pos: float,
-        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute the matching losses of one decoder layer.
 
+        ``class_weights`` are the classification weights of the unmatched queries of every
+        sample, ``(batch, 1)`` or ``(batch, num_classes)`` (see :meth:`loss`). A matched query
+        is vouched for by its box, so it keeps every classification term, as in TransFusion.
         ``total_pos`` is the positive count of the step, floored at 1 by :meth:`loss`. The
         divisions by it are explicit because the focal loss floors ``avg_factor`` per rank.
         """
-        targets = self._get_targets(
-            cls_scores, bbox_preds, gt_boxes, gt_labels, gt_annotated_class_masks
-        )
+        targets = self._get_targets(cls_scores, bbox_preds, gt_boxes, gt_labels)
 
         target_labels = []
+        positive_masks = []
         for sample_targets in targets:
             one_hot = cls_scores.new_zeros((sample_targets.labels.shape[0], self.num_classes))
             pos_mask = sample_targets.labels >= 0
             one_hot[pos_mask, sample_targets.labels[pos_mask]] = 1.0
             target_labels.append(one_hot)
+            positive_masks.append(pos_mask)
         target_labels_tensor = torch.stack(target_labels, dim=0)
-        if gt_annotated_class_masks is not None:
-            # Preserve the upstream broadcast weights when no partial annotations are used.
-            label_weights = torch.stack(
-                [sample_targets.label_weights for sample_targets in targets], dim=0
-            )
+        # (batch, Q, 1) matched queries over the (batch, 1, 1 or num_classes) sample weights.
+        label_weights = torch.where(
+            torch.stack(positive_masks, dim=0).unsqueeze(-1), 1.0, class_weights.unsqueeze(1)
+        )
         loss_cls = (
             self.loss_cls_weight
             * self.loss_cls(cls_scores, target_labels_tensor, weights=label_weights)
@@ -959,20 +942,6 @@ class StreamPETRHead(nn.Module):
         bbox_preds = denoising.bbox_preds.permute(1, 2, 0, 3)[selection].permute(1, 0, 2)
         return cls_scores, bbox_preds
 
-    @staticmethod
-    def _dn_label_weights(
-        cls_scores: torch.Tensor,
-        known_bids: torch.Tensor | None,
-        known_labels: torch.Tensor,
-        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None,
-    ) -> torch.Tensor | None:
-        """Mask denoising background classes but retain all terms for explicit positives."""
-        if gt_annotated_class_masks is None or known_bids is None or known_bids.numel() == 0:
-            return None
-        weights = gt_annotated_class_masks[known_bids.long()].to(dtype=cls_scores.dtype)
-        weights[known_labels < cls_scores.shape[-1]] = 1.0
-        return weights
-
     def dn_loss_single(
         self,
         cls_scores: torch.Tensor,
@@ -981,21 +950,19 @@ class StreamPETRHead(nn.Module):
         known_labels: torch.Tensor,
         cls_avg_factor: float,
         bbox_avg_factor: float,
-        known_bids: torch.Tensor | None = None,
-        gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
+        label_weights: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute denoising-query supervision for one decoder layer.
 
         The average factors are the denoising target counts of the step, averaged over the
-        ranks and floored at 1 by :meth:`loss`.
+        ranks and floored at 1 by :meth:`loss`. ``label_weights`` weight the classification
+        terms of every denoising query, ``(num_known, 1)`` or ``(num_known, num_classes)``;
+        None weights them all by one.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
         if foreground.any():
             class_targets[foreground, known_labels[foreground]] = 1.0
-        label_weights = self._dn_label_weights(
-            cls_scores, known_bids, known_labels, gt_annotated_class_masks
-        )
         loss_cls = (
             self.dn_weight
             * self.loss_cls_weight
@@ -1165,7 +1132,6 @@ class StreamPETRHead(nn.Module):
 
         ``gt_boxes`` are metric ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` boxes and
         ``gt_labels`` their int64 class indices, one tensor per sample.
-        ``gt_annotated_class_masks`` optionally marks the classes annotated in every sample.
         ``padding_mask`` flags the padding samples of a streaming batch (see
         ``ModelGTBatch.padding_mask``), which take no part in the loss: every query of such
         a sample gets a zero classification weight. They come without boxes, so they give no
@@ -1173,30 +1139,47 @@ class StreamPETRHead(nn.Module):
         the loss terms, so a batch of padding alone still yields a zero loss over the whole
         graph.
 
+        ``gt_annotated_class_masks`` is True where a class is annotated in a sample (see
+        :class:`~autoware_ml.models.detection3d.task_modules.partial_annotations.PartialAnnotations`);
+        None supervises every class. An object of a class not annotated in a sample may be there
+        unannotated, so the unmatched queries and the denoising queries noised into the
+        background of that sample leave the class out of their classification terms. A matched
+        query and a denoising query that keeps the label of its box are vouched for by the box
+        and keep every term, as in TransFusion. The masks change neither the matching, the
+        regression nor the counts.
+
         The losses are sums over the objects divided by the counts of the step. In training the
         counts are averaged over the DDP ranks (see :func:`reduce_mean_count`) in one collective
         per step, which every rank runs whatever its ground truth, so the ranks stay in step. In
         evaluation nothing averages the gradients, so the counts of the rank are used and no
         collective runs. The positive count is the number of boxes: the assigner matches every
         box to one of the queries, in every decoder layer alike.
+
+        Raises:
+            ValueError: If ``padding_mask`` is not ``(batch_size,)`` or
+                ``gt_annotated_class_masks`` is not ``(batch_size, num_classes)``.
         """
         all_cls_scores = outputs.all_cls_scores
         all_bbox_preds = outputs.all_bbox_preds
         num_queries = all_cls_scores.shape[2]
-        if padding_mask.shape != (len(gt_boxes),):
+        batch_size = len(gt_boxes)
+        if padding_mask.shape != (batch_size,):
             raise ValueError(
-                f"padding_mask must have shape (batch_size,) = ({len(gt_boxes)},), got "
+                f"padding_mask must have shape (batch_size,) = ({batch_size},), got "
                 f"{tuple(padding_mask.shape)}."
             )
-        label_weights = (~padding_mask).to(all_cls_scores.dtype).view(-1, 1, 1)
+        # The classes of the background terms of every sample: none in a padding sample and,
+        # with partial annotations, the annotated ones. (batch, 1) or (batch, num_classes).
+        supervised_classes = (~padding_mask).unsqueeze(-1)
         if gt_annotated_class_masks is not None:
-            if gt_annotated_class_masks.shape != (len(gt_boxes), self.num_classes):
+            if gt_annotated_class_masks.shape != (batch_size, self.num_classes):
                 raise ValueError(
                     "gt_annotated_class_masks must have shape (batch_size, num_classes) = "
-                    f"{(len(gt_boxes), self.num_classes)}, got "
+                    f"({batch_size}, {self.num_classes}), got "
                     f"{tuple(gt_annotated_class_masks.shape)}."
                 )
-            gt_annotated_class_masks = gt_annotated_class_masks & (~padding_mask).unsqueeze(-1)
+            supervised_classes = supervised_classes & gt_annotated_class_masks
+        class_weights = supervised_classes.to(all_cls_scores.dtype)
 
         num_positives = sum(min(boxes.shape[0], num_queries) for boxes in gt_boxes)
         num_targets = 0 if outputs.denoising is None else outputs.denoising.known_labels.numel()
@@ -1217,8 +1200,7 @@ class StreamPETRHead(nn.Module):
         losses_bbox = []
         for cls_scores, bbox_preds in zip(all_cls_scores, all_bbox_preds):
             loss_cls, loss_bbox = self._loss_single(
-                cls_scores, bbox_preds, gt_boxes, gt_labels, label_weights, total_pos,
-                gt_annotated_class_masks=gt_annotated_class_masks,
+                cls_scores, bbox_preds, gt_boxes, gt_labels, class_weights, total_pos
             )
             losses_cls.append(loss_cls)
             losses_bbox.append(loss_bbox)
@@ -1248,6 +1230,10 @@ class StreamPETRHead(nn.Module):
                 output_known_class, output_known_coord = self._denoising_predictions(
                     outputs.denoising
                 )
+                # A denoising query takes the class weights of its sample; one that keeps the
+                # label of its box keeps every term, like a matched query.
+                dn_label_weights = class_weights[outputs.denoising.batch_indices]
+                dn_label_weights[outputs.denoising.known_labels < self.num_classes] = 1.0
                 dn_losses_cls = []
                 dn_losses_bbox = []
                 for cls_scores, bbox_preds in zip(output_known_class, output_known_coord):
@@ -1258,8 +1244,7 @@ class StreamPETRHead(nn.Module):
                         outputs.denoising.known_labels,
                         dn_cls_avg_factor,
                         dn_bbox_avg_factor,
-                        known_bids=outputs.denoising.batch_indices,
-                        gt_annotated_class_masks=gt_annotated_class_masks,
+                        dn_label_weights,
                     )
                     dn_losses_cls.append(dn_loss_cls)
                     dn_losses_bbox.append(dn_loss_bbox)
