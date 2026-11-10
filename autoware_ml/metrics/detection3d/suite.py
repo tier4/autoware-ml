@@ -34,6 +34,7 @@ from autoware_ml.metrics.detection3d.matching import (
 )
 from autoware_ml.metrics.detection3d.naming import metric_token
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
+from autoware_ml.metrics.report import MetricReport
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +155,11 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             self.add_state("pred_region_masks", default=[], dist_reduce_fx=None)
             self.add_state("region_available", default=[], dist_reduce_fx=None)
 
-    def compute(self) -> dict[str, float]:
+    def compute(self) -> MetricReport:
         """Log TTC frame coverage once per epoch, then run the metric groups.
 
         Returns:
-            Metric keys mapped to values.
+            The suite's report.
         """
         self._log_ttc_coverage()
         return super().compute()

@@ -27,6 +27,7 @@ from autoware_ml.metrics.detection3d.criticality import greedy_match
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
 
 
 class CriticalFPFN(Metric[Detection3DState]):
@@ -60,7 +61,7 @@ class CriticalFPFN(Metric[Detection3DState]):
         # the suite does not have to propagate them.
         self.ttc_score_floor = min(self.confidences)
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Count critical FP / FN (finite TTC) at each confidence threshold.
 
         Args:
@@ -68,7 +69,7 @@ class CriticalFPFN(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         covered_frames = 0
         fp_total = {conf: 0 for conf in self.confidences}
@@ -119,17 +120,21 @@ class CriticalFPFN(Metric[Detection3DState]):
         # No covered frame means the slice has no basis: report NaN, never a
         # fake zero (a dataset without maps would otherwise look perfectly safe).
         denominator = covered_frames if covered_frames else float("nan")
-        report: dict[str, float] = {}
+        report = MetricReport()
         # A confidence is not a distance, so it gets its own token, never the metre suffix.
         for conf in self.confidences:
             token = f"conf{number_token(conf)}"
-            report[f"critical_fp_{token}"] = fp_total[conf] / denominator
-            report[f"critical_fn_{token}"] = fn_total[conf] / denominator
+            report.record(f"critical_fp_{token}", fp_total[conf] / denominator)
+            report.record(f"critical_fn_{token}", fn_total[conf] / denominator)
         if stage is EvalStage.TEST:
             for label in state.labels(full=True):
                 name = label_metric_name(label, state.class_names)
                 for conf in self.confidences:
                     token = f"conf{number_token(conf)}"
-                    report[f"critical_fp_{name}_{token}"] = fp_class[(conf, label)] / denominator
-                    report[f"critical_fn_{name}_{token}"] = fn_class[(conf, label)] / denominator
+                    report.record(
+                        f"critical_fp_{name}_{token}", fp_class[(conf, label)] / denominator
+                    )
+                    report.record(
+                        f"critical_fn_{name}_{token}", fn_class[(conf, label)] / denominator
+                    )
         return report

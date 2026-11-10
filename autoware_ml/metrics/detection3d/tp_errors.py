@@ -16,6 +16,7 @@ from autoware_ml.metrics.detection3d.structures import (
     ERROR_NAMES,
     SelectedTpErrors,
 )
+from autoware_ml.metrics.report import MetricReport
 
 
 class TpErrors(Metric[Detection3DState]):
@@ -67,7 +68,7 @@ class TpErrors(Metric[Detection3DState]):
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"recall target {name!r} must be in [0, 1], got {value}.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Compute true-positive error summaries for detection predictions.
 
         Args:
@@ -75,7 +76,7 @@ class TpErrors(Metric[Detection3DState]):
             stage: Evaluation stage requesting the metrics.
 
         Returns:
-            Mapping of aggregate and per-class TP error metrics.
+            The aggregate and per-class TP errors.
         """
         labels = state.labels(full=True)
         variants: dict[str, dict[tuple[int, float], SelectedTpErrors]] = {
@@ -93,7 +94,7 @@ class TpErrors(Metric[Detection3DState]):
                     curve, optimal_index
                 )
 
-        report: dict[str, float] = {}
+        report = MetricReport()
         # Aggregate means: one entry per class, selected at the single
         # tp_threshold operating point (averaging over thresholds would weight
         # easy classes 4x). Selected directly from that threshold's curve, so
@@ -116,13 +117,15 @@ class TpErrors(Metric[Detection3DState]):
                 mean_tp_errors(kept) if kept else {name: float("nan") for name in ERROR_NAMES}
             )
             for error_name, value in mean_errors.items():
-                report[f"m{error_name}_{variant_name}"] = value
+                report.record(f"m{error_name}_{variant_name}", value)
 
         for variant_name, selected in variants.items():
             for (label, threshold), item in selected.items():
                 name = label_metric_name(label, state.class_names)
                 token = threshold_token(threshold)
-                report[f"tp_error_num_match_{name}_{variant_name}_{token}"] = float(item.count)
+                report.record(
+                    f"tp_error_num_match_{name}_{variant_name}_{token}", float(item.count)
+                )
                 for error_name, value in item.errors.items():
-                    report[f"{error_name}_{name}_{variant_name}_{token}"] = value
+                    report.record(f"{error_name}_{name}_{variant_name}_{token}", value)
         return report

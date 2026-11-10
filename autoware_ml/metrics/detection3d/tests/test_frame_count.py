@@ -21,6 +21,7 @@ import torch
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.frame_count import FrameCount
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
+from autoware_ml.metrics.report import MetricKey
 
 _CLASS_NAMES = ("car", "pedestrian")
 
@@ -74,7 +75,7 @@ class TestFrameCount(unittest.TestCase):
 
         report = suite.result(EvalStage.VAL)
 
-        self.assertEqual(report["num_frames"], 3.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_frames")), 3.0)
 
     def test_range_buckets_do_not_repeat_the_frame_count(self) -> None:
         """Test that the range-invariant count is reported once, not per range window."""
@@ -92,9 +93,11 @@ class TestFrameCount(unittest.TestCase):
 
         report = suite.result(EvalStage.TEST)
 
-        self.assertEqual(report["num_frames"], 2.0)
-        self.assertNotIn("num_frames_0m_50m", report)
-        self.assertNotIn("num_frames_50m_100m", report)
+        self.assertEqual(report.metric_value(MetricKey(name="num_frames")), 2.0)
+        self.assertNotIn(MetricKey(name="num_frames", range_suffix="0m_50m"), report.metric_names())
+        self.assertNotIn(
+            MetricKey(name="num_frames", range_suffix="50m_100m"), report.metric_names()
+        )
 
     def test_reset_drops_the_frames_of_the_previous_epoch(self) -> None:
         """Test that the count starts over after the suite is reset."""
@@ -111,7 +114,7 @@ class TestFrameCount(unittest.TestCase):
 
         report = suite.result(EvalStage.VAL)
 
-        self.assertEqual(report["num_frames"], 1.0)
+        self.assertEqual(report.metric_value(MetricKey(name="num_frames")), 1.0)
 
 
 if __name__ == "__main__":

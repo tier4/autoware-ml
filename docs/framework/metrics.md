@@ -88,8 +88,8 @@ sequenceDiagram
     S->>S: compute() syncs state across GPUs
     S->>S: state_for(range, filter) builds the state
     S->>Me: evaluate(state, stage) for each metric in this stage
-    Me-->>S: per metric report
-    S-->>M: merged report
+    Me-->>S: MetricReport with bare names
+    S-->>M: MetricReport placed in filter slices and range windows
     M->>L: log under val/prefix/key
 ```
 
@@ -116,10 +116,17 @@ need (`ego2global`, `lanelet_map_path`). `required_keys()` extends the base tupl
 the configuration demands: a detection suite with a collision provider also requires
 `ego2global` and `lanelet_map_path`, and a ground-truth point filter requires `gt_num_points`.
 
-Keys are logged as `{split}/{prefix}/{key}`. A filtered metric prefixes its filter name and a
-range window appends a distance suffix, for example `test/det3d/region_road/mAP_0m_50m`. Two
-suites of the same class run side by side under distinct configured prefixes, and the mixin
-rejects duplicate prefixes.
+A metric records its values under bare names such as `mAP_car` in a `MetricReport`. Every
+value travels with a typed `MetricKey` that names the suite `prefix`, the taxonomy `view`, the
+`filter_name`, the metric `name` and the `range_suffix`, and renders them as
+`{prefix}/{view}/{filter_name}/{name}_{range_suffix}` with the empty levels left out. The suite
+places each metric's keys in the filter slice and range window it evaluated, the model places each
+suite's keys under its prefix, and the key is logged as `{split}/{rendered key}`, for example
+`test/det3d/region_road/mAP_0m_50m`. A report rejects a duplicate key at every level and the log
+payload rejects two keys that render to one name, so two metrics, two filters or two suites can
+never silently overwrite each other. A value is read back by its key, `report.metric_value(MetricKey(...))`,
+and `report.metric_names()` lists the keys. Two suites of the same class run side by side under
+distinct configured prefixes, and the mixin rejects duplicate prefixes.
 
 ## Class structure
 
@@ -1341,11 +1348,11 @@ segmentation without touching the suite.
 ```python
 class PerClassAccuracy(Metric):
     def evaluate(self, state, stage):
-        return {
-            f"acc_class_{i}": float(state.recall[i].item())
-            for i in range(state.num_classes)
-            if bool(state.has_support[i])
-        }
+        report = MetricReport()
+        for i in range(state.num_classes):
+            if bool(state.has_support[i]):
+                report.record(f"acc_class_{i}", float(state.recall[i].item()))
+        return report
 ```
 
 Add it to the suite's `components` list in config and its keys appear under the suite prefix. A

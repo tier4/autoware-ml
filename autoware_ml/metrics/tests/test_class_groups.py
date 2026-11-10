@@ -12,6 +12,7 @@ from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
+from autoware_ml.metrics.report import MetricKey
 
 NAMES = ("car", "truck", "road", "sidewalk")
 GROUPS = {"grouped_vehicle": ["car", "truck"], "grouped_flat": ["road", "sidewalk"]}
@@ -90,18 +91,24 @@ def test_confusion_grouped_folds_intra_group_confusion_to_tp() -> None:
     suite = _confusion_suite(GROUPS)
     _update_confusion(suite)
     report = suite.result(EvalStage.TEST)
-    assert report["iou_grouped_vehicle"] == pytest.approx(1.0)  # car/truck confusion is a hit
-    assert report["iou_grouped_flat"] == pytest.approx(1.0)
-    assert report["mIoU"] == pytest.approx(1.0)
-    assert "iou_car" not in report  # trained classes are gone in the grouped suite
+    assert report.metric_value(MetricKey(name="iou_grouped_vehicle")) == pytest.approx(
+        1.0
+    )  # car/truck confusion is a hit
+    assert report.metric_value(MetricKey(name="iou_grouped_flat")) == pytest.approx(1.0)
+    assert report.metric_value(MetricKey(name="mIoU")) == pytest.approx(1.0)
+    assert (
+        MetricKey(name="iou_car") not in report.metric_names()
+    )  # trained classes are gone in the grouped suite
 
 
 def test_confusion_per_class_still_penalizes_confusion() -> None:
     suite = _confusion_suite(None)
     _update_confusion(suite)
     report = suite.result(EvalStage.TEST)
-    assert report["iou_car"] == pytest.approx(0.0)  # every car predicted as truck
-    assert "iou_grouped_vehicle" not in report
+    assert report.metric_value(MetricKey(name="iou_car")) == pytest.approx(
+        0.0
+    )  # every car predicted as truck
+    assert MetricKey(name="iou_grouped_vehicle") not in report.metric_names()
 
 
 def test_point_suite_serves_both_taxonomies_from_one_cache() -> None:
@@ -129,11 +136,15 @@ def test_point_suite_serves_both_taxonomies_from_one_cache() -> None:
     )
     report = suite.result(EvalStage.TEST)
     # Trained view: every point is wrong (intra-group confusion counts).
-    assert report["error_rate"] == pytest.approx(1.0)
+    assert report.metric_value(MetricKey(name="error_rate")) == pytest.approx(1.0)
     # Grouped view: the fold makes every point correct.
-    assert report["grouped/error_rate"] == pytest.approx(0.0)
-    assert report["grouped/error_rate_grouped_vehicle"] == pytest.approx(0.0)
-    assert report["grouped/error_rate_grouped_flat"] == pytest.approx(0.0)
+    assert report.metric_value(MetricKey(name="error_rate", view="grouped")) == pytest.approx(0.0)
+    assert report.metric_value(
+        MetricKey(name="error_rate_grouped_vehicle", view="grouped")
+    ) == pytest.approx(0.0)
+    assert report.metric_value(
+        MetricKey(name="error_rate_grouped_flat", view="grouped")
+    ) == pytest.approx(0.0)
 
 
 def test_point_suite_requires_grouped_components_with_class_groups() -> None:

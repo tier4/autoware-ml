@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.confusion import (
     ConfusionState,
     class_name_token,
@@ -17,7 +18,7 @@ class IoU(Metric[ConfusionState]):
     per-class IoU for each class with ground-truth support.
     """
 
-    def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: ConfusionState, stage: EvalStage) -> MetricReport:
         """Compute IoU metrics from a confusion state.
 
         Args:
@@ -25,24 +26,26 @@ class IoU(Metric[ConfusionState]):
             stage: Evaluation stage requesting the metrics.
 
         Returns:
-            Mapping of IoU metric names to scalar values.
+            The IoU values.
         """
         union = state.predicted + state.actual - state.true_positive
         zeros = torch.zeros_like(state.true_positive)
         iou = torch.where(union > 0, state.true_positive / union, zeros)
 
-        report = {"mIoU": macro(iou, state.has_support)}
+        report = MetricReport()
+        report.record("mIoU", macro(iou, state.has_support))
         if stage is not EvalStage.TEST:
             return report
 
         if bool(state.has_support.any()):
-            report["fwIoU"] = float((state.frequency * iou)[state.has_support].sum().item())
+            report.record("fwIoU", float((state.frequency * iou)[state.has_support].sum().item()))
         else:
-            report["fwIoU"] = float("nan")
+            report.record("fwIoU", float("nan"))
         for class_index in range(state.num_classes):
             if not bool(state.has_support[class_index]):
                 continue
-            report[f"iou_{class_name_token(class_index, state.class_names)}"] = float(
-                iou[class_index].item()
+            report.record(
+                f"iou_{class_name_token(class_index, state.class_names)}",
+                float(iou[class_index].item()),
             )
         return report
