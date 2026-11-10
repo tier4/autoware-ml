@@ -18,6 +18,8 @@ The voxel layout pools stage by stage as a hierarchical encoder does, and the ra
 writes are the inputs of a trtexec latency benchmark.
 """
 
+# TODO(JonnaMat): Move the synthetic input helpers into a SyntheticDataBase class.
+
 from __future__ import annotations
 
 from collections.abc import Callable
