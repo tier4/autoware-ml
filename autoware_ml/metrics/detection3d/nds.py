@@ -13,7 +13,7 @@ from autoware_ml.metrics.detection3d.matching import (
 from autoware_ml.metrics.detection3d.structures import (
     DEFAULT_MATCH_THRESHOLDS,
     DEFAULT_TP_THRESHOLD,
-    ERROR_NAMES,
+    TpErrorSet,
 )
 from autoware_ml.metrics.report import MetricReport
 
@@ -71,7 +71,7 @@ class Nds(Metric[Detection3DState]):
         labels = state.labels(full=True)
         per_class_ap: list[float] = []
         per_class_aph: list[float] = []
-        error_dicts: list[dict[str, float]] = []
+        error_sets: list[TpErrorSet] = []
         for label in labels:
             aps: list[float] = []
             aphs: list[float] = []
@@ -89,15 +89,11 @@ class Nds(Metric[Detection3DState]):
                 state.match_curve(label, self.tp_threshold), self.recall_target
             )
             if selected.count > 0:
-                error_dicts.append(selected.errors)
+                error_sets.append(selected.errors)
 
         mean_ap = mean_valid(per_class_ap)
         mean_aph = mean_valid(per_class_aph)
-        errors = (
-            mean_tp_errors(error_dicts)
-            if error_dicts
-            else {name: float("nan") for name in ERROR_NAMES}
-        )
+        errors = mean_tp_errors(error_sets) if error_sets else TpErrorSet.nan()
         report = MetricReport()
         report.record("map_based_nds", nds(mean_ap, errors))
         report.record("mapH_based_nds", nds(mean_aph, errors))

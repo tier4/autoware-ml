@@ -14,3 +14,16 @@ class MotionModel(StrEnum):
     WHEELED = auto()
     OMNIDIRECTIONAL = auto()
     STATIC = auto()
+
+
+class MatchCost(StrEnum):
+    """
+    Cost the detection matching pairs a prediction with a ground truth box by.
+
+    Attributes:
+      CENTER: BEV center distance in meters, the nuScenes matching.
+      CORNER: Mean BEV corner distance in meters, which also charges size and yaw errors.
+    """
+
+    CENTER = auto()
+    CORNER = auto()

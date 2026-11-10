@@ -12,6 +12,7 @@ from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.nds import Nds
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
+from autoware_ml.metrics.detection3d.structures import RecallTarget
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.metrics.report import MetricKey
@@ -455,7 +456,7 @@ def test_detailed_center_distance_metrics_report_optimal_error_subset() -> None:
         thresholds=(0.5,),
         class_names=("car",),
         ranges=(),
-        recall_targets={"default": 0.10},
+        recall_targets=(RecallTarget(name="default", recall=0.10),),
     )
     _update(
         metric,
