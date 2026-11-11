@@ -656,12 +656,12 @@ class TestMatchCosts2D(unittest.TestCase):
 
     def test_the_costs_reject_unknown_formats_when_built(self) -> None:
         """
-        Input: a box L1 cost in the ``xywhr`` form and an overlap cost in the ``iof`` mode.
+        Input: a box L1 cost in the ``polygon`` form and an overlap cost in the ``iof`` mode.
         Expected: both are refused when they are built, before any matching.
         Check: the ValueError naming the field.
         """
         with self.assertRaisesRegex(ValueError, "box_format"):
-            BBoxL1Cost2D(box_format="xywhr")
+            BBoxL1Cost2D(box_format="polygon")
         with self.assertRaisesRegex(ValueError, "iou_mode"):
             IoUCost2D(iou_mode="iof")
 
