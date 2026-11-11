@@ -19,15 +19,20 @@ def convert_quaternion_to_matrix(
         Float32[np.ndarray, "4 4"] | Float64[np.ndarray, "4 4"]: 4x4 transformation matrix.
     """
 
-    assert isinstance(rotation_quaternion, Quaternion), (
-        "Rotation quaternion must be a Quaternion object"
-    )
+    if not isinstance(rotation_quaternion, Quaternion):
+        raise TypeError(
+            "Rotation quaternion must be a Quaternion object, "
+            f"but it's {type(rotation_quaternion).__name__}"
+        )
 
     result = np.eye(4)
     result[:3, :3] = rotation_quaternion.rotation_matrix
 
     if translation is not None:
-        assert isinstance(translation, np.ndarray), "Translation must be a numpy array or None"
+        if not isinstance(translation, np.ndarray):
+            raise TypeError(
+                f"Translation must be a numpy array or None, but it's {type(translation).__name__}"
+            )
 
         if translation.shape != (3,):
             raise ValueError(
