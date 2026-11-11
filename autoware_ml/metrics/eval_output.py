@@ -1,7 +1,7 @@
 """The typed eval output a model hands to its metric suites.
 
 A model's ``build_eval_output`` returns one :class:`EvalOutput` per batch, holding the
-detection and the segmentation part a suite of each task reads. Every part is a tuple of
+detection and the segmentation part a suite of each task reads. Every part is a sequence of
 per-frame models, so a suite loops over frames and reads typed fields instead of
 indexing a flat dict by key. The per-frame metadata the region and collision filters
 need (ego pose, scene token, lanelet map path) travels as the dataset's own
@@ -13,6 +13,8 @@ part a configured metric reads fails loud with the model and the part named.
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 import torch
 from jaxtyping import Float, Float32, Int, Int64
@@ -78,7 +80,7 @@ class Detection3DEvalOutput(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True)
 
-    frames: tuple[Detection3DEvalFrame, ...]
+    frames: Sequence[Detection3DEvalFrame]
 
     @property
     def check_all_frame_meta(self) -> bool:
@@ -155,7 +157,7 @@ class Segmentation3DEvalOutput(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True)
 
-    frames: tuple[Segmentation3DEvalFrame, ...]
+    frames: Sequence[Segmentation3DEvalFrame]
 
     @property
     def check_all_frame_meta(self) -> bool:

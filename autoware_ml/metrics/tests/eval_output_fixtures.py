@@ -126,7 +126,7 @@ def detection_eval_output(frames: Sequence[Detection3DEvalFrame]) -> EvalOutput:
     Returns:
         The eval output.
     """
-    return EvalOutput(detection3d=Detection3DEvalOutput(frames=tuple(frames)))
+    return EvalOutput(detection3d=Detection3DEvalOutput(frames=frames))
 
 
 def segmentation_frame(
@@ -172,4 +172,4 @@ def segmentation_eval_output(frames: Sequence[Segmentation3DEvalFrame]) -> EvalO
     Returns:
         The eval output.
     """
-    return EvalOutput(segmentation3d=Segmentation3DEvalOutput(frames=tuple(frames)))
+    return EvalOutput(segmentation3d=Segmentation3DEvalOutput(frames=frames))
