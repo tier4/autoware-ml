@@ -38,6 +38,7 @@ from autoware_ml.builders.model_builder import (
 from autoware_ml.builders.logger_builder import build_trainer_logger
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.utils.mlflow_helpers import write_run_config_artifacts
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
     restrict_console_logging_to_rank_zero,
@@ -132,6 +133,10 @@ def main(cfg: DictConfig):
         config_name=config_name,
         logger_enabled=logger_enabled,
     )
+    if run_context is None and rank_zero_only.rank == 0:
+        # Without MLflow the run owns no artifact directory, so the resolved config goes next
+        # to the checkpoints in the Hydra run directory, where a teacher lookup finds it.
+        write_run_config_artifacts(cfg, resolve_work_dir())
 
     system_metrics_monitor = None
     if run_context is not None and rank_zero_only.rank == 0:

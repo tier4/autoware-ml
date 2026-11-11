@@ -1,0 +1,14 @@
+# @package _global_
+# LitePT det3d+seg3d on nuScenes, distilled from a PTv3 det3d+seg3d teacher trained with
+# multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m. Name the teacher checkpoint:
+#   autoware-ml train --config-name multi/litept/nuscenes/distill_ptv3_voxel005_b16_100e_nuscenes_51m \
+#       teacher_weights=[<run>/artifacts/checkpoints/best.ckpt]
+defaults:
+  - /tasks/multi/ptv3/nuscenes/voxel005_b16_100e_nuscenes_51m
+  - /tasks/segmentation3d/litept/encoder
+  - /tasks/segmentation3d/litept/seg3d_head
+  - /distillation: ptv3_det3d_seg3d
+  - _self_
+
+experiment_group_name: litept_det3d_seg3d/${database.version}/nuscenes
+experiment_name: distill_ptv3_voxel005_b16_100e_nuscenes_51m

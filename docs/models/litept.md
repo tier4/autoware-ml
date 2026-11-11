@@ -60,6 +60,10 @@ inherits the dataset, transforms, optimizer and deploy settings from the base an
 encoder and the decoder head. The T4Dataset experiments of LitePT live in an external config
 root, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
 
+`multi/litept/nuscenes/distill_ptv3_voxel005_b16_100e_nuscenes_51m` trains the nuScenes LitePT
+experiment with a trained PTv3 of the same recipe as its teacher, see
+[Knowledge Distillation](../user-guide/distillation.md).
+
 Both variants are the [PTv3](ptv3.md) model with the gating applied and nothing else changed,
 so the two stay directly comparable. The decoder keeps the PTv3 blocks and runs them under
 LitePT's rule.

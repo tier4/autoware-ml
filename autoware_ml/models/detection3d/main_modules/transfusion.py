@@ -187,6 +187,7 @@ class TransFusionDetection3DModel(ModuleBaseModel):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
         partial_annotations: PartialAnnotations | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize TransFusion.
 
@@ -204,6 +205,8 @@ class TransFusionDetection3DModel(ModuleBaseModel):
             metrics: Detection metrics accumulated during validation and test.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the head must not supervise in that sample. None supervises every class.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`, such as the
+                distillation.
 
         Raises:
             TypeError: If the middle encoder does not implement :class:`BEVMiddleEncoder`.
@@ -214,6 +217,7 @@ class TransFusionDetection3DModel(ModuleBaseModel):
             scheduler=scheduler,
             metrics=metrics,
             log_dict_configs=log_dict_configs,
+            **kwargs,
         )
         if not isinstance(pts_middle_encoder, BEVMiddleEncoder):
             raise TypeError(
