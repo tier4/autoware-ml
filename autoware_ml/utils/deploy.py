@@ -34,6 +34,7 @@ import lightning as L
 import onnx
 from onnx.external_data_helper import convert_model_from_external_data
 from omegaconf import DictConfig, OmegaConf
+import tensorrt as trt
 import torch
 from torch.export import Dim
 
@@ -382,8 +383,6 @@ def modify_onnx_graph(onnx_path: Path, modify_graph_cfg: DictConfig) -> Path:
 
 def create_tensorrt_builder_config(tensorrt_cfg: DictConfig) -> tuple[Any, Any, Any, Any]:
     """Create TensorRT builder objects for engine generation."""
-    import tensorrt as trt  # noqa: PLC0415 (only engine builds need it; models import this module)
-
     trt_logger = trt.Logger(trt.Logger.WARNING)
     trt.init_libnvinfer_plugins(trt_logger, "")
     builder = trt.Builder(trt_logger)
