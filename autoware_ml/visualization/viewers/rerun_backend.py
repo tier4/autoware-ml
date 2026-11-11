@@ -565,6 +565,7 @@ class RerunVisualizationBackend(_RerunVisualizationBackendBase):
             grpc_port=config.grpc_port,
             server_memory_limit=config.server_memory_limit,
         )
+        # cspell:ignore Bhttp Flocalhost Fproxy
         self.web_url = (
             f"http://localhost:{config.web_port}"
             f"?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A{config.grpc_port}%2Fproxy"
