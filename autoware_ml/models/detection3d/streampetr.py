@@ -25,6 +25,7 @@ from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.task_modules.streaming import (
     compose_poses,
     memory_refresh,
@@ -203,6 +204,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        partial_annotations: PartialAnnotations | None = None,
     ) -> None:
         """Initialize StreamPETR.
 
@@ -218,6 +220,12 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
                 :meth:`build_optimizer_groups`.
             scheduler_config: Lightning scheduler metadata such as ``interval``.
             metrics: Detection metrics accumulated during validation and test.
+            partial_annotations: Maps the dataset's per-sample annotation flag to the classes
+                the head must not supervise in that sample. None supervises every class.
+
+        Raises:
+            ValueError: If ``partial_annotations`` does not list the classes of the head in
+                the head's order.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -234,6 +242,17 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             img_backbone=img_backbone, img_neck=img_neck
         )
         self.bbox_head = bbox_head
+        # The masks index the logits by position, so another order would leave the wrong
+        # classes unsupervised.
+        if (
+            partial_annotations is not None
+            and partial_annotations.class_names != bbox_head.class_names
+        ):
+            raise ValueError(
+                "partial_annotations.class_names must equal bbox_head.class_names in the same "
+                f"order, got {partial_annotations.class_names} and {bbox_head.class_names}."
+            )
+        self.partial_annotations = partial_annotations
 
     def _start_streams(self) -> None:
         """Reset the temporal memory: the lanes of a new phase or epoch start new streams.
@@ -325,8 +344,12 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
     ) -> dict[str, torch.Tensor]:
         """Compute the head's multi-layer detection and denoising losses.
 
+        With ``partial_annotations`` the annotation flag of every frame becomes the mask of
+        the classes the head supervises in that frame.
+
         The padding samples of a streaming batch take no part in them: they carry no box,
-        and the head gives their queries no classification weight.
+        and the head counts them as annotated with no class, so their queries get no
+        classification weight.
 
         Args:
             multi_task_batch_inputs: Model inputs holding the ground truth boxes and the
@@ -337,17 +360,26 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             Loss dictionary produced by the detection head.
 
         Raises:
-            ValueError: If the batch carries no detection ground truth.
+            ValueError: If the batch carries no detection ground truth, or no annotation flag
+                while ``partial_annotations`` is configured.
         """
         gt_batch = multi_task_batch_inputs.multi_task_gt_batch
         if gt_batch.detection3d_gt_batch is None:
             raise ValueError("StreamPETR losses need the 3D detection ground truth of the batch.")
         gt_boxes, gt_labels = _ground_truth(gt_batch.detection3d_gt_batch, gt_batch.padding_mask)
+        gt_annotated_class_masks = (
+            self.partial_annotations.build_annotated_class_masks(
+                gt_batch.detection3d_gt_batch.gt_traffic_cone_barrier_bbox_status
+            )
+            if self.partial_annotations is not None
+            else None
+        )
         return self.bbox_head.loss(
             multi_task_outputs.detection3d().streampetr_head(),
             gt_boxes,
             gt_labels,
             padding_mask=gt_batch.padding_mask,
+            gt_annotated_class_masks=gt_annotated_class_masks,
         )
 
     def decode_outputs(

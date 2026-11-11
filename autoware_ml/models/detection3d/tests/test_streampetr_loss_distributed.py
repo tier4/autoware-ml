@@ -212,6 +212,7 @@ def _layer_loss(
     head: StreamPETRHead,
     layer: torch.nn.Module,
     frames: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
+    annotated_class_masks: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Total head loss of the frames, every logit and box made by one call of ``layer``."""
     sizes = [queries.shape[1] + known.shape[1] for queries, known, _, _ in frames]
@@ -252,6 +253,7 @@ def _layer_loss(
         [boxes for _, _, boxes, _ in frames],
         [labels for *_, labels in frames],
         padding_mask=torch.zeros(len(frames), dtype=torch.bool),
+        gt_annotated_class_masks=annotated_class_masks,
     )["loss"]
 
 
@@ -266,20 +268,29 @@ def _layer() -> torch.nn.Linear:
     return torch.nn.Linear(_FEATURES, _NUM_CLASSES + 10)
 
 
-def _whole_batch_gradients(box_counts: tuple[int, ...]) -> list[torch.Tensor]:
+def _whole_batch_gradients(
+    box_counts: tuple[int, ...], annotated_class_masks: torch.Tensor | None = None
+) -> list[torch.Tensor]:
     """The gradients of the loss of all the frames on one process, where no count is reduced."""
     layer = _layer()
-    _layer_loss(_build_head().train(), layer, _frames(box_counts)).backward()
+    _layer_loss(_build_head().train(), layer, _frames(box_counts), annotated_class_masks).backward()
     return [parameter.grad for parameter in layer.parameters()]
 
 
 def _ddp_gradient_worker(
-    rank: int, world_size: int, box_counts: tuple[int, ...], whole_gradients: list[torch.Tensor]
+    rank: int,
+    world_size: int,
+    box_counts: tuple[int, ...],
+    whole_gradients: list[torch.Tensor],
+    annotated_class_masks: torch.Tensor | None = None,
 ) -> None:
     layer = _layer()
     # The wrapper must outlive the backward pass, which its hooks average over the ranks.
     ddp_layer = DistributedDataParallel(layer)
-    _layer_loss(_build_head().train(), ddp_layer, [_frames(box_counts)[rank]]).backward()
+    rank_masks = None if annotated_class_masks is None else annotated_class_masks[rank : rank + 1]
+    _layer_loss(
+        _build_head().train(), ddp_layer, [_frames(box_counts)[rank]], rank_masks
+    ).backward()
 
     for sharded, whole in zip(layer.parameters(), whole_gradients):
         torch.testing.assert_close(sharded.grad, whole, rtol=1e-5, atol=1e-7)
@@ -319,6 +330,26 @@ class TestStreamPETRLossDistributed(unittest.TestCase):
                     _whole_batch_gradients(box_counts),
                     world_size=len(box_counts),
                 )
+
+    def test_ddp_gradients_with_annotated_class_masks_match_the_whole_batch(self) -> None:
+        """Test that the DDP-averaged gradients stay those of the whole batch when every frame
+        leaves other classes unannotated.
+
+        The masks drop classification terms but no count, and each rank applies the row of its
+        own frame, so the normalization of the step is the one without masks. The frames hold
+        boxes of their unannotated classes, and the rank without boxes has one too.
+        """
+        box_counts = (10, 30, 0, 1)
+        annotated_class_masks = torch.tensor(
+            [[True, True, True], [True, False, True], [False, True, False], [True, True, False]]
+        )
+        spawn_gloo_workers(
+            _ddp_gradient_worker,
+            box_counts,
+            _whole_batch_gradients(box_counts, annotated_class_masks),
+            annotated_class_masks,
+            world_size=len(box_counts),
+        )
 
 
 if __name__ == "__main__":

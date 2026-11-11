@@ -521,7 +521,8 @@ class _RerunVisualizationBackendBase:
 
     def _save_synced_blueprint(self, file_name: str, layout: ViewSpec | LayoutGroup) -> str:
         """Write one side layout as a blueprint file and return its file name."""
-        assert self._synced_server is not None
+        if self._synced_server is None:
+            raise RuntimeError("The synced viewer server must be started before saving a blueprint")
         blueprint = self.rr.blueprint.Blueprint(
             self._convert_layout(layout),
             self.rr.blueprint.BlueprintPanel(expanded=False),
@@ -564,6 +565,7 @@ class RerunVisualizationBackend(_RerunVisualizationBackendBase):
             grpc_port=config.grpc_port,
             server_memory_limit=config.server_memory_limit,
         )
+        # cspell:ignore Bhttp Flocalhost Fproxy
         self.web_url = (
             f"http://localhost:{config.web_port}"
             f"?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A{config.grpc_port}%2Fproxy"

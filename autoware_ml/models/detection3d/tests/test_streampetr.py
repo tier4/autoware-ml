@@ -25,6 +25,7 @@ from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.streampetr import StreamPETRDetection3DModel, _ground_truth
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
+from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.task_modules.streaming import StreamContinuity
 from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBox3DL1Cost,
@@ -41,6 +42,7 @@ from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
 
 NUM_CAMS = 6
 IMAGE_HW = (96, 160)
+CLASS_NAMES = ["car", "traffic_cone", "barrier"]
 
 
 class _TinyMultiScaleBackbone(torch.nn.Module):
@@ -84,7 +86,10 @@ class _ResetCountingSuite(MetricSuite[None]):
         return MetricRequirements()
 
 
-def _build_model(metrics: Sequence[MetricSuite] | None = None) -> StreamPETRDetection3DModel:
+def _build_model(
+    metrics: Sequence[MetricSuite] | None = None,
+    partial_annotations: PartialAnnotations | None = None,
+) -> StreamPETRDetection3DModel:
     return StreamPETRDetection3DModel(
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         img_backbone=_TinyMultiScaleBackbone(),
@@ -92,12 +97,18 @@ def _build_model(metrics: Sequence[MetricSuite] | None = None) -> StreamPETRDete
         bbox_head=_build_head(),
         log_dict_configs=LogDictConfigs(prog_bar=False),
         metrics=metrics,
+        partial_annotations=partial_annotations,
     )
+
+
+def _cone_barrier_annotations(class_names: Sequence[str] = CLASS_NAMES) -> PartialAnnotations:
+    """Traffic cones and barriers annotated only where the frame's status says so."""
+    return PartialAnnotations(class_names, ["traffic_cone", "barrier"])
 
 
 def _build_head(memory_len: int = 32, topk_proposals: int = 8, num_propagated: int = 8):
     return StreamPETRHead(
-        class_names=["car", "truck", "bus"],
+        class_names=CLASS_NAMES,
         in_channels=128,
         hidden_dim=128,
         num_queries=32,
@@ -1105,6 +1116,19 @@ def _with_padding(batch_inputs: ModelBatchInputs, padding: Sequence[bool]) -> Mo
     return batch_inputs.replace(multi_task_gt_batch=gt_batch)
 
 
+def _with_cone_barrier_status(
+    batch_inputs: ModelBatchInputs, status: Sequence[bool]
+) -> ModelBatchInputs:
+    """Set the traffic-cone and barrier annotation status of every sample."""
+    gt_batch = batch_inputs.multi_task_gt_batch
+    detection = gt_batch.detection3d_gt_batch._replace(
+        gt_traffic_cone_barrier_bbox_status=torch.tensor(status)
+    )
+    return batch_inputs.replace(
+        multi_task_gt_batch=gt_batch._replace(detection3d_gt_batch=detection)
+    )
+
+
 def _independent_samples(model: StreamPETRDetection3DModel) -> StreamPETRDetection3DModel:
     """Keep the training mode but switch off what couples or randomizes the samples.
 
@@ -1132,18 +1156,28 @@ def _two_samples_with_boxes() -> tuple[torch.Tensor, list[torch.Tensor], list[to
     return images, boxes, [torch.tensor([1]), torch.tensor([1])]
 
 
-def test_a_padding_sample_takes_no_part_in_the_loss() -> None:
+@pytest.mark.parametrize(
+    "cone_barrier_status",
+    [None, [True, False, True]],
+    ids=["without_partial_annotations", "with_partial_annotations"],
+)
+def test_a_padding_sample_takes_no_part_in_the_loss(
+    cone_barrier_status: list[bool] | None,
+) -> None:
     """
     Input: two real training samples with one box each, once alone and once followed by a
-    padding sample that carries a box too, every image requiring a gradient.
+    padding sample that carries a box too, every image requiring a gradient; without partial
+    annotations, and with them, the second sample annotated without traffic cones and barriers
+    and the padding sample flagged as annotated with them.
     Expected: the padding sample seeds no denoising query, matches no query and gets no
-    classification weight, so the loss is that of the real samples and none of it reaches the
-    padding sample's images.
+    classification weight whatever its flag says, so the loss is that of the real samples and
+    none of it reaches the padding sample's images.
     Check: the loss terms of the two batches, the denoising queries, and the image gradients
     (zero only for the padding sample).
     """
     torch.manual_seed(0)
-    model = _independent_samples(_build_model().train())
+    partial_annotations = None if cone_barrier_status is None else _cone_barrier_annotations()
+    model = _independent_samples(_build_model(partial_annotations=partial_annotations).train())
     images, boxes, labels = _two_samples_with_boxes()
     padded_images = torch.cat([images, images[:1]]).requires_grad_()
     real_batch = _build_batch_inputs(images, gt_boxes=boxes, gt_labels=labels)
@@ -1153,6 +1187,9 @@ def test_a_padding_sample_takes_no_part_in_the_loss() -> None:
         ),
         [False, False, True],
     )
+    if cone_barrier_status is not None:
+        real_batch = _with_cone_barrier_status(real_batch, cone_barrier_status[:2])
+        padded_batch = _with_cone_barrier_status(padded_batch, cone_barrier_status)
 
     torch.manual_seed(1)
     real_outputs = model(real_batch)
@@ -1276,3 +1313,73 @@ def test_a_padding_slot_starts_a_new_stream_and_leaves_the_next_epoch_alone() ->
         expected_head = expected.detection3d().streampetr_head()
         torch.testing.assert_close(observed_head.all_cls_scores, expected_head.all_cls_scores)
         torch.testing.assert_close(observed_head.all_bbox_preds, expected_head.all_bbox_preds)
+
+
+def _one_box_batch() -> ModelBatchInputs:
+    """One frame with one car."""
+    return _build_batch_inputs(
+        torch.randn(1, NUM_CAMS, 3, *IMAGE_HW),
+        gt_boxes=[_collated_box(0.0, 0.0, 0.5, 4.0, 2.0, 1.5, 0.2, 0.0, 0.0, 0.0)],
+        gt_labels=[torch.tensor([0])],
+    )
+
+
+def test_partial_annotations_mask_the_cone_barrier_terms_of_unannotated_frames() -> None:
+    """
+    Input: one training frame with one car through a model with partial annotations, scored
+    with its traffic-cone and barrier status True, then False, then without the status, and
+    once more with partial annotations removed.
+    Expected: a frame annotated with traffic cones and barriers is scored exactly as without
+    partial annotations. A frame annotated without them does not teach the head that they are
+    absent: dropping their background terms lowers only the classification losses of the
+    matched and the denoising queries. The status is required as soon as partial annotations
+    are configured.
+    Check: every loss term of the annotated frame against those without partial annotations,
+    both classification losses are lower without the cones and barriers, both regression
+    losses are unchanged, and the batch without the status raises a ValueError naming
+    gt_traffic_cone_barrier_bbox_status.
+    """
+    torch.manual_seed(0)
+    model = _build_model(partial_annotations=_cone_barrier_annotations()).train()
+    batch_inputs = _one_box_batch()
+    outputs = model(batch_inputs)
+
+    annotated = model.compute_metrics(_with_cone_barrier_status(batch_inputs, [True]), outputs)
+    ignored = model.compute_metrics(_with_cone_barrier_status(batch_inputs, [False]), outputs)
+    with pytest.raises(ValueError, match="gt_traffic_cone_barrier_bbox_status"):
+        model.compute_metrics(batch_inputs, outputs)
+    model.partial_annotations = None
+    plain = model.compute_metrics(batch_inputs, outputs)
+
+    assert annotated.keys() == plain.keys()
+    for key, value in plain.items():
+        assert torch.equal(annotated[key], value), key
+    assert ignored["loss_cls"] < annotated["loss_cls"]
+    assert ignored["dn_loss_cls"] < annotated["dn_loss_cls"]
+    for key in ("loss_bbox", "dn_loss_bbox"):
+        assert torch.equal(ignored[key], annotated[key]), key
+
+
+@pytest.mark.parametrize(
+    "class_names",
+    [
+        # Only the two partially annotated classes swap, which happens to mask the same columns.
+        ["car", "barrier", "traffic_cone"],
+        # The car column would be masked in the unannotated frames and the traffic cone never.
+        ["traffic_cone", "car", "barrier"],
+        ["car", "traffic_cone", "barrier", "truck"],
+    ],
+    ids=["partial_classes_swapped", "partial_class_moved", "one_class_more"],
+)
+def test_partial_annotations_must_list_the_classes_of_the_head_in_order(
+    class_names: list[str],
+) -> None:
+    """
+    Input: partial annotations over the head's classes in another order, or over one class
+    more.
+    Expected: the annotated class masks index the logits by position, so the model refuses
+    them when it is built instead of leaving other classes unsupervised.
+    Check: the ValueError naming both class lists.
+    """
+    with pytest.raises(ValueError, match=r"bbox_head\.class_names in the same order"):
+        _build_model(partial_annotations=_cone_barrier_annotations(class_names))

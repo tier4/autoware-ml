@@ -701,7 +701,8 @@ class SerializedAttention(PointModule):
             attention = self.attn_drop(attention).to(qkv.dtype)
             feat = (attention @ v).transpose(1, 2).reshape(-1, channel_count)
         else:
-            assert cu_seqlens is not None
+            if cu_seqlens is None:
+                raise ValueError("Flash attention needs the cumulative sequence lengths")
             if self.flash_attn is None:
                 self.flash_attn = load_flash_attn_module()
             packed = (
