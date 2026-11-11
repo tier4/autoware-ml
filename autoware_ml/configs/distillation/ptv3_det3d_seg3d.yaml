@@ -1,6 +1,7 @@
 # @package _global_
 # Distill a PTv3 det3d+seg3d teacher into the det3d+seg3d student of the experiment: the
-# segmentation logits, the dense detection heatmap and the BEV features of the neck. An
+# segmentation logits, the dense detection heatmap and the per-query detection outputs at the
+# teacher's proposals. An
 # experiment composes it through its defaults list, before _self_:
 #   - /distillation: ptv3_det3d_seg3d
 # and names the teacher checkpoint when it runs, see
@@ -43,13 +44,15 @@ model:
         loss:
           _target_: autoware_ml.losses.distillation.sigmoid_soft_target.SigmoidSoftTargetLoss
           focal_gamma: 2.0
-      # Output of the BEV neck, (batch, channels, height, width). A student neck of another
-      # width needs an `adapter` (a 1x1 torch.nn.Conv2d) on this term.
-      - _target_: autoware_ml.distillation.term.DistillationTerm
-        name: bev_features
-        student: module:bev_neck
-        teacher: module:bev_neck
-        weight: 0.1
-        loss:
-          _target_: autoware_ml.losses.distillation.feature.FeatureMSELoss
-          normalize: true
+      # The student head run once more at the teacher's proposals, so the per-query class
+      # logits and box regressions pair up. Logged as distill/det3d_queries/{cls,reg}.
+      - _target_: autoware_ml.distillation.shared_queries.TransFusionSharedQueriesTerm
+        name: det3d_queries
+        student_features: module:bev_neck
+        head: bbox_head
+        weight: 1.0
+        classification_weight: 1.0
+        regression_weight: 0.25
+      # A feature term on the BEV neck output is possible with
+      # autoware_ml.losses.distillation.feature.FeatureMSELoss on `module:bev_neck`, but the
+      # canvas is mostly empty cells with constant features, which dilute it. Left out.

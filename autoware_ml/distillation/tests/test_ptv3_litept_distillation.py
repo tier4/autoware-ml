@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.distillation.distillation import Distillation
+from autoware_ml.distillation.shared_queries import TransFusionSharedQueriesTerm
 from autoware_ml.distillation.term import DistillationTerm
 from autoware_ml.distillation.tests.toy_models import InMemoryTeacher
 from autoware_ml.losses.distillation.feature import FeatureMSELoss
@@ -136,7 +137,7 @@ def test_ptv3_teaches_litept_segmentation_on_the_shared_voxels() -> None:
 def test_ptv3_teaches_litept_detection_and_segmentation() -> None:
     """
     Input: a tiny joint PTv3 teacher and a joint LitePT student with its own neck; terms on the
-    segmentation logits, the dense heatmap and the BEV neck output.
+    segmentation logits, the dense heatmap, the BEV neck output and the shared queries.
     Expected: every term is finite and the loss trains both branches of the student.
     Check: the logged terms and the gradients of the heads.
     """
@@ -178,6 +179,7 @@ def test_ptv3_teaches_litept_detection_and_segmentation() -> None:
                     loss=FeatureMSELoss(normalize=True),
                     weight=0.1,
                 ),
+                TransFusionSharedQueriesTerm(),
             ],
         ),
         **_common_kwargs(),
@@ -189,9 +191,12 @@ def test_ptv3_teaches_litept_detection_and_segmentation() -> None:
         "train/distill/seg3d_logits",
         "train/distill/det3d_heatmap",
         "train/distill/bev_features",
+        "train/distill/det3d_queries/cls",
+        "train/distill/det3d_queries/reg",
     ):
         assert torch.isfinite(logged[key]) and logged[key] >= 0.0
     assert torch.isfinite(logged["train/loss"])
     assert any(p.grad is not None for p in student.bev_neck.parameters())
+    assert any(p.grad is not None for p in student.bbox_head.decoder.parameters())
     assert student.seg3d_head.classifier.weight.grad is not None
     assert all(parameter.grad is None for parameter in teacher.parameters())

@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.distillation.distillation import Distillation
+from autoware_ml.distillation.taps import Tap
 from autoware_ml.distillation.teacher import Teacher
 from autoware_ml.distillation.term import DistillationTerm
 from autoware_ml.distillation.tests.toy_models import (
@@ -267,6 +268,44 @@ def test_the_in_memory_teacher_serves_models_without_a_config() -> None:
     inputs = student.on_after_batch_transfer(build_gt_batch(), dataloader_idx=0)
 
     assert inputs.distillation_targets is not None
+
+
+class _PartsTerm(nn.Module):
+    """A term made of two logged parts, bound to the student at setup."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.name = "parts"
+        self.weight = 2.0
+        self.student_tap = Tap(LOGITS)
+        self.teacher_tap = Tap(LOGITS)
+        self.bound: nn.Module | None = None
+
+    def bind(self, student: nn.Module) -> None:
+        self.bound = student
+
+    def forward(self, student_outputs, student_features, targets) -> dict[str, torch.Tensor]:
+        student = self.student_tap.resolve(student_outputs, student_features)
+        teacher = self.teacher_tap.resolve(targets.outputs, targets.features)
+        return {"a": (student - teacher).abs().mean(), "b": torch.ones(())}
+
+
+def test_a_term_may_return_parts_which_are_logged_and_summed(tmp_path: Path) -> None:
+    term = _PartsTerm()
+    student = ToySegModel(
+        distillation=Distillation(teacher=_file_teacher(tmp_path, ToySegModel(), 6), terms=[term])
+    )
+    student.setup("fit")
+    _silence_logging(student)
+    inputs = student.on_after_batch_transfer(build_gt_batch(), dataloader_idx=0)
+
+    metrics, _ = student._core_step(inputs, step_prefix="train")
+
+    assert term.bound is student
+    assert torch.allclose(
+        metrics["distill/parts"], metrics["distill/parts/a"] + metrics["distill/parts/b"]
+    )
+    assert torch.allclose(metrics["distill_loss"], 2.0 * metrics["distill/parts"])
 
 
 def test_terms_must_have_distinct_names() -> None:

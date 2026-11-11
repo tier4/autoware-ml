@@ -24,7 +24,7 @@ The teacher sees the very batch the student sees, augmentation included.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 import torch.nn as nn
@@ -38,6 +38,15 @@ from autoware_ml.distillation.teacher import Teacher
 from autoware_ml.distillation.term import DistillationTerm
 from autoware_ml.types.dataset import SplitType
 
+
+@runtime_checkable
+class BindsStudent(Protocol):
+    """A term that needs a hold of the student, such as one re-running one of its heads."""
+
+    def bind(self, student: nn.Module) -> None:
+        """Take hold of the student at fit setup."""
+
+
 GT_LOSS_KEY = "gt_loss"
 DISTILL_LOSS_KEY = "distill_loss"
 TERM_KEY_PREFIX = "distill/"
@@ -50,9 +59,15 @@ class Distillation(nn.Module):
     The adapters of the terms are the only parameters of this module; they are saved with the
     student and trained with it. The teacher is held, not registered, see :class:`Teacher`.
 
+    A term is any module with a ``name``, a ``weight``, a ``student_tap`` and a ``teacher_tap``
+    that is called as ``term(student_outputs, student_features, targets)`` and returns a scalar,
+    or a mapping of named parts whose sum is the term. A term that implements ``bind`` is handed
+    the student at fit setup.
+
     Args:
         teacher: The frozen teacher.
-        terms: Terms added to the loss, each logged as ``distill/<name>``.
+        terms: Terms added to the loss, each logged as ``distill/<name>``, with its parts as
+            ``distill/<name>/<part>``.
         stages: Splits the distillation runs at. By default train only, so ``val/loss`` stays
             the ground-truth loss the checkpoint and early-stopping callbacks monitor.
 
@@ -63,7 +78,7 @@ class Distillation(nn.Module):
     def __init__(
         self,
         teacher: Teacher,
-        terms: Sequence[DistillationTerm],
+        terms: Sequence[DistillationTerm | nn.Module],
         stages: Sequence[str] = (SplitType.TRAIN.value,),
     ) -> None:
         super().__init__()
@@ -110,6 +125,9 @@ class Distillation(nn.Module):
                 teacher_model, (term.teacher_tap for term in self.terms), self._teacher_store
             )
         )
+        for term in self.terms:
+            if isinstance(term, BindsStudent):
+                term.bind(student)
 
     def teardown(self) -> None:
         """Remove the hooks and drop what they captured."""
@@ -161,8 +179,9 @@ class Distillation(nn.Module):
             metrics: Losses of the student against the ground truth, with ``loss``.
 
         Returns:
-            The metrics plus ``gt_loss`` (the incoming ``loss``), ``distill/<name>`` per term,
-            ``distill_loss`` (their weighted sum) and ``loss`` as the sum of both.
+            The metrics plus ``gt_loss`` (the incoming ``loss``), ``distill/<name>`` per term
+            and ``distill/<name>/<part>`` for a term made of parts, ``distill_loss`` (the
+            weighted sum of the terms) and ``loss`` as the sum of both.
 
         Raises:
             ValueError: If the batch carries no teacher targets.
@@ -182,6 +201,10 @@ class Distillation(nn.Module):
         distill_loss = torch.zeros_like(gt_loss)
         for term in self.terms:
             value = term(outputs, student_features, targets)
+            if isinstance(value, Mapping):
+                for part_name, part in value.items():
+                    result[f"{TERM_KEY_PREFIX}{term.name}/{part_name}"] = part
+                value = sum(value.values(), torch.zeros_like(gt_loss))
             result[f"{TERM_KEY_PREFIX}{term.name}"] = value
             distill_loss = distill_loss + term.weight * value
         result[DISTILL_LOSS_KEY] = distill_loss

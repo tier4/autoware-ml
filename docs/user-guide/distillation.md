@@ -38,10 +38,10 @@ A `+distillation=<group>` override on the command line does not reach the group:
 such an override relative to the directory of the experiment config. The bundled groups live
 in `autoware_ml/configs/distillation/`:
 
-| Group              | Student     | Terms                                                           |
-| ------------------ | ----------- | --------------------------------------------------------------- |
-| `ptv3_det3d_seg3d` | det3d+seg3d | segmentation logits, dense detection heatmap, BEV neck features |
-| `ptv3_seg3d`       | seg3d       | segmentation logits, deepest encoder features                   |
+| Group              | Student     | Terms                                                                        |
+| ------------------ | ----------- | ---------------------------------------------------------------------------- |
+| `ptv3_det3d_seg3d` | det3d+seg3d | segmentation logits, dense detection heatmap, shared-query detection outputs |
+| `ptv3_seg3d`       | seg3d       | segmentation logits, deepest encoder features                                |
 
 The teacher is rebuilt from the `config/resolved.yaml` every training run writes next to its
 `checkpoints` directory, so a checkpoint path is all it needs. Several `teacher_weights` stack
@@ -99,8 +99,18 @@ picks another entry and `@<index>` an element of a tuple output.
 Both tensors must have the same shape. A student whose channels differ from the teacher's
 gets an `adapter`, any module, applied to the student tensor; it trains with the student and is
 saved in its checkpoint. Position-wise tensors align because the teacher reads the student's
-voxels (`share_student_inputs`). Per-query detection outputs are not comparable, each model
-picks its own proposals, so the detection groups distill the dense heatmap instead.
+voxels (`share_student_inputs`).
+
+Per-query detection outputs do not align on their own, each head picks its own proposals, so
+the detection group adds a term of its own kind, `TransFusionSharedQueriesTerm`: it runs the
+student's head once more at the proposals the teacher picked, on the student's own BEV
+features, and matches the paired queries, class logits with a soft binary cross entropy and
+box regressions with an L1 weighted by the teacher's confidence in each query. It is logged in
+two parts, `distill/det3d_queries/cls` and `distill/det3d_queries/reg`. The dense heatmap term
+stays next to it: at inference the student still picks its own proposals, and the heatmap is
+what makes it look where the teacher looks. A term is any module with a name, a weight and the
+two taps that returns a scalar or a mapping of parts; one that implements `bind(student)` is
+handed the student at fit setup.
 
 | Loss                                                            | For                                      | Notes                                                                          |
 | --------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------ |
