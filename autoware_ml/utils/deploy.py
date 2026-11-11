@@ -29,6 +29,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import hydra
 import lightning as L
 import onnx
 from onnx.external_data_helper import convert_model_from_external_data
@@ -345,9 +346,6 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
 
 def instantiate_modifier(modify_graph_cfg: DictConfig) -> Any:
     """Instantiate an ONNX graph modifier from config."""
-    # TODO(JonnaMat): Import hydra at the top.
-    import hydra  # noqa: PLC0415
-
     modifier = hydra.utils.instantiate(modify_graph_cfg)
     if callable(modifier):
         return modifier
