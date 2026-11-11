@@ -104,22 +104,55 @@ function torchmetrics uses to combine that state across GPUs.
 | `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `EvalOutput.segmentation3d` frames      | one confusion tensor over (filter, range) buckets (`sum`) |
 | `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `EvalOutput.segmentation3d` with scores | per-frame point tensors (`None`)                          |
 
-A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
-matching is score ordered inside each frame and the point-level metrics read raw points, so those
-states stay per-frame list elements gathered with no reduction. Evaluation filters need the ego
-pose and the scene's lanelet map, which are not tensors, so their keep-masks are computed per
-frame at `update` and stored as boolean states, and DDP gathers only tensors.
+Why each state reduces the way it does:
 
-The eval output is the typed `EvalOutput` of `autoware_ml/metrics/eval_output.py`. Its
-`detection3d` part holds one `Detection3DEvalFrame` per sample with the decoded predictions, the
-ground truth boxes and labels, the optional point count per box and the padding flag. Its
-`segmentation3d` part holds one `Segmentation3DEvalFrame` per sample with the point coordinates,
-predicted and target labels, the optional per-class scores and the optional detection ground
-truth. Both frame types carry the frame's `FrameMetaSample` (ego pose, scene token, lanelet map
-path) when the dataset attaches it. `requirements()` declares what the configuration demands: a
-detection suite with a collision provider or a region filter requires the frame metadata, a
-ground-truth point filter requires the point counts, and the point cloud suite requires the
-scores.
+- **Confusion counts `sum`.** A confusion matrix is a bounded sufficient statistic, so adding the
+  per-rank tensors is exact.
+- **Frames gather with no reduction.** Detection matching is score ordered inside each frame and
+  the point-level metrics read raw points, so those states stay per-frame list elements.
+- **Filter keep-masks are tensors.** Evaluation filters need the ego pose and the scene's lanelet
+  map, which are not tensors, so their keep-masks are computed per frame at `update` and stored
+  as boolean states. DDP gathers only tensors.
+
+The eval output is the typed `EvalOutput` of `autoware_ml/metrics/eval_output.py`. Its parts are
+optional, so a model fills the one(s) its task produces.
+
+| Type                       | Holds                                                        | One per |
+| -------------------------- | ------------------------------------------------------------ | ------- |
+| `EvalOutput`               | `detection3d` and `segmentation3d`, each optional            | batch   |
+| `Detection3DEvalOutput`    | `frames: Sequence[Detection3DEvalFrame]`                     | batch   |
+| `Detection3DEvalFrame`     | the fields below                                             | sample  |
+| `Segmentation3DEvalOutput` | `frames: Sequence[Segmentation3DEvalFrame]`                  | batch   |
+| `Segmentation3DEvalFrame`  | the fields below                                             | sample  |
+| `FrameMetaSample`          | `ego2global`, `scene_token`, `timestamp`, `lanelet_map_path` | frame   |
+
+`Detection3DEvalFrame`:
+
+| Field           | Content                                       | Required when                                  |
+| --------------- | --------------------------------------------- | ---------------------------------------------- |
+| `predictions`   | decoded boxes with their scores and labels    | always                                         |
+| `gt_boxes`      | ground truth boxes, 7 or more parameters each | always                                         |
+| `gt_labels`     | class index of every ground truth box         | always                                         |
+| `gt_num_points` | lidar points inside every ground truth box    | a ground-truth point filter or occlusion split |
+| `is_padding`    | the frame only pads a streaming lane          | always (defaults to `False`)                   |
+| `frame_meta`    | the frame's `FrameMetaSample`                 | a region filter or a collision provider        |
+
+`Segmentation3DEvalFrame`:
+
+| Field           | Content                                                  | Required when                                     |
+| --------------- | -------------------------------------------------------- | ------------------------------------------------- |
+| `coord`         | point coordinates                                        | always                                            |
+| `pred`          | predicted class of every point                           | always                                            |
+| `target`        | ground truth class of every point, ignore index included | always                                            |
+| `scores`        | softmax probability of every class per point             | `Segmentation3DPointCloudMetricSuite` is attached |
+| `frame_meta`    | the frame's `FrameMetaSample`                            | a region filter                                   |
+| `gt_boxes`      | detection ground truth boxes                             | the partial-detection score                       |
+| `gt_box_labels` | class index of every detection ground truth box          | the partial-detection score                       |
+
+The "Required when" column is what `requirements()` encodes: each suite folds the flags of its
+active components and filters into one `MetricRequirements`, and the first batch fails loud on a
+missing part. A padding frame is kept so every rank holds as many frames as the others for the
+gather, and the metrics leave it out.
 
 A metric records its values under bare names such as `mAP_car` in a `MetricReport`. Every
 value travels with a typed `MetricKey` that names the suite `prefix`, the taxonomy `view`, the
