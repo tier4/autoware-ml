@@ -15,7 +15,7 @@ from jaxtyping import Float32, Bool, Int32, Int64
 import torch
 from scipy.optimize import linear_sum_assignment
 
-from autoware_ml.geometry.bbox_2d.boxes import bbox_cxcywh_to_xyxy
+from autoware_ml.geometry.bbox_2d.base_bbox2d import BaseBBoxes2D
 from autoware_ml.models.detection3d.task_modules.match_costs import (
     BBox3DL1Cost,
     BBoxBEVL1Cost,
@@ -246,8 +246,8 @@ class AssignResult2D:
     """
 
     num_gts: int
-    gt_inds: torch.Tensor
-    labels: torch.Tensor
+    gt_inds: Int64[torch.Tensor, " num_queries"]
+    labels: Int64[torch.Tensor, " num_queries"]
 
 
 @dataclass(frozen=True)
@@ -265,12 +265,12 @@ class HungarianAssigner2D:
 
     def assign(
         self,
-        bbox_pred: torch.Tensor,
-        cls_pred: torch.Tensor,
-        pred_centers2d: torch.Tensor,
-        gt_bboxes: torch.Tensor,
-        gt_labels: torch.Tensor,
-        gt_centers2d: torch.Tensor,
+        bbox_pred: Float32[torch.Tensor, "num_queries 4"],
+        cls_pred: Float32[torch.Tensor, "num_queries num_classes"],
+        pred_centers2d: Float32[torch.Tensor, "num_queries 2"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+        gt_labels: Int64[torch.Tensor, " num_gts"],
+        gt_centers2d: Float32[torch.Tensor, "num_gts 2"],
         image_height: int,
         image_width: int,
     ) -> AssignResult2D:
@@ -295,8 +295,25 @@ class HungarianAssigner2D:
             Assignment result over the proposals.
 
         Raises:
-            ValueError: If a label is negative or not below the number of class channels.
+            ValueError: If a box, logit or center tensor is not float32, or a label is negative
+                or not below the number of class channels.
         """
+        # Match in float32 like the reference (force_fp32): a bfloat16 sigmoid saturates above
+        # logit 6.2, and a bfloat16 box is off by up to 1/256 of the image. Callers running
+        # under autocast cast their outputs first.
+        inputs = {
+            "bbox_pred": bbox_pred,
+            "cls_pred": cls_pred,
+            "pred_centers2d": pred_centers2d,
+            "gt_bboxes": gt_bboxes,
+            "gt_centers2d": gt_centers2d,
+        }
+        not_float32 = {
+            name: tensor.dtype for name, tensor in inputs.items() if tensor.dtype != torch.float32
+        }
+        if not_float32:
+            raise ValueError(f"HungarianAssigner2D matches in float32, got {not_float32}.")
+
         num_gts = gt_bboxes.size(0)
         num_queries = bbox_pred.size(0)
         assigned_gt_inds = bbox_pred.new_zeros((num_queries,), dtype=torch.long)
@@ -308,14 +325,6 @@ class HungarianAssigner2D:
         if bool((gt_labels < 0).any()):
             raise ValueError("Found negative gt_labels. The 2D ground truth is not padded.")
 
-        # Match in float32 like the reference (force_fp32): a bfloat16 sigmoid saturates above
-        # logit 6.2, and a bfloat16 box is off by up to 1/256 of the image.
-        bbox_pred = bbox_pred.float()
-        cls_pred = cls_pred.float()
-        pred_centers2d = pred_centers2d.float()
-        gt_bboxes = gt_bboxes.float()
-        gt_centers2d = gt_centers2d.float()
-
         factor = gt_bboxes.new_tensor([image_width, image_height, image_width, image_height])
         # ClassificationCost is batched; one image is a batch of one with all boxes valid.
         valid_masks = torch.ones((1, num_gts), dtype=torch.bool, device=gt_labels.device)
@@ -323,7 +332,7 @@ class HungarianAssigner2D:
         cost = (
             cls_cost
             + self.reg_cost(bbox_pred, gt_bboxes / factor)
-            + self.iou_cost(bbox_cxcywh_to_xyxy(bbox_pred) * factor, gt_bboxes)
+            + self.iou_cost(BaseBBoxes2D.from_cxcywh(bbox_pred).bbox_params * factor, gt_bboxes)
             + self.centers2d_cost(pred_centers2d, gt_centers2d / factor[:2])
         )
         cost = torch.nan_to_num(cost, nan=100.0, posinf=100.0, neginf=-100.0)

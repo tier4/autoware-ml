@@ -14,11 +14,7 @@ from dataclasses import dataclass
 from jaxtyping import Float32, Int64, Bool
 import torch
 
-from autoware_ml.geometry.bbox_2d.boxes import (
-    bbox_cxcywh_to_xyxy,
-    bbox_overlaps,
-    bbox_xyxy_to_cxcywh,
-)
+from autoware_ml.geometry.bbox_2d.base_bbox2d import BaseBBoxes2D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -243,13 +239,17 @@ class BBoxL1Cost2D:
         if self.box_format not in ("xywh", "xyxy"):
             raise ValueError(f"Unsupported box_format '{self.box_format}'.")
 
-    def __call__(self, bbox_pred: torch.Tensor, gt_bboxes: torch.Tensor) -> torch.Tensor:
+    def __call__(
+        self,
+        bbox_pred: Float32[torch.Tensor, "num_queries 4"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+    ) -> Float32[torch.Tensor, "num_queries num_gts"]:
         """Compute the pairwise box L1 cost."""
         if self.box_format == "xywh":
-            gt_bboxes = bbox_xyxy_to_cxcywh(gt_bboxes)
+            gt_bboxes = BaseBBoxes2D(gt_bboxes).cxcywh
         else:
-            bbox_pred = bbox_cxcywh_to_xyxy(bbox_pred)
-        return torch.cdist(bbox_pred.float(), gt_bboxes.float(), p=1) * self.weight
+            bbox_pred = BaseBBoxes2D.from_cxcywh(bbox_pred).bbox_params
+        return torch.cdist(bbox_pred, gt_bboxes, p=1) * self.weight
 
 
 @dataclass(frozen=True)
@@ -263,9 +263,14 @@ class IoUCost2D:
         if self.iou_mode not in ("iou", "giou"):
             raise ValueError(f"Unsupported iou_mode '{self.iou_mode}'.")
 
-    def __call__(self, bboxes: torch.Tensor, gt_bboxes: torch.Tensor) -> torch.Tensor:
+    def __call__(
+        self,
+        bboxes: Float32[torch.Tensor, "num_queries 4"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+    ) -> Float32[torch.Tensor, "num_queries num_gts"]:
         """Compute the pairwise overlap cost."""
-        overlaps = bbox_overlaps(bboxes, gt_bboxes, mode=self.iou_mode, is_aligned=False)
+        boxes, gt_boxes = BaseBBoxes2D(bboxes), BaseBBoxes2D(gt_bboxes)
+        overlaps = boxes.giou(gt_boxes) if self.iou_mode == "giou" else boxes.iou(gt_boxes)
         return -overlaps * self.weight
 
 
@@ -275,6 +280,10 @@ class Center2DL1Cost:
 
     weight: float = 1.0
 
-    def __call__(self, center_pred: torch.Tensor, gt_centers: torch.Tensor) -> torch.Tensor:
+    def __call__(
+        self,
+        center_pred: Float32[torch.Tensor, "num_queries 2"],
+        gt_centers: Float32[torch.Tensor, "num_gts 2"],
+    ) -> Float32[torch.Tensor, "num_queries num_gts"]:
         """Compute the pairwise center L1 cost."""
-        return torch.cdist(center_pred.float(), gt_centers.float(), p=1) * self.weight
+        return torch.cdist(center_pred, gt_centers, p=1) * self.weight

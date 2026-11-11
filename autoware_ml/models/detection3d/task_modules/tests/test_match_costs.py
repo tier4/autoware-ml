@@ -619,10 +619,13 @@ class TestMatchCosts2D(unittest.TestCase):
     """The cost terms by hand, so a wrong weight, sign or box form does not pass unnoticed."""
 
     def test_box_l1_cost_converts_the_ground_truth_to_the_proposal_form(self) -> None:
-        """A (0.5, 0.5, 0.2, 0.2) proposal is (0.4, 0.4)-(0.6, 0.6): L1 0 to that box.
-
-        To (0.4, 0.4)-(0.8, 0.8), which is (0.6, 0.6, 0.4, 0.4), the L1 is 0.6; weighted by 5
-        that is 3. In the ``xyxy`` form the proposal is converted instead and the L1 is 0.4.
+        """
+        Input: the proposal (0.5, 0.5, 0.2, 0.2), which is (0.4, 0.4) - (0.6, 0.6), against
+        that box and (0.4, 0.4) - (0.8, 0.8), which is (0.6, 0.6, 0.4, 0.4); weight 5.
+        Expected: in the default ``xywh`` form the ground truth is converted, so the L1 is 0
+        and 0.6 and the costs 0 and 3. In the ``xyxy`` form the proposal is converted instead,
+        and the L1 to the second box is 0.4, cost 2.
+        Check: the cost of both forms.
         """
         bbox_pred = torch.tensor([[0.5, 0.5, 0.2, 0.2]])
         gt_bboxes = torch.tensor([[0.4, 0.4, 0.6, 0.6], [0.4, 0.4, 0.8, 0.8]])
@@ -636,7 +639,11 @@ class TestMatchCosts2D(unittest.TestCase):
         )
 
     def test_iou_cost_is_the_negative_overlap(self) -> None:
-        """The pair with GIoU 1/7 - 2/9 costs minus twice that; the IoU mode costs -2/7."""
+        """
+        Input: (0, 0) - (2, 2) against (1, 1) - (3, 3), weight 2.
+        Expected: the pair has GIoU 1/7 - 2/9 and IoU 1/7, so it costs minus twice those.
+        Check: the cost of both modes.
+        """
         boxes = torch.tensor([[0.0, 0.0, 2.0, 2.0]])
         gt_bboxes = torch.tensor([[1.0, 1.0, 3.0, 3.0]])
 
@@ -648,13 +655,22 @@ class TestMatchCosts2D(unittest.TestCase):
         )
 
     def test_the_costs_reject_unknown_formats_when_built(self) -> None:
+        """
+        Input: a box L1 cost in the ``xywhr`` form and an overlap cost in the ``iof`` mode.
+        Expected: both are refused when they are built, before any matching.
+        Check: the ValueError naming the field.
+        """
         with self.assertRaisesRegex(ValueError, "box_format"):
             BBoxL1Cost2D(box_format="xywhr")
         with self.assertRaisesRegex(ValueError, "iou_mode"):
             IoUCost2D(iou_mode="iof")
 
     def test_center_cost_is_the_weighted_l1_distance(self) -> None:
-        """(0.5, 0.5) to (0.6, 0.3) is 0.3 apart; weighted by 10 that is 3."""
+        """
+        Input: the center (0.5, 0.5) against (0.6, 0.3), weight 10.
+        Expected: the two are 0.1 + 0.2 = 0.3 apart in L1, so the cost is 3.
+        Check: the cost.
+        """
         torch.testing.assert_close(
             Center2DL1Cost(weight=10.0)(torch.tensor([[0.5, 0.5]]), torch.tensor([[0.6, 0.3]])),
             torch.tensor([[3.0]]),
