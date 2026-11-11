@@ -5,7 +5,7 @@ platforms:
   virtual-packages:
   - __cuda=12.8
   - __glibc=2.31
-  - __unix=0
+  - __unix=0=0
   - __linux=4.18
   - __archspec=0=x86_64
 environments:
