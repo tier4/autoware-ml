@@ -104,8 +104,6 @@ function torchmetrics uses to combine that state across GPUs.
 | `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `EvalOutput.segmentation3d` frames      | one confusion tensor over (filter, range) buckets (`sum`) |
 | `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `EvalOutput.segmentation3d` with scores | per-frame point tensors (`None`)                          |
 
-Why each state reduces the way it does:
-
 - **Confusion counts `sum`.** A confusion matrix is a bounded sufficient statistic, so adding the
   per-rank tensors is exact.
 - **Frames gather with no reduction.** Detection matching is score ordered inside each frame and
