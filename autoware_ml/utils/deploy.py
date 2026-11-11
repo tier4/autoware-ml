@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any
 
 import lightning as L
+import onnx
+from onnx.external_data_helper import convert_model_from_external_data
 from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.export import Dim
@@ -252,10 +254,6 @@ def normalize_dynamic_shapes_for_model(
 
 def merge_onnx_external_data(onnx_path: Path) -> None:
     """Merge ONNX external data shards back into a single file."""
-    # TODO(JonnaMat): Import onnx at the top.
-    import onnx  # noqa: PLC0415
-    from onnx.external_data_helper import convert_model_from_external_data  # noqa: PLC0415
-
     onnx_model = onnx.load(str(onnx_path), load_external_data=True)
     convert_model_from_external_data(onnx_model)
     onnx.save_model(onnx_model, str(onnx_path))
