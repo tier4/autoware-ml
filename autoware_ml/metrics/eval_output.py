@@ -212,7 +212,7 @@ class MetricRequirements(BaseModel):
     scores: bool = False
     gt_boxes: bool = False
 
-    def check_requirements(self, eval_output: EvalOutput) -> tuple[str, ...]:
+    def check_requirements(self, eval_output: EvalOutput) -> Sequence[str]:
         """
         Name what the eval output fails to provide.
 
@@ -220,7 +220,7 @@ class MetricRequirements(BaseModel):
           eval_output: The output of the model for one batch.
 
         Returns:
-          tuple[str, ...]: The missing parts, empty when the output satisfies the requirements.
+          Sequence[str]: The missing parts, empty when the output satisfies the requirements.
         """
         missing: list[str] = []
         detection = eval_output.detection3d
@@ -243,4 +243,4 @@ class MetricRequirements(BaseModel):
             missing.append("scores (per-class probabilities per point)")
         if self.gt_boxes and not (segmentation is not None and segmentation.check_all_gt_boxes):
             missing.append("gt_boxes (detection ground truth inside the segmentation frames)")
-        return tuple(missing)
+        return missing
