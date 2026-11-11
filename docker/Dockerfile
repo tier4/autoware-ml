@@ -85,7 +85,7 @@ RUN CONDA_OVERRIDE_CUDA=12.8 /opt/pixi/bin/pixi install --locked --environment d
 # Install the project itself in editable mode inside the environment, and link the environment
 # to a stable path for editors
 COPY . /workspace/
-RUN /opt/pixi/bin/pixi run --environment dev install-project install-av2 \
+RUN /opt/pixi/bin/pixi run --environment dev install-project \
   && DEV_ENV="$(echo /opt/pixi/envs/*/envs/dev)" \
   && test -d "${DEV_ENV}" \
   && ln -s "${DEV_ENV}" /opt/pixi/dev \
