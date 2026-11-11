@@ -12,11 +12,12 @@ the map at compute time, DDP gathers only tensors.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import torch
 
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.metrics.base import (
     IDENTITY,
     Metric,
@@ -36,9 +37,6 @@ from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
 from autoware_ml.types.metrics import MatchCost
-
-if TYPE_CHECKING:
-    from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 
 logger = logging.getLogger(__name__)
 
