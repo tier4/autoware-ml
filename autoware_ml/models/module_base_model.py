@@ -25,7 +25,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, NamedTuple, final
 from types import MappingProxyType
 
-from jaxtyping import Float32
+from jaxtyping import Float32, Shaped
 import lightning as L
 import torch
 from torch.optim import Optimizer
@@ -36,6 +36,12 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.deployment.stages import (
+    DeployedModel,
+    Graphs,
+    GraphStage,
+    build_export_specs_from_deployment,
+)
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -399,6 +405,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             else None,
         )
 
+    # TODO(vividf): Remove once TransFusion, FRNet, CalibrationStatus and camera-lidar BEVFusion
+    # declare deploy_graphs().
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the single-module deployment export specification.
 
@@ -416,13 +424,59 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         raise NotImplementedError("Model must implement build_export_spec()")
 
+    def deploy_graphs(self) -> Sequence[GraphStage] | None:
+        """Declare the graphs the deployment exports, or return ``None`` for a model without them.
+
+        When declared, :meth:`deployed_forward` runs them and :meth:`build_export_specs`
+        derives from them. The contract:
+
+        * Every ``GraphStage.module`` is export-ready when returned: the live submodule
+          where tracing it is fine, otherwise the copy its ``prepare_for_export()`` makes.
+          The framework runs and traces the module and never alters it.
+        * The method is pure and cheap enough to call again: callers declare the graphs again
+          after replacing modules (e.g. with quantized ones) instead of reusing earlier ones,
+          so a copy made here never goes stale.
+
+        Returns:
+            The graphs, or ``None``.
+        """
+        return None
+
+    def deployed_forward(
+        self, multi_task_batch_inputs: ModelBatchInputs, graphs: Graphs
+    ) -> Mapping[str, Shaped[torch.Tensor, "*shape"]]:
+        """Run the deployed inference: the glue in plain code, each graph called by name.
+
+        ``graphs[name](**inputs)`` runs one declared graph and returns its outputs by name;
+        every declared graph is called exactly once. Tensors the function creates go to
+        ``graphs.device``. The returned tensors are the model outputs.
+
+        Args:
+            multi_task_batch_inputs: The preprocessed batch, as :meth:`forward` takes it.
+            graphs: The declared graphs of this run.
+
+        Returns:
+            The model outputs by name.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} declares deploy_graphs() but not deployed_forward()."
+        )
+
+    def deployment_declaration(self) -> DeployedModel | None:
+        """Return the model's deployment, or ``None`` when it declares no graphs."""
+        graphs = self.deploy_graphs()
+        if graphs is None:
+            return None
+        return DeployedModel(tuple(graphs), self.deployed_forward)
+
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 
-        The default implementation wraps :meth:`build_export_spec` as a single
-        ``end_to_end`` module. Models with separate exportable sub-graphs
+        A model that declares :meth:`deploy_graphs` gets one spec per ``GraphStage``, keyed
+        by graph name. Otherwise the default implementation wraps :meth:`build_export_spec`
+        as a single ``end_to_end`` module. Models with separate exportable sub-graphs
         override this to return one spec per architectural component.
 
         Args:
@@ -430,5 +484,26 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         Returns:
             Ordered mapping of module name to export specification.
+
+        Raises:
+            RuntimeError: If a model with deployment graphs or any submodule is in training mode:
+                tracing would update the BatchNorm running statistics.
         """
-        return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
+        deployment = self.deployment_declaration()
+        if deployment is None:
+            # TODO(vividf): Drop this fallback with build_export_spec(). Once every model
+            # declares deploy_graphs(), this method only derives the specs and is no longer
+            # overridden.
+            return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
+        # A submodule can be in training mode under a model in eval mode.
+        in_training = [
+            name or "<model>" for name, module in self.named_modules() if module.training
+        ]
+        if in_training:
+            raise RuntimeError(
+                f"{type(self).__name__}.build_export_specs() needs the model in eval "
+                "mode: tracing the deployment in training mode would update the "
+                f"BatchNorm running statistics. In training mode: {in_training[:3]}"
+                f"{' ...' if len(in_training) > 3 else ''}."
+            )
+        return build_export_specs_from_deployment(deployment, multi_task_batch_inputs, self.device)
