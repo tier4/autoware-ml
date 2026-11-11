@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from jaxtyping import Bool
+from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn as nn
 
@@ -875,17 +875,17 @@ class StreamPETRHead(nn.Module):
 
     def _loss_single(
         self,
-        cls_scores: torch.Tensor,
-        bbox_preds: torch.Tensor,
-        gt_boxes: list[torch.Tensor],
-        gt_labels: list[torch.Tensor],
-        class_weights: torch.Tensor,
+        cls_scores: Float[torch.Tensor, "batch_size num_queries num_classes"],
+        bbox_preds: Float[torch.Tensor, "batch_size num_queries 10"],
+        gt_boxes: list[Float[torch.Tensor, "num_boxes 9"]],
+        gt_labels: list[Int[torch.Tensor, " num_boxes"]],
+        class_weights: Float[torch.Tensor, " batch_size #num_classes"],
         total_pos: float,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[Float[torch.Tensor, ""], Float[torch.Tensor, ""]]:
         """Compute the matching losses of one decoder layer.
 
         ``class_weights`` are the classification weights of the unmatched queries of every
-        sample, ``(batch, 1)`` or ``(batch, num_classes)`` (see :meth:`loss`). A matched query
+        sample, one for all the classes or one per class (see :meth:`loss`). A matched query
         is vouched for by its box, so it keeps every classification term, as in TransFusion.
         ``total_pos`` is the positive count of the step, floored at 1 by :meth:`loss`. The
         divisions by it are explicit because the focal loss floors ``avg_factor`` per rank.
@@ -944,20 +944,20 @@ class StreamPETRHead(nn.Module):
 
     def dn_loss_single(
         self,
-        cls_scores: torch.Tensor,
-        bbox_preds: torch.Tensor,
-        known_bboxs: torch.Tensor,
-        known_labels: torch.Tensor,
+        cls_scores: Float[torch.Tensor, "num_known num_classes"],
+        bbox_preds: Float[torch.Tensor, "num_known 10"],
+        known_bboxs: Float[torch.Tensor, "num_known 9"],
+        known_labels: Int[torch.Tensor, " num_known"],
         cls_avg_factor: float,
         bbox_avg_factor: float,
-        label_weights: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        label_weights: Float[torch.Tensor, " num_known #num_classes"] | None = None,
+    ) -> tuple[Float[torch.Tensor, ""], Float[torch.Tensor, ""]]:
         """Compute denoising-query supervision for one decoder layer.
 
         The average factors are the denoising target counts of the step, averaged over the
         ranks and floored at 1 by :meth:`loss`. ``label_weights`` weight the classification
-        terms of every denoising query, ``(num_known, 1)`` or ``(num_known, num_classes)``;
-        None weights them all by one.
+        terms of every denoising query, one for all the classes or one per class; None weights
+        them all by one.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
@@ -1168,16 +1168,16 @@ class StreamPETRHead(nn.Module):
                 f"padding_mask must have shape (batch_size,) = ({batch_size},), got "
                 f"{tuple(padding_mask.shape)}."
             )
+        mask_shape = (batch_size, self.num_classes)
+        if gt_annotated_class_masks is not None and gt_annotated_class_masks.shape != mask_shape:
+            raise ValueError(
+                "gt_annotated_class_masks must have shape (batch_size, num_classes) = "
+                f"{mask_shape}, got {tuple(gt_annotated_class_masks.shape)}."
+            )
         # The classes of the background terms of every sample: none in a padding sample and,
         # with partial annotations, the annotated ones. (batch, 1) or (batch, num_classes).
         supervised_classes = (~padding_mask).unsqueeze(-1)
         if gt_annotated_class_masks is not None:
-            if gt_annotated_class_masks.shape != (batch_size, self.num_classes):
-                raise ValueError(
-                    "gt_annotated_class_masks must have shape (batch_size, num_classes) = "
-                    f"({batch_size}, {self.num_classes}), got "
-                    f"{tuple(gt_annotated_class_masks.shape)}."
-                )
             supervised_classes = supervised_classes & gt_annotated_class_masks
         class_weights = supervised_classes.to(all_cls_scores.dtype)
 
