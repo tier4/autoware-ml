@@ -29,12 +29,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import hydra
 import lightning as L
-import onnx
-from onnx.external_data_helper import convert_model_from_external_data
 from omegaconf import DictConfig, OmegaConf
-import tensorrt as trt
 import torch
 from torch.export import Dim
 
@@ -256,6 +252,10 @@ def normalize_dynamic_shapes_for_model(
 
 def merge_onnx_external_data(onnx_path: Path) -> None:
     """Merge ONNX external data shards back into a single file."""
+    # TODO(JonnaMat): Import onnx at the top.
+    import onnx  # noqa: PLC0415
+    from onnx.external_data_helper import convert_model_from_external_data  # noqa: PLC0415
+
     onnx_model = onnx.load(str(onnx_path), load_external_data=True)
     convert_model_from_external_data(onnx_model)
     onnx.save_model(onnx_model, str(onnx_path))
@@ -347,6 +347,9 @@ def export_to_onnx(spec: ExportSpec, onnx_cfg: DictConfig, output_path: Path) ->
 
 def instantiate_modifier(modify_graph_cfg: DictConfig) -> Any:
     """Instantiate an ONNX graph modifier from config."""
+    # TODO(JonnaMat): Import hydra at the top.
+    import hydra  # noqa: PLC0415
+
     modifier = hydra.utils.instantiate(modify_graph_cfg)
     if callable(modifier):
         return modifier
@@ -383,6 +386,9 @@ def modify_onnx_graph(onnx_path: Path, modify_graph_cfg: DictConfig) -> Path:
 
 def create_tensorrt_builder_config(tensorrt_cfg: DictConfig) -> tuple[Any, Any, Any, Any]:
     """Create TensorRT builder objects for engine generation."""
+    # TODO(JonnaMat): Import tensorrt at the top.
+    import tensorrt as trt  # noqa: PLC0415
+
     trt_logger = trt.Logger(trt.Logger.WARNING)
     trt.init_libnvinfer_plugins(trt_logger, "")
     builder = trt.Builder(trt_logger)
