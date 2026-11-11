@@ -28,7 +28,9 @@ from autoware_ml.models.detection3d.task_modules.match_costs import (
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 
-def _linear_sum_assignment(cost: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def _linear_sum_assignment(
+    cost: Float32[torch.Tensor, "num_proposals num_gts"],
+) -> tuple[Int64[torch.Tensor, " num_matches"], Int64[torch.Tensor, " num_matches"]]:
     """Run SciPy's Hungarian solver on one cost block.
 
     Args:

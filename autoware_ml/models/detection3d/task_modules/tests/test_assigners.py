@@ -764,7 +764,11 @@ class TestHungarianAssigner2D(unittest.TestCase):
 
     def _proposals_at(
         self, centers: list[tuple[float, float]], num_classes: int = 3
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[
+        Float32[torch.Tensor, "num_queries 4"],
+        Float32[torch.Tensor, "num_queries num_classes"],
+        Float32[torch.Tensor, "num_queries 2"],
+    ]:
         """Build 20 x 20 px proposals at the given pixel centers, with logits of -4.
 
         Returns the normalized ``(cx, cy, w, h)`` boxes, the logits and the normalized centers.
@@ -780,12 +784,12 @@ class TestHungarianAssigner2D(unittest.TestCase):
 
     def _assign(
         self,
-        bbox_pred: torch.Tensor,
-        cls_pred: torch.Tensor,
-        centers: torch.Tensor,
-        gt_bboxes: torch.Tensor,
-        gt_labels: torch.Tensor,
-        gt_centers: torch.Tensor | None = None,
+        bbox_pred: Float32[torch.Tensor, "num_queries 4"],
+        cls_pred: Float32[torch.Tensor, "num_queries num_classes"],
+        centers: Float32[torch.Tensor, "num_queries 2"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+        gt_labels: Int64[torch.Tensor, " num_gts"],
+        gt_centers: Float32[torch.Tensor, "num_gts 2"] | None = None,
     ) -> AssignResult2D:
         """Run the default assigner; the ground-truth centers default to the box centers."""
         if gt_centers is None:
