@@ -22,6 +22,8 @@ from scipy.optimize import linear_sum_assignment
 import torch
 
 from autoware_ml.models.detection3d.task_modules.assigners import (
+    AssignResult2D,
+    HungarianAssigner2D,
     AssignResult,
     HungarianAssigner3D,
     _bev_iou_aligned,
@@ -752,6 +754,242 @@ class TestHungarianAssigner3DBEVCost(unittest.TestCase):
                 )
                 self.assertEqual(result.gt_inds[index].tolist(), expected.tolist())
                 self.assertEqual(int(result.num_gts[index]), count)
+
+
+IMAGE_HEIGHT, IMAGE_WIDTH = 100, 200
+
+
+class TestHungarianAssigner2D(unittest.TestCase):
+    """Unit tests for HungarianAssigner2D on a 200 x 100 px image."""
+
+    def _proposals_at(
+        self, centers: list[tuple[float, float]], num_classes: int = 3
+    ) -> tuple[
+        Float32[torch.Tensor, "num_queries 4"],
+        Float32[torch.Tensor, "num_queries num_classes"],
+        Float32[torch.Tensor, "num_queries 2"],
+    ]:
+        """Build 20 x 20 px proposals at the given pixel centers, with logits of -4.
+
+        Returns the normalized ``(cx, cy, w, h)`` boxes, the logits and the normalized centers.
+        """
+        boxes = torch.tensor(
+            [
+                [x / IMAGE_WIDTH, y / IMAGE_HEIGHT, 20 / IMAGE_WIDTH, 20 / IMAGE_HEIGHT]
+                for x, y in centers
+            ]
+        )
+        logits = torch.full((len(centers), num_classes), -4.0)
+        return boxes, logits, boxes[:, :2].clone()
+
+    def _assign(
+        self,
+        bbox_pred: Float32[torch.Tensor, "num_queries 4"],
+        cls_pred: Float32[torch.Tensor, "num_queries num_classes"],
+        centers: Float32[torch.Tensor, "num_queries 2"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+        gt_labels: Int64[torch.Tensor, " num_gts"],
+        gt_centers: Float32[torch.Tensor, "num_gts 2"] | None = None,
+    ) -> AssignResult2D:
+        """Run the default assigner; the ground-truth centers default to the box centers."""
+        if gt_centers is None:
+            gt_centers = (gt_bboxes[:, :2] + gt_bboxes[:, 2:]) / 2
+        return HungarianAssigner2D().assign(
+            bbox_pred,
+            cls_pred,
+            centers,
+            gt_bboxes,
+            gt_labels,
+            gt_centers,
+            IMAGE_HEIGHT,
+            IMAGE_WIDTH,
+        )
+
+    def test_the_default_assigner_carries_the_reference_weights(self) -> None:
+        """
+        Input: the assigner built without arguments.
+        Expected: the Focal-PETR matching weights: classification 2, box L1 5 on
+        (cx, cy, w, h), GIoU 2 and center L1 10.
+        Check: the weight, form and mode of every cost.
+        """
+        assigner = HungarianAssigner2D()
+
+        self.assertEqual(assigner.cls_cost.weight, 2.0)
+        self.assertEqual((assigner.reg_cost.weight, assigner.reg_cost.box_format), (5.0, "xywh"))
+        self.assertEqual((assigner.iou_cost.weight, assigner.iou_cost.iou_mode), (2.0, "giou"))
+        self.assertEqual(assigner.centers2d_cost.weight, 10.0)
+
+    def test_matches_every_ground_truth_box_to_the_proposal_on_top_of_it(self) -> None:
+        """
+        Input: three proposals, two on top of a class 2 and a class 0 box and confident about
+        those classes, the third away from both boxes.
+        Expected: each box goes to the proposal on top of it; the third proposal is background.
+        Check: the result type, the box count, the 1-based box indices (0 for background) and
+        the labels (-1 for background).
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at(
+            [(30.0, 30.0), (150.0, 60.0), (100.0, 80.0)]
+        )
+        # Proposal 1 is confident about class 2, proposal 0 about class 0.
+        cls_pred[1, 2] = 4.0
+        cls_pred[0, 0] = 4.0
+        gt_bboxes = torch.tensor([[140.0, 50.0, 160.0, 70.0], [20.0, 20.0, 40.0, 40.0]])
+
+        result = self._assign(bbox_pred, cls_pred, centers, gt_bboxes, torch.tensor([2, 0]))
+
+        self.assertIsInstance(result, AssignResult2D)
+        self.assertEqual(result.num_gts, 2)
+        self.assertEqual(result.gt_inds.tolist(), [2, 1, 0])
+        self.assertEqual(result.labels.tolist(), [0, 2, -1])
+
+    def test_an_image_without_ground_truth_assigns_every_proposal_to_background(self) -> None:
+        """
+        Input: two proposals and no ground truth.
+        Expected: both proposals are background.
+        Check: no boxes, box index 0 and label -1 for both proposals.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at([(30.0, 30.0), (150.0, 60.0)])
+
+        result = self._assign(
+            bbox_pred,
+            cls_pred,
+            centers,
+            torch.zeros(0, 4),
+            torch.zeros(0, dtype=torch.long),
+            torch.zeros(0, 2),
+        )
+
+        self.assertEqual(result.num_gts, 0)
+        self.assertEqual(result.gt_inds.tolist(), [0, 0])
+        self.assertEqual(result.labels.tolist(), [-1, -1])
+
+    def test_an_image_without_proposals_gives_empty_assignments(self) -> None:
+        """
+        Input: one ground-truth box and no proposals.
+        Expected: nothing to assign.
+        Check: one box, and empty box indices and labels.
+        """
+        gt_bboxes = torch.tensor([[20.0, 20.0, 40.0, 40.0]])
+
+        result = self._assign(
+            torch.zeros(0, 4), torch.zeros(0, 3), torch.zeros(0, 2), gt_bboxes, torch.tensor([1])
+        )
+
+        self.assertEqual(result.num_gts, 1)
+        self.assertEqual(result.gt_inds.shape, (0,))
+        self.assertEqual(result.labels.shape, (0,))
+
+    def test_more_ground_truth_than_proposals_matches_every_proposal(self) -> None:
+        """
+        Input: three ground-truth boxes and two proposals, each on top of one of the boxes.
+        Expected: both proposals get the box on top of them; the third box stays unmatched.
+        Check: the box count, the box indices and the labels.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at([(30.0, 30.0), (150.0, 60.0)])
+        gt_bboxes = torch.tensor(
+            [[140.0, 50.0, 160.0, 70.0], [80.0, 40.0, 100.0, 60.0], [20.0, 20.0, 40.0, 40.0]]
+        )
+
+        result = self._assign(bbox_pred, cls_pred, centers, gt_bboxes, torch.tensor([0, 1, 2]))
+
+        self.assertEqual(result.num_gts, 3)
+        self.assertEqual(result.gt_inds.tolist(), [3, 1])
+        self.assertEqual(result.labels.tolist(), [2, 0])
+
+    def test_the_matching_is_globally_optimal(self) -> None:
+        """
+        Input: two proposals near box 1, the first a bit closer to it and the second much
+        farther from box 2.
+        Expected: taking box 1 for the first proposal would leave the second proposal 110 px
+        from box 2, so the global optimum gives box 1 to the second proposal instead.
+        Check: the box indices.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at([(60.0, 50.0), (40.0, 50.0)])
+        gt_bboxes = torch.tensor([[40.0, 40.0, 60.0, 60.0], [140.0, 40.0, 160.0, 60.0]])
+
+        result = self._assign(bbox_pred, cls_pred, centers, gt_bboxes, torch.tensor([0, 0]))
+
+        self.assertEqual(result.gt_inds.tolist(), [2, 1])
+
+    def test_inputs_other_than_float32_are_rejected(self) -> None:
+        """
+        Input: one proposal on top of one box, with each box, logit and center tensor in
+        bfloat16 and float16 in turn, the others in float32.
+        Expected: autocast gives bfloat16 logits, whose sigmoid rounds to 1 above logit 6.2,
+        and bfloat16 boxes, off by up to 1/256 of the image, so the assigner matches only
+        float32 inputs and leaves the cast to the caller.
+        Check: the ValueError naming the tensor.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at([(30.0, 30.0)])
+        gt_bboxes = torch.tensor([[20.0, 20.0, 40.0, 40.0]])
+        inputs = {
+            "bbox_pred": bbox_pred,
+            "cls_pred": cls_pred,
+            "pred_centers2d": centers,
+            "gt_bboxes": gt_bboxes,
+            "gt_centers2d": (gt_bboxes[:, :2] + gt_bboxes[:, 2:]) / 2,
+        }
+
+        for name in inputs:
+            for dtype in (torch.bfloat16, torch.float16):
+                with self.subTest(name=name, dtype=dtype):
+                    arguments = {**inputs, name: inputs[name].to(dtype)}
+                    with self.assertRaisesRegex(ValueError, name):
+                        HungarianAssigner2D().assign(
+                            gt_labels=torch.tensor([0]),
+                            image_height=IMAGE_HEIGHT,
+                            image_width=IMAGE_WIDTH,
+                            **arguments,
+                        )
+
+    def test_a_negative_label_is_rejected(self) -> None:
+        """
+        Input: one box labelled -1.
+        Expected: -1 is the padding of a batched ground truth, but the 2D ground truth is not
+        padded, so the label is refused instead of being matched.
+        Check: the ValueError naming the negative label.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at([(30.0, 30.0)])
+        gt_bboxes = torch.tensor([[20.0, 20.0, 40.0, 40.0]])
+
+        with self.assertRaisesRegex(ValueError, "negative"):
+            self._assign(bbox_pred, cls_pred, centers, gt_bboxes, torch.tensor([-1]))
+
+    def test_a_label_beyond_the_class_channels_is_rejected(self) -> None:
+        """
+        Input: one box labelled 3 against logits of three classes.
+        Expected: the label has no class channel to read.
+        Check: the ValueError.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at([(30.0, 30.0)], num_classes=3)
+        gt_bboxes = torch.tensor([[20.0, 20.0, 40.0, 40.0]])
+
+        with self.assertRaises(ValueError):
+            self._assign(bbox_pred, cls_pred, centers, gt_bboxes, torch.tensor([3]))
+
+    @unittest.skipUnless(torch.cuda.is_available(), "needs a GPU")
+    def test_cuda_inputs_give_the_cpu_assignment_on_the_input_device(self) -> None:
+        """
+        Input: the three proposals and two boxes of the matching test, on the CPU and on CUDA.
+        Expected: the CUDA inputs are matched on the CPU and the result moved back to CUDA.
+        Check: the device of the result and the box indices and labels of both runs.
+        """
+        bbox_pred, cls_pred, centers = self._proposals_at(
+            [(30.0, 30.0), (150.0, 60.0), (100.0, 80.0)]
+        )
+        cls_pred[1, 2] = 4.0
+        cls_pred[0, 0] = 4.0
+        gt_bboxes = torch.tensor([[140.0, 50.0, 160.0, 70.0], [20.0, 20.0, 40.0, 40.0]])
+        gt_labels = torch.tensor([2, 0])
+
+        expected = self._assign(bbox_pred, cls_pred, centers, gt_bboxes, gt_labels)
+        result = self._assign(
+            bbox_pred.cuda(), cls_pred.cuda(), centers.cuda(), gt_bboxes.cuda(), gt_labels.cuda()
+        )
+
+        self.assertEqual(result.gt_inds.device.type, "cuda")
+        self.assertEqual(result.gt_inds.tolist(), expected.gt_inds.tolist())
+        self.assertEqual(result.labels.tolist(), expected.labels.tolist())
 
 
 if __name__ == "__main__":
