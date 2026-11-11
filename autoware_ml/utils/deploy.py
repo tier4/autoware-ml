@@ -382,7 +382,7 @@ def modify_onnx_graph(onnx_path: Path, modify_graph_cfg: DictConfig) -> Path:
 
 def create_tensorrt_builder_config(tensorrt_cfg: DictConfig) -> tuple[Any, Any, Any, Any]:
     """Create TensorRT builder objects for engine generation."""
-    import tensorrt as trt  # noqa: PLC0415 (every model imports this module)
+    import tensorrt as trt  # noqa: PLC0415 (only engine builds need it; models import this module)
 
     trt_logger = trt.Logger(trt.Logger.WARNING)
     trt.init_libnvinfer_plugins(trt_logger, "")
