@@ -9,6 +9,7 @@ distance by default, corner distance optionally.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from math import pi
 
@@ -22,12 +23,13 @@ from autoware_ml.metrics.detection3d.geometry import (
     nearest_surface_distances,
 )
 from autoware_ml.metrics.detection3d.structures import (
-    ERROR_NAMES,
     CurveMetrics,
     Detection3DSample,
     MatchCurve,
     SelectedTpErrors,
+    TpErrorSet,
 )
+from autoware_ml.types.metrics import MatchCost
 
 
 def cost_center(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
@@ -56,21 +58,20 @@ def cost_corner(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
     return corner_displacement_matrix(pred_boxes, gt_boxes)
 
 
-MATCH_COSTS = {"center": cost_center, "corner": cost_corner}
-
-
-def resolve_match_cost(name: str):
-    """Return the matching cost function for a configured name (fail-loud).
+def cost_function(match_cost: MatchCost) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+    """Return the matching cost function of a cost.
 
     Args:
-        name: Configured cost name, ``center`` or ``corner``.
+        match_cost: The configured matching cost.
 
     Returns:
         The cost function computing a ``(P, G)`` matrix.
     """
-    if name not in MATCH_COSTS:
-        raise ValueError(f"Unknown match cost {name!r}, expected one of {sorted(MATCH_COSTS)}.")
-    return MATCH_COSTS[name]
+    if match_cost is MatchCost.CENTER:
+        return cost_center
+    if match_cost is MatchCost.CORNER:
+        return cost_corner
+    raise ValueError(f"Unknown match cost {match_cost!r}.")
 
 
 def _distance_mask(
@@ -317,20 +318,24 @@ class PreparedLabel:
                 break
 
         heading_score = np.zeros(num_pred, dtype=np.float64)
-        errors = {name: np.full(num_pred, np.nan, dtype=np.float64) for name in ERROR_NAMES}
+        translation_error = np.full(num_pred, np.nan, dtype=np.float64)
+        orientation_error = np.full(num_pred, np.nan, dtype=np.float64)
+        scale_error = np.full(num_pred, np.nan, dtype=np.float64)
+        velocity_error = np.full(num_pred, np.nan, dtype=np.float64)
+        attribute_error = np.full(num_pred, np.nan, dtype=np.float64)
         corner_error = np.full(num_pred, np.nan, dtype=np.float64)
         nearest_surface = np.full(num_pred, np.nan, dtype=np.float64)
         matched = matched_flat_gt >= 0
         if matched.any():
             pred_boxes = self.pred_boxes[matched]
             gt_boxes = self.gt_flat[matched_flat_gt[matched]]
-            errors["ATE"][matched] = np.linalg.norm(pred_boxes[:, :2] - gt_boxes[:, :2], axis=1)
-            errors["AOE"][matched] = _orientation_errors(pred_boxes, gt_boxes)
-            errors["ASE"][matched] = _scale_errors(pred_boxes, gt_boxes)
-            errors["AVE"][matched] = _velocity_errors(pred_boxes, gt_boxes)
+            translation_error[matched] = np.linalg.norm(pred_boxes[:, :2] - gt_boxes[:, :2], axis=1)
+            orientation_error[matched] = _orientation_errors(pred_boxes, gt_boxes)
+            scale_error[matched] = _scale_errors(pred_boxes, gt_boxes)
+            velocity_error[matched] = _velocity_errors(pred_boxes, gt_boxes)
             # TODO: attribute errors are not evaluated, every match carries the neutral 1.0.
-            errors["AAE"][matched] = 1.0
-            heading_score[matched] = _heading_scores(errors["AOE"][matched])
+            attribute_error[matched] = 1.0
+            heading_score[matched] = _heading_scores(orientation_error[matched])
             corner_error[matched] = corner_displacements(pred_boxes, gt_boxes)
             nearest_surface[matched] = nearest_surface_distances(
                 pred_boxes
@@ -342,11 +347,11 @@ class PreparedLabel:
             true_positive=true_positive,
             false_positive=~true_positive,
             heading_score=heading_score,
-            translation_error=errors["ATE"],
-            orientation_error=errors["AOE"],
-            scale_error=errors["ASE"],
-            velocity_error=errors["AVE"],
-            attribute_error=errors["AAE"],
+            translation_error=translation_error,
+            orientation_error=orientation_error,
+            scale_error=scale_error,
+            velocity_error=velocity_error,
+            attribute_error=attribute_error,
             corner_error=corner_error,
             nearest_surface_error=nearest_surface,
         )
@@ -515,42 +520,45 @@ def select_optimal_tp_errors(curve: MatchCurve, optimal_index: int) -> SelectedT
 
 
 def _selected_error_values(curve: MatchCurve, tp_indices: np.ndarray) -> SelectedTpErrors:
-    errors = {
-        "ATE": _mean_or_one(curve.translation_error[tp_indices]),
-        "AOE": _mean_or_one(curve.orientation_error[tp_indices]),
-        "ASE": _mean_or_one(curve.scale_error[tp_indices]),
-        "AVE": _mean_or_one(curve.velocity_error[tp_indices]),
-        "AAE": _mean_or_one(curve.attribute_error[tp_indices]),
-    }
+    errors = TpErrorSet(
+        ate=_mean_or_one(curve.translation_error[tp_indices]),
+        aoe=_mean_or_one(curve.orientation_error[tp_indices]),
+        ase=_mean_or_one(curve.scale_error[tp_indices]),
+        ave=_mean_or_one(curve.velocity_error[tp_indices]),
+        aae=_mean_or_one(curve.attribute_error[tp_indices]),
+    )
     return SelectedTpErrors(count=int(tp_indices.shape[0]), errors=errors)
 
 
-def mean_tp_errors(error_dicts: list[dict[str, float]]) -> dict[str, float]:
-    """Mean of each error name across the given per-class/threshold error dicts.
+def mean_tp_errors(error_sets: Sequence[TpErrorSet]) -> TpErrorSet:
+    """Mean of each error across the given per-class error sets.
 
     Args:
-        error_dicts: Error dicts collected per class and threshold.
+        error_sets: Error sets selected per class.
 
     Returns:
-        Mean value per error name.
+        The mean of every error, NaN where no set holds a valid value.
     """
-    return {
-        error_name: mean_valid([errors[error_name] for errors in error_dicts])
-        for error_name in ERROR_NAMES
-    }
+    return TpErrorSet(
+        ate=mean_valid([errors.ate for errors in error_sets]),
+        aoe=mean_valid([errors.aoe for errors in error_sets]),
+        ase=mean_valid([errors.ase for errors in error_sets]),
+        ave=mean_valid([errors.ave for errors in error_sets]),
+        aae=mean_valid([errors.aae for errors in error_sets]),
+    )
 
 
-def nds(mean_ap: float, errors: dict[str, float]) -> float:
+def nds(mean_ap: float, errors: TpErrorSet) -> float:
     """nuScenes detection score from mean AP and the mean TP errors.
 
     Args:
         mean_ap: Mean AP over classes and thresholds.
-        errors: Mean TP errors by name.
+        errors: Mean TP errors.
 
     Returns:
         The detection score in ``[0, 1]``.
     """
-    error_score = sum(max(0.0, 1.0 - errors[name]) for name in ERROR_NAMES)
+    error_score = sum(max(0.0, 1.0 - value) for _, value in errors.named())
     return (5.0 * mean_ap + error_score) / 10.0
 
 
@@ -612,13 +620,13 @@ class Detection3DState:
         samples: Per-frame samples (already GT-filtered, optionally range-clipped).
         class_names: Ordered class names for metric keys, or ``None`` to fall
             back to ``class_{label}`` tokens in every metric key.
-        match_cost: Matching cost name (``center`` or ``corner``). Each metric asks
-            for the match curves at whatever thresholds it needs.
+        match_cost: Cost the matching pairs boxes by. Each metric asks for the match
+            curves at whatever thresholds it needs.
     """
 
     samples: list[Detection3DSample]
     class_names: tuple[str, ...] | None
-    match_cost: str = "center"
+    match_cost: MatchCost = MatchCost.CENTER
     _curve_cache: dict[tuple[int, float], MatchCurve] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -689,7 +697,7 @@ class Detection3DState:
         if curve is None:
             prepared = self._label_cache.get(label)
             if prepared is None:
-                prepared = PreparedLabel(self.samples, label, resolve_match_cost(self.match_cost))
+                prepared = PreparedLabel(self.samples, label, cost_function(self.match_cost))
                 self._label_cache[label] = prepared
             curve = prepared.match(threshold)
             self._curve_cache[key] = curve

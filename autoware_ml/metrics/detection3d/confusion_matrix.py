@@ -19,6 +19,7 @@ from autoware_ml.metrics.detection3d.criticality import greedy_match
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 from autoware_ml.metrics.report import MetricReport
+from autoware_ml.types.metrics import MatchCost
 
 
 class ConfusionMatrix(Metric[Detection3DState]):
@@ -57,10 +58,10 @@ class ConfusionMatrix(Metric[Detection3DState]):
         """
         if state.class_names is None:
             raise ValueError("ConfusionMatrix needs class_names to label its cells.")
-        if state.match_cost != "center":
+        if state.match_cost is not MatchCost.CENTER:
             raise ValueError(
                 "ConfusionMatrix matches class-agnostically by center distance, a suite "
-                f"configured with match_cost={state.match_cost!r} would report matched "
+                f"configured with match_cost={state.match_cost.value!r} would report matched "
                 "pairs inconsistent with its AP family."
             )
         num_classes = len(state.class_names)

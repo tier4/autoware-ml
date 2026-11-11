@@ -272,7 +272,7 @@ class PTv3BaseModel(ModuleBaseModel):
             )
         return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
 
-    def _compute_export_geometry(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    def compute_export_geometry(self, device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute sparse shape and serialization depth for export.
 
         Args:
@@ -662,7 +662,7 @@ def prepare_ptv3_export_inputs(
 ) -> PTv3ExportInputs:
     """Serialize a preprocessed voxel batch and precompute its pooling metadata."""
     voxels_data = _voxels_data(batch_inputs)
-    sparse_shape, serialization_depth = model._compute_export_geometry(voxels_data.voxels.device)
+    sparse_shape, serialization_depth = model.compute_export_geometry(voxels_data.voxels.device)
     encoder_inputs = model.build_encoder_inputs(
         voxels_data.voxels,
         voxels_data.num_points,
