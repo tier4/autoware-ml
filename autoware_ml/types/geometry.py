@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Enumerations of box and point fields, transformation names and image channels."""
+
 from enum import IntEnum, StrEnum
 
 

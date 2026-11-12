@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Enumerations of coordinate systems, BEV directions and rotation axes."""
+
 from enum import Enum, StrEnum, IntEnum
 
 

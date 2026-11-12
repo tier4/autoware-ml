@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Enumeration of the motion models of collision participants."""
+
 from enum import StrEnum, auto
 
 

@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Pipeline clipping the ground plane speed of 3D bounding boxes."""
+
 from collections.abc import Sequence
 import numpy as np
 

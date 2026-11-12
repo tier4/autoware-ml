@@ -169,6 +169,8 @@ preview = true
 explicit-preview-rules = true
 extend-select = [
     "CPY001",  # license header
+    "D100",  # module docstring
+    "D417",  # every argument in `Args:`
     "PGH003",  # `# type: ignore[code]`, not a blanket ignore
     "PLC0415",  # imports at the top of the file
     "S101",  # raise instead of assert
@@ -187,6 +189,9 @@ extend-select = [
 
 [tool.ruff.lint.flake8-copyright]
 notice-rgx = '(?s)Copyright \d{4}(-\d{4})? TIER IV, Inc\..*Licensed under the Apache License, Version 2\.0'
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "warnings.warn".msg = "Raise an exception, or log through logging.getLogger(__name__)."

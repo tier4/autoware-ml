@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Dataset parameters, scenario data and the scenario splits of a dataset."""
+
 from __future__ import annotations
 
 from pathlib import Path

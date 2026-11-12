@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Dataset interface, the concatenation of several corpora and padding slots."""
+
 from __future__ import annotations
 
 import bisect

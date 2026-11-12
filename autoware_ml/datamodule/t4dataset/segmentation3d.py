@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Dataset task reading the semantic labels of the T4 lidar frames."""
+
 import numpy as np
 import logging
 

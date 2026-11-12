@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Base class that every database type inherits."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
