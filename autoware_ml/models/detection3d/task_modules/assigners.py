@@ -8,7 +8,7 @@ L1, GIoU and projected-center L1 costs.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from jaxtyping import Float32, Bool, Int32, Int64

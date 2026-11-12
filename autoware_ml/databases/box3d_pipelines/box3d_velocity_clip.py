@@ -1,4 +1,4 @@
-from typing import Sequence
+from collections.abc import Sequence
 import numpy as np
 
 from autoware_ml.types.geometry import Box3DFieldIndex

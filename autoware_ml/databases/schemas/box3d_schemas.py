@@ -14,7 +14,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Set, Any, Mapping
+from typing import Any
+from collections.abc import Mapping
 
 from jaxtyping import Float32, Float64
 from pydantic import BaseModel, ConfigDict
@@ -74,7 +75,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
     box3d_num_lidar_points: int
     box3d_num_radar_points: int
     box3d_valid: bool
-    box3d_attributes: Set[str]
+    box3d_attributes: set[str]
     box3d_coordinate: str
 
     def to_dictionary(self) -> Mapping[str, Any]:
@@ -138,7 +139,7 @@ class Box3DDataModel(BaseModel, DataModelInterface):
         box3d_num_lidar_points: int | None = None,
         box3d_num_radar_points: int | None = None,
         box3d_valid: bool | None = None,
-        box3d_attributes: Set[str] | None = None,
+        box3d_attributes: set[str] | None = None,
         box3d_coordinate: str | None = None,
     ) -> Box3DDataModel:
         """

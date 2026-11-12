@@ -170,6 +170,8 @@ extend-select = [
     "S101",  # raise instead of assert
     "T201",  # log instead of print
     "TID251",  # banned APIs, listed below
+    "UP006",  # builtin generics: `list`, `set`
+    "UP035",  # abstract containers from `collections.abc`
     "UP045",  # `X | None` instead of `Optional[X]`
 ]
 

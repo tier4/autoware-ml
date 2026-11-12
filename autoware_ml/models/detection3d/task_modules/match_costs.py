@@ -8,7 +8,7 @@ with the highest cost; the 2D costs of the auxiliary image-plane head work on th
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from jaxtyping import Float32, Int64, Bool

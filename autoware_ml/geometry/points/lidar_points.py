@@ -7,7 +7,7 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/points/
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from jaxtyping import Float32
 from torch import Tensor

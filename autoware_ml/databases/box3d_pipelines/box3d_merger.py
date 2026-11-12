@@ -2,7 +2,7 @@
 This script defines classes to merge 3D bounding boxes based on the different implementations.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 from types import MappingProxyType
 
 import numpy as np
