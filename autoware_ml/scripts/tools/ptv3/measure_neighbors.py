@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 import functools
 import logging
+from pathlib import Path
 
 import hydra
 from omegaconf import DictConfig
@@ -51,6 +52,14 @@ _CONFIG_PATH = get_config_path()
 def measure_frame_neighbors(model: PTv3BaseModel, batch: ModelGTBatch) -> list[float]:
     """Return the mean neighbors of every stage of one frame, voxelized and pooled as exported."""
     batch_inputs = model.on_after_batch_transfer(batch.to_device(model.device), dataloader_idx=0)
+    if batch_inputs.voxels_data is None:
+        raise ValueError("PTv3 needs the voxels of a voxelizer in the model inputs.")
+    num_dropped_voxels = int(batch_inputs.voxels_data.num_dropped_voxels)
+    if num_dropped_voxels > 0:
+        raise RuntimeError(
+            f"The voxelizer dropped {num_dropped_voxels} occupied voxels of a train frame. "
+            "Increase 'max_voxels' of the data preprocessing so every voxel is kept."
+        )
     inputs = prepare_ptv3_export_inputs(model, batch_inputs)
     stages = [inputs.grid_coord, *(meta.grid_coord for meta in inputs.pooling_metadata)]
     return [mean_neighbors(stage) for stage in stages]
@@ -87,6 +96,11 @@ def main(cfg: DictConfig) -> None:
 
     Args:
         cfg: Hydra configuration.
+
+    Raises:
+        NotImplementedError: If the configured model is not a PTv3 model.
+        ValueError: If the model inputs of a train frame carry no voxels.
+        RuntimeError: If the voxelizer drops occupied voxels of a train frame.
     """
     validate_cuda_available()
     configure_torch_runtime()
@@ -101,7 +115,7 @@ def main(cfg: DictConfig) -> None:
     )
     if not isinstance(model, PTv3BaseModel):
         raise NotImplementedError(
-            f"Only PTv3 models have synthetic inputs, got {type(model).__name__}."
+            f"{Path(__file__).stem} supports only PTv3 models, got {type(model).__name__}."
         )
     cfg.datasets.train.transforms = cfg.datasets.test.transforms
     targets = measure_neighbors(
