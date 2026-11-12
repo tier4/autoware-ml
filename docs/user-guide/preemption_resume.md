@@ -25,9 +25,31 @@ and the number of GPUs are unchanged (otherwise the position is converted to the
 nearest sample offset and a warning is logged).
 
 Not restored: the running validation of an interrupted validation pass (it
-restarts), and schedulers sized from the estimated number of steps
-(`OneCycleLR`) recompute their horizon from the resumed run's devices, batch size
-and accumulation, so keep those identical across relaunches.
+restarts).
+
+### Resuming with another number of GPUs or batch size
+
+A relaunch may use another number of GPUs, batch size or gradient accumulation, for
+example when fewer GPUs are free. Three things keep the training consistent then:
+
+- The dataloader converts the saved position to the new layout through the samples
+  already trained, rounding down, so it repeats a few samples rather than skipping any.
+- The trainer's position in the epoch is moved to the batch the dataloader continues
+  at. Lightning counts the restored position in batches of the old layout; without
+  the correction the epoch would run out of batches before Lightning saw its last
+  one, so the end-of-epoch validation and the epoch's scheduler step were skipped and
+  an epoch-wise learning rate lagged one epoch for the rest of the run.
+- `SchedulerHorizon` (part of `/defaults/preemption`) refits schedulers sized from the
+  number of optimizer steps of the run (`OneCycleLR` and every scheduler whose
+  `total_steps` the framework fills). The checkpoint restores the horizon of the old
+  layout: with a larger global batch the schedule would never reach its end, with a
+  smaller one `OneCycleLR` raises once it steps past it. The callback rebuilds the
+  scheduler for the new layout and moves it to the step that leaves exactly the
+  optimizer steps the resumed run still takes, so it ends on the run's last step.
+
+A schedule in steps is still traversed at the new rate from the resume on, and the
+optimizer's hyperparameters are not rescaled: changing the global batch changes the
+optimization, keeping it (fewer GPUs, more accumulation) does not.
 
 ## Checkpoint cadence
 

@@ -41,7 +41,7 @@ import dataclasses
 import logging
 import math
 import os
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -267,6 +267,11 @@ class ResumableDataLoader(DataLoader):
         super().__init__(dataset, batch_size=batch_size, sampler=sampler, **kwargs)
         self._batches_yielded = 0
         self._resume_position: LoaderPosition | None = None
+        # Called with the batch a resumed iterator starts at, on its first fetch. Lightning
+        # counts the restored position in batches of the saved layout; after a resume on
+        # another number of ranks or another batch size the trainer has to be told where the
+        # loader really is.
+        self.resume_listener: Callable[[int], None] | None = None
 
     @property
     def resumable_sampler(self) -> ResumableDistributedSampler:
@@ -319,6 +324,21 @@ class ResumableDataLoader(DataLoader):
         """
         self.resume_from(LoaderPosition.from_dict(state_dict))
 
+    def pending_start_batch(self, epoch: int) -> int:
+        """Return the batch a pending resume position continues epoch ``epoch`` at.
+
+        Args:
+            epoch: Epoch the trainer is about to iterate.
+
+        Returns:
+            Index of the first batch the next iterator yields, 0 when no position is pending
+            or it belongs to another epoch.
+        """
+        position = self._resume_position
+        if position is None or position.epoch != epoch:
+            return 0
+        return position.batches_to_skip(self.samples_per_batch, self.resumable_sampler.num_replicas)
+
     def _consume_resume_position(self) -> int:
         """Apply a pending resume position to the sampler, once.
 
@@ -353,6 +373,8 @@ class ResumableDataLoader(DataLoader):
             )
         self.resumable_sampler.skip_samples(start * batch_size)
         logger.info("Resuming the training dataloader at batch %d of epoch %d.", start, epoch)
+        if self.resume_listener is not None:
+            self.resume_listener(start)
         return start
 
     def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
@@ -386,8 +408,40 @@ class ResumableTrainLoaderMixin:
         """
         if self._train_loader_state is not None:
             loader.resume_from(self._train_loader_state)
+        loader.resume_listener = self._align_trainer_batch_progress
         self._train_loader = loader
         return loader
+
+    def _align_trainer_batch_progress(self, batch: int) -> None:
+        """Move the trainer's position in the epoch to where the resumed loader continues.
+
+        Lightning restores its batch counter from the checkpoint in batches of the saved layout
+        and ends the epoch once its fetch count, seeded from that counter, reaches the loader's
+        length. After a resume on another number of ranks or another batch size the loader
+        skips a different number of batches, so the epoch ran out of batches before Lightning
+        saw its last one: the end-of-epoch validation and the epoch's scheduler step were
+        skipped, and an epoch-wise learning rate lagged one epoch from then on. Called from the
+        first fetch of the resumed iterator, after the epoch loop's reset has settled the
+        restored counters.
+
+        Args:
+            batch: Index of the first batch the resumed iterator yields.
+        """
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            return
+        current = trainer.fit_loop.epoch_loop.batch_progress.current
+        if current.ready != batch:
+            logger.warning(
+                "Moving the trainer's position in the epoch from batch %d to the resumed "
+                "dataloader's batch %d.",
+                current.ready,
+                batch,
+            )
+        current.ready = current.started = current.processed = current.completed = batch
+        data_fetcher = trainer.fit_loop._data_fetcher
+        if data_fetcher is not None:
+            data_fetcher.fetched = batch
 
     def state_dict(self) -> dict[str, Any]:
         """Return the training loader position for the checkpoint.

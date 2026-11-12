@@ -18,6 +18,11 @@ callbacks:
     # a complete checkpoint.
     keep_last: 2
     save_on_train_epoch_end: true
+  # A relaunch with another number of GPUs, batch size or accumulation takes another
+  # number of optimizer steps; schedulers sized from the run length (OneCycleLR) are
+  # refit to it instead of keeping the horizon of the checkpoint.
+  scheduler_horizon:
+    _target_: autoware_ml.resume.scheduler_horizon.SchedulerHorizon
   # The periodic callback owns `last.ckpt`; the epoch-end copy of the default
   # runtime would race it for the same file.
   model_checkpoint_last: null
