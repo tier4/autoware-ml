@@ -6,7 +6,7 @@ detectors.
 
 from __future__ import annotations
 
-from jaxtyping import Float, Float32
+from jaxtyping import Float32
 import torch
 import torch.nn as nn
 
@@ -31,14 +31,16 @@ class GaussianFocalLoss(nn.Module):
 
     def forward(
         self,
-        prediction: Float[torch.Tensor, "*shape"],
-        target: Float[torch.Tensor, "*shape"],
-        weights: Float[torch.Tensor, "..."] | None = None,
+        prediction: Float32[torch.Tensor, "*shape"],
+        target: Float32[torch.Tensor, "*shape"],
+        weights: Float32[torch.Tensor, "..."] | None = None,
     ) -> Float32[torch.Tensor, ""]:
         """Compute Gaussian focal loss on dense heatmaps.
 
         Args:
-            prediction: Raw heatmap logits of any float dtype; the loss is computed in float32.
+            prediction: Raw heatmap logits, float32: half precision rounds the sigmoid of a
+                confident logit and the clamp bound 1 - 1e-4 to 1, which makes the loss
+                infinite, so a head training under autocast casts its logits first.
             target: Gaussian heatmap targets.
             weights: Optional weights broadcastable to ``prediction``, for example one weight
                 per sample and class. A zero drops the cell from the loss and, if it is a peak,
@@ -46,10 +48,16 @@ class GaussianFocalLoss(nn.Module):
 
         Returns:
             Scalar heatmap loss value.
+
+        Raises:
+            ValueError: If ``prediction`` is not float32.
         """
-        # In float32: half precision rounds the clamp bound 1 - 1e-4 to 1, so under autocast a
-        # confident logit would make log(1 - prediction) infinite and the gradients NaN.
-        prediction = prediction.float().sigmoid().clamp(min=1e-4, max=1 - 1e-4)
+        if prediction.dtype != torch.float32:
+            raise ValueError(
+                f"GaussianFocalLoss takes float32 logits, got {prediction.dtype}; cast them in "
+                "the head, under autocast its logits are half precision."
+            )
+        prediction = prediction.sigmoid().clamp(min=1e-4, max=1 - 1e-4)
         pos_mask = target.eq(1).float()
         neg_mask = target.lt(1).float()
         if weights is not None:

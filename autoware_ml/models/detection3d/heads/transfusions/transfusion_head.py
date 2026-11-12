@@ -1361,7 +1361,7 @@ class TransFusionHead(nn.Module):
         )
 
         loss_heatmap = self.loss_heatmap(
-            transfusion_head_outputs.dense_heatmap,
+            transfusion_head_outputs.dense_heatmap.float(),
             targets.dense_heatmaps,
             # (batch_size, num_classes) -> (batch_size, num_classes, 1, 1), broadcast over the grid.
             weights=targets.class_weights[:, :, None, None],
