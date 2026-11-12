@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Abstract interface of the task-specific data retrieval of a dataset."""
+
 from abc import ABC, abstractmethod
 import logging
 from pathlib import Path

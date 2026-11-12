@@ -247,6 +247,7 @@
     "pretraining",
     "pullable",
     "pydantic",
+    "pydocstyle",
     "pylist",
     "pypi",
     "pytestmark",

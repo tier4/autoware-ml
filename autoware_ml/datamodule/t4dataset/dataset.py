@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Dataset serving every task from the record table of a T4 database."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence

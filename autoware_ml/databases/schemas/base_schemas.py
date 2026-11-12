@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Base classes for the record table column schemas and data models."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

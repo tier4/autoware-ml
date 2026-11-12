@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Image sample of a record and the image batch collated from it."""
+
 from __future__ import annotations
 
 from typing import NamedTuple

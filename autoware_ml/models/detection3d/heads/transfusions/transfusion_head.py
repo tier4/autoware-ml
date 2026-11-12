@@ -693,8 +693,8 @@ class TransFusionHead(nn.Module):
 
         Args:
             predictions: List of per-layer prediction outputs.
-            dense_heatmap: Dense BEV heatmap tensor.
-            flatten_dense_heatmap: Flattened dense BEV heatmap tensor.
+            dense_heatmaps: Dense BEV heatmap tensor.
+            flatten_dense_heatmaps: Flattened dense BEV heatmap tensor.
             top_classes: Class indices of the selected proposals.
             top_positions: Spatial positions of the selected proposals.
 
@@ -734,7 +734,7 @@ class TransFusionHead(nn.Module):
         """Predict TransFusion heatmap, queries, and box parameters.
 
         Args:
-            bev_feats: BEV feature tensor.
+            bev_features: BEV feature tensor.
 
         Returns:
             TransFusionHeadOutputs: Dataclass containing all outputs.
@@ -994,8 +994,9 @@ class TransFusionHead(nn.Module):
 
         Args:
             gt_bboxes_3d: Ground-truth 3D boxes for each batch element.
-            gt_labels: Ground-truth labels for each batch element.
-            feature_shape: Heatmap height and width.
+            gt_labels_3d: Ground-truth labels for each batch element.
+            gt_valid_bboxes: Number of valid ground-truth boxes for each batch element.
+            feature_map_size: Heatmap height and width.
             device: Device used for the generated target tensor.
 
         Returns:

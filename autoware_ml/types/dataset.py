@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Enumerations of dataset splits, sweep directions and point cloud file formats."""
+
 from enum import Enum, StrEnum, auto
 
 

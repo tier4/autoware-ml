@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Batch of 3D detection ground truth collated from its samples."""
+
 from __future__ import annotations
 
 import logging

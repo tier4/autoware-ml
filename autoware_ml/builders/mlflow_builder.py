@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Builder of the MLflow run context from the Hydra configuration."""
+
 import logging
 from pathlib import Path
 import os

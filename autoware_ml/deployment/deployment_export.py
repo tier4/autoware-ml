@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Export of a trained model for deployment and its outputs."""
+
 from collections.abc import Mapping, Sequence
 import logging
 from pathlib import Path

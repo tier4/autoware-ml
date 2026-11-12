@@ -218,6 +218,19 @@ class StreamPETRHead(nn.Module):
         Args:
             class_names: Ordered names of the foreground classes. Their count is the number
                 of classification channels.
+            in_channels: Channels of the image features embedded into the memory tokens.
+            hidden_dim: Embedding width of the queries, memory and decoder.
+            num_queries: Learned reference point queries of every frame.
+            num_decoder_layers: Decoder layers, each with its prediction supervised.
+            num_heads: Attention heads of every decoder layer.
+            feedforward_channels: Hidden width of the decoder feed-forward networks.
+            bbox_coder: Coder decoding the predictions into 3D boxes.
+            assigner: Hungarian assigner matching predictions to the ground-truth boxes.
+            point_cloud_range: Box range ``[x_min, y_min, z_min, x_max, y_max, z_max]`` that
+                normalizes the reference points and box centers.
+            code_weights: Per-channel weights of the box regression loss.
+            position_range: Range ``[x_min, y_min, z_min, x_max, y_max, z_max]`` that
+                normalizes the 3D position embedding; its ``x_max`` sets the deepest depth bin.
             memory_len: Entries of the temporal memory bank.
             topk_proposals: Proposals of every frame that enter the bank, at most the
                 ``num_queries + num_propagated`` queries of a frame. The deployed graph emits
@@ -225,9 +238,18 @@ class StreamPETRHead(nn.Module):
                 without checking.
             num_propagated: Bank entries that extend the queries of the next frame; the
                 strongest proposals of the previous frame, so at most ``topk_proposals``.
+            with_dn: Whether training adds denoising queries built from noised ground truth.
+            with_ego_pos: Whether the queries and memory are modulated by the ego motion.
+            depth_num: Depth bins of every image feature in the 3D position embedding.
+            LID: Whether the depth bin spacing grows linearly with the bin index, else uniform.
+            loss_cls_weight: Weight of the classification loss.
+            loss_bbox_weight: Weight of the box regression loss.
+            scalar: Noised copies of every ground-truth box among the denoising queries.
+            noise_scale: Scale of the center noise relative to half the box size.
+            dn_weight: Weight of the denoising losses.
+            split: Noise norm above which a denoising query is labelled background.
             max_stream_gap: Longest gap in seconds between two frames of a lane that keeps
                 the memory, ``None`` for any gap (see :class:`StreamContinuity`).
-            Other arguments follow the reference StreamPETR recipe.
 
         Raises:
             ValueError: If the bank is too small for the propagated entries, or a frame has
