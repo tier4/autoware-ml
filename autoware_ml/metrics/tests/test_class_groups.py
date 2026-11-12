@@ -27,6 +27,10 @@ from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    segmentation_eval_output,
+    segmentation_frame,
+)
 
 NAMES = ("car", "truck", "road", "sidewalk")
 GROUPS = {"grouped_vehicle": ["car", "truck"], "grouped_flat": ["road", "sidewalk"]}
@@ -89,15 +93,15 @@ def _confusion_suite(class_groups) -> Segmentation3DConfusionMatrixMetricSuite:
 def _update_confusion(suite) -> None:
     # car/truck confused with each other, road/sidewalk confused with each other.
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "pred": torch.tensor([0, 1, 2, 3]),
-                    "target": torch.tensor([1, 0, 3, 2]),
-                    "coord": torch.zeros((4, 3)),
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    pred=torch.tensor([0, 1, 2, 3]),
+                    target=torch.tensor([1, 0, 3, 2]),
+                    coord=torch.zeros((4, 3)),
+                )
             ]
-        }
+        )
     )
 
 
@@ -137,16 +141,16 @@ def test_point_suite_serves_both_taxonomies_from_one_cache() -> None:
         class_groups=GROUPS,
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "coord": torch.tensor([[0.0, 0, 0], [10.0, 0, 0], [20.0, 0, 0], [30.0, 0, 0]]),
-                    "target": torch.tensor([0, 1, 2, 3]),  # car, truck, road, sidewalk
-                    "pred": torch.tensor([1, 0, 3, 2]),  # all intra-group confusion
-                    "scores": torch.full((4, 4), 0.25),
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    coord=torch.tensor([[0.0, 0, 0], [10.0, 0, 0], [20.0, 0, 0], [30.0, 0, 0]]),
+                    target=torch.tensor([0, 1, 2, 3]),  # car, truck, road, sidewalk
+                    pred=torch.tensor([1, 0, 3, 2]),  # all intra-group confusion
+                    scores=torch.full((4, 4), 0.25),
+                )
             ]
-        }
+        )
     )
     report = suite.result(EvalStage.TEST)
     # Trained view: every point is wrong (intra-group confusion counts).
@@ -185,16 +189,16 @@ def test_point_suite_grouped_confidence_is_the_predicted_groups_mass() -> None:
     # Folded: vehicle 0.4, flat 0.6, the reported group is vehicle, so the
     # grouped confidence must be 0.4, never the 0.6 max.
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "coord": torch.zeros((1, 3)),
-                    "pred": torch.tensor([0]),
-                    "target": torch.tensor([2]),
-                    "scores": torch.tensor([[0.4, 0.0, 0.35, 0.25]]),
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    coord=torch.zeros((1, 3)),
+                    pred=torch.tensor([0]),
+                    target=torch.tensor([2]),
+                    scores=torch.tensor([[0.4, 0.0, 0.35, 0.25]]),
+                )
             ]
-        }
+        )
     )
     trained = suite.state_for(None)
     # The grouped frame view is only reduced to scalars by compute(), so the per-point grouped

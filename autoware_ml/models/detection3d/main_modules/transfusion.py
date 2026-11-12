@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from types import MappingProxyType
 from collections.abc import Callable, Sequence
-from typing import Any
 
 from jaxtyping import Float32, Int32
 import torch
@@ -38,6 +37,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
@@ -227,16 +227,18 @@ class TransFusionDetection3DModel(ModuleBaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
                 "ModelOutputs must contain detection3d_head_outputs for TransFusion build_eval_output pass."
             )
 
-        return detection3d_eval_output(
-            predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
-            batch_inputs=batch,
+        return EvalOutput(
+            detection3d=detection3d_eval_output(
+                predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
+                batch_inputs=batch,
+            )
         )
 
     def _forward_with_batch_size(

@@ -29,6 +29,10 @@ from autoware_ml.metrics.segmentation3d.confusion_matrix import ConfusionMatrix 
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.metrics.report import MetricKey
 from autoware_ml.types.metrics import MatchCost
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    segmentation_eval_output,
+    segmentation_frame,
+)
 
 
 def test_confusion_cells_key_each_count_by_true_then_predicted_class() -> None:
@@ -99,15 +103,15 @@ def test_seg3d_confusion_grouped_folds_intra_group_pairs() -> None:
         class_groups=groups,
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "pred": torch.tensor([0, 1, 2, 3]),
-                    "target": torch.tensor([1, 0, 3, 2]),  # all intra-group swaps
-                    "coord": torch.zeros((4, 3)),
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    pred=torch.tensor([0, 1, 2, 3]),
+                    target=torch.tensor([1, 0, 3, 2]),  # all intra-group swaps
+                    coord=torch.zeros((4, 3)),
+                )
             ]
-        }
+        )
     )
     report = suite.result(EvalStage.TEST)
     # Both vehicle points land in the grouped_vehicle diagonal, none leak to flat.

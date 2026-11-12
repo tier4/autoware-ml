@@ -210,15 +210,16 @@ def test_build_eval_output_neutralizes_unflagged_frames_keeping_one_entry_per_fr
 
     eval_out = PTv3Det3DSeg3DModel.build_eval_output(model, batch, outputs)
 
-    assert len(eval_out["seg3d_frames"]) == 2
-    assert len(eval_out["predictions"]) == 2
-    assert len(eval_out["gt_boxes"]) == 2
+    assert eval_out.segmentation3d is not None and eval_out.detection3d is not None
+    assert len(eval_out.segmentation3d.frames) == 2
+    frames = eval_out.detection3d.frames
+    assert len(frames) == 2
     # Unflagged frame: empty predictions with preserved trailing dims.
-    assert eval_out["predictions"][0]["bboxes_3d"].shape == (0, 9)
-    assert eval_out["predictions"][0]["scores_3d"].shape == (0,)
+    assert frames[0].predictions.bboxes_3d.shape == (0, 9)
+    assert frames[0].predictions.scores_3d.shape == (0,)
     # Flagged frame: predictions kept as-is.
-    assert eval_out["predictions"][1]["bboxes_3d"].shape == (2, 9)
-    assert float(eval_out["predictions"][1]["scores_3d"][0]) == 1.0
+    assert frames[1].predictions.bboxes_3d.shape == (2, 9)
+    assert float(frames[1].predictions.scores_3d[0]) == 1.0
 
 
 def test_build_eval_output_without_flagged_frames_keeps_neutral_entries() -> None:
@@ -228,10 +229,10 @@ def test_build_eval_output_without_flagged_frames_keeps_neutral_entries() -> Non
 
     eval_out = PTv3Det3DSeg3DModel.build_eval_output(model, batch, outputs)
 
-    assert len(eval_out["seg3d_frames"]) == 1
-    assert len(eval_out["predictions"]) == 1
-    assert eval_out["predictions"][0]["bboxes_3d"].shape == (0, 9)
-    assert len(eval_out["gt_boxes"]) == 1
+    assert eval_out.segmentation3d is not None and eval_out.detection3d is not None
+    assert len(eval_out.segmentation3d.frames) == 1
+    (frame,) = eval_out.detection3d.frames
+    assert frame.predictions.bboxes_3d.shape == (0, 9)
 
 
 def test_seg3d_head_loss_returns_connected_zero_when_all_targets_ignored() -> None:

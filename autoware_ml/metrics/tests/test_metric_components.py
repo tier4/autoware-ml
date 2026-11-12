@@ -40,6 +40,11 @@ from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    prediction,
+)
 
 
 def _det3d_state(class_names=("car",)) -> Detection3DState:
@@ -232,38 +237,23 @@ def test_suite_gates_metrics_by_configured_stages() -> None:
         class_names=("car",),
         ranges=(),
     )
-    suite.update(
-        {
-            "predictions": [
-                {
-                    "bboxes_3d": box.clone(),
-                    "scores_3d": torch.tensor([0.9]),
-                    "labels_3d": torch.tensor([0]),
-                }
-            ],
-            "gt_boxes": [box.clone()],
-            "gt_labels": [torch.tensor([0])],
-        }
+    one_matched_box = detection_eval_output(
+        [
+            detection_frame(
+                predictions=prediction(box.clone(), torch.tensor([0.9]), torch.tensor([0])),
+                gt_boxes=box.clone(),
+                gt_labels=torch.tensor([0]),
+            )
+        ]
     )
+    suite.update(one_matched_box)
 
     val = suite.result(EvalStage.VAL)
     assert MetricKey(name="mAP") in val.metric_names()
     assert not any(key.name.startswith("mATE") for key in val.metric_names())
 
     suite.reset()
-    suite.update(
-        {
-            "predictions": [
-                {
-                    "bboxes_3d": box.clone(),
-                    "scores_3d": torch.tensor([0.9]),
-                    "labels_3d": torch.tensor([0]),
-                }
-            ],
-            "gt_boxes": [box.clone()],
-            "gt_labels": [torch.tensor([0])],
-        }
-    )
+    suite.update(one_matched_box)
     test = suite.result(EvalStage.TEST)
     assert MetricKey(name="mAP") in test.metric_names()
     assert MetricKey(name="mATE_default") in test.metric_names()
