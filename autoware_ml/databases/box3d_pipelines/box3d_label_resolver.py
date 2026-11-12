@@ -2,7 +2,7 @@ from collections.abc import Sequence
 
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
-from autoware_ml.databases.taxonomy import LabelTaxonomy
+from autoware_ml.databases.taxonomy import LabelVocabulary
 
 
 class Box3DLabelResolver(Box3DPipeline):
@@ -12,16 +12,15 @@ class Box3DLabelResolver(Box3DPipeline):
     vocabulary does not list raises.
     """
 
-    def __init__(self, taxonomy: LabelTaxonomy):
+    def __init__(self, vocabulary: LabelVocabulary):
         """
         Initialize Box3DLabelResolver.
 
         Args:
-          taxonomy: Taxonomy whose vocabulary maps raw names to fine names and whose levels give
-            the class index.
+          vocabulary: Vocabulary that maps the raw names of the dataset to fine names.
         """
         super().__init__()
-        self.taxonomy = taxonomy
+        self.vocabulary = vocabulary
 
     def __str__(self) -> str:
         """
@@ -30,7 +29,7 @@ class Box3DLabelResolver(Box3DPipeline):
         Returns:
           str: String representation of the pipeline.
         """
-        return f"{self.__class__.__name__}(taxonomy={self.taxonomy})"
+        return f"{self.__class__.__name__}(vocabulary={self.vocabulary})"
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
@@ -38,15 +37,12 @@ class Box3DLabelResolver(Box3DPipeline):
         """
         new_boxes3d_data_model = []
         for box3d_data_model in boxes3d_data_model:
-            fine_name = self.taxonomy.vocabulary.fine_name(box3d_data_model.box3d_label_name)
+            fine_name = self.vocabulary.fine_name(box3d_data_model.box3d_label_name)
             if fine_name is None:
                 continue
 
             new_boxes3d_data_model.append(
-                box3d_data_model.create_new_data_model(
-                    box3d_label_name=fine_name,
-                    box3d_label_index=self.taxonomy.class_index(fine_name),
-                )
+                box3d_data_model.create_new_data_model(box3d_label_name=fine_name)
             )
 
         return new_boxes3d_data_model

@@ -14,12 +14,17 @@
 
 """Unit tests for learning rate schedulers."""
 
+import math
+from functools import partial
+
 import pytest
 import torch
 
+from autoware_ml.utils.optimizer import build_lightning_optimizer_config
 from autoware_ml.utils.schedulers.cosine_annealing import CosineAnnealingLR
 from autoware_ml.utils.schedulers.cyclic_cosine_annealing import CyclicCosineAnnealingLR
 from autoware_ml.utils.schedulers.cyclic_momentum import CyclicMomentumScheduler
+from autoware_ml.utils.schedulers.iter_warmup_epoch_cosine import IterWarmupEpochCosineLR
 from autoware_ml.utils.schedulers.linear_warmup_cosine_annealing import (
     LinearWarmupCosineAnnealingLR,
 )
@@ -327,3 +332,222 @@ class TestLinearWarmupCosineAnnealingLR:
         assert abs(final_lr - eta_min) < eta_min * 0.1, (
             f"Final LR {final_lr} should be close to eta_min {eta_min}"
         )
+
+
+class TestIterWarmupEpochCosineLR:
+    """Tests for the iteration-warmup, epoch-cosine schedule."""
+
+    @staticmethod
+    def _build(total_steps: int, max_epochs: int = 10, warmup_iters: int = 5):
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.SGD(model.parameters(), lr=1.0)
+        scheduler = IterWarmupEpochCosineLR(
+            optimizer,
+            total_steps=total_steps,
+            max_epochs=max_epochs,
+            warmup_iters=warmup_iters,
+            warmup_start_factor=1.0 / 3.0,
+            eta_min_factor=1e-4,
+        )
+        return optimizer, scheduler
+
+    @staticmethod
+    def _cosine_factor(epoch: int, max_epochs: int, eta_min_factor: float = 1e-4) -> float:
+        return eta_min_factor + (1.0 - eta_min_factor) * 0.5 * (
+            1.0 + math.cos(math.pi * epoch / max_epochs)
+        )
+
+    def test_schedule_shape(self) -> None:
+        """
+        Input: 100 steps in ten stages of 10 steps, with a 5-step warmup from a third of the
+        learning rate.
+        Expected: the learning rate starts at a third of the base one, reaches it once the
+        warmup is over within the first stage, and then follows the cosine over the stages.
+        Check: the learning rate before the first step, after the warmup, in the second stage
+        and in the last one.
+        """
+        optimizer, scheduler = self._build(total_steps=100)
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(1.0 / 3.0)
+        lrs = []
+        for _ in range(100):
+            optimizer.step()
+            scheduler.step()
+            lrs.append(optimizer.param_groups[0]["lr"])
+        # After warmup and within the first epoch the factor is the epoch-0 cosine.
+        assert lrs[5] == pytest.approx(1.0)
+        # Epoch boundaries follow the cosine over epoch indices exactly.
+        assert lrs[10] == pytest.approx(self._cosine_factor(1, 10))
+        assert lrs[95] == pytest.approx(self._cosine_factor(9, 10))
+
+    def test_rejects_fewer_steps_than_epochs(self) -> None:
+        """
+        Input: 5 steps for ten cosine stages.
+        Expected: a stage needs at least one step, so the schedule cannot be built.
+        Check: a ValueError asking for at least one step per epoch is raised.
+        """
+        with pytest.raises(ValueError, match="at least one step per epoch"):
+            self._build(total_steps=5, max_epochs=10)
+
+    def test_trailing_steps_stay_at_the_last_epoch_factor(self) -> None:
+        """
+        Input: 105 steps for ten stages, as a trainer.max_steps cap can make it: ten stages of
+        10 steps and 5 trailing steps.
+        Expected: the trailing steps keep the learning rate of the last stage instead of
+        dropping to the eta_min floor.
+        Check: the learning rate after all 105 steps is the one of the last stage.
+        """
+        optimizer, scheduler = self._build(total_steps=105)
+        for _ in range(105):
+            optimizer.step()
+            scheduler.step()
+        assert optimizer.param_groups[0]["lr"] == pytest.approx(self._cosine_factor(9, 10))
+
+    def test_a_max_steps_cap_runs_the_whole_cosine_inside_the_cap(self) -> None:
+        """
+        Input: total_steps = 300 and max_epochs = 10, as the framework fills them when
+        trainer.max_steps = 300 caps a run of ten 100-batch epochs.
+        Expected: a stage is total_steps // max_epochs = 30 steps rather than a data epoch,
+        so all ten stages of the cosine run inside the 300 capped steps.
+        Check: the learning rate changes every 30 steps and is at the last stage from step 270.
+        """
+        optimizer, scheduler = self._build(total_steps=300, warmup_iters=0)
+        lrs = []
+        for _ in range(300):
+            lrs.append(optimizer.param_groups[0]["lr"])
+            optimizer.step()
+            scheduler.step()
+
+        changes = [step for step in range(1, 300) if lrs[step] != lrs[step - 1]]
+        assert changes == list(range(30, 300, 30))
+        assert lrs[270] == pytest.approx(self._cosine_factor(9, 10))
+
+    def test_resume_reproduces_the_original_trajectory(self) -> None:
+        """
+        Input: a schedule stepped 15 times and saved, then restored into one built with
+        another ``total_steps``, as the framework re-derives it on resume (a
+        ``trainer.max_steps`` cap or a changed batch size can make it differ).
+        Expected: the restored state overrides the constructor arguments, so the resumed
+        schedule replays the original one.
+        Check: the 25 learning rates after the resume against the same steps of an
+        uninterrupted run.
+        """
+        reference_optimizer, reference = self._build(total_steps=100)
+        reference_lrs = []
+        for _ in range(40):
+            reference_optimizer.step()
+            reference.step()
+            reference_lrs.append(reference_optimizer.param_groups[0]["lr"])
+
+        optimizer_a, scheduler_a = self._build(total_steps=100)
+        for _ in range(15):
+            optimizer_a.step()
+            scheduler_a.step()
+        state = scheduler_a.state_dict()
+
+        # Rebuild with a different total_steps estimate, then restore.
+        optimizer_b, scheduler_b = self._build(total_steps=57)
+        scheduler_b.load_state_dict(state)
+        resumed_lrs = []
+        for _ in range(25):
+            optimizer_b.step()
+            scheduler_b.step()
+            resumed_lrs.append(optimizer_b.param_groups[0]["lr"])
+
+        assert resumed_lrs == reference_lrs[15:]
+
+    def test_builds_from_the_framework_with_max_epochs_bound_in_the_config(self) -> None:
+        """
+        Input: a scheduler factory binding ``max_epochs`` the way a config does with
+        ``${trainer.max_epochs}``, built through the framework optimizer helper.
+        Expected: the framework fills ``total_steps`` from the trainer estimate and leaves the
+        bound ``max_epochs`` alone, so the epoch length follows both.
+        Check: the built scheduler reports the bound epochs and the derived steps per epoch.
+        """
+        model = torch.nn.Linear(2, 2)
+
+        optimizers = build_lightning_optimizer_config(
+            model,
+            optimizer_factory=lambda params: torch.optim.SGD(params, lr=1.0),
+            scheduler_factory=partial(
+                IterWarmupEpochCosineLR,
+                max_epochs=4,
+                warmup_iters=1,
+                warmup_start_factor=0.5,
+                eta_min_factor=1e-3,
+            ),
+            scheduler_config={"interval": "step"},
+            estimated_stepping_batches=40,
+        )
+
+        scheduler = optimizers["lr_scheduler"]["scheduler"]
+        assert (scheduler.max_epochs, scheduler.steps_per_epoch) == (4, 10)
+
+    def test_every_group_multiplies_the_warmup_into_the_cosine_stage(self) -> None:
+        """
+        Input: param groups at learning rates 1.0 and 0.1, four cosine stages of 10 steps, and
+        a 15-step warmup from half the learning rate that reaches into the second stage.
+        Expected: every group runs at its own learning rate times the warmup factor of the
+        step and the cosine factor of the step's stage; the cosine holds for a whole stage
+        while the warmup advances every step.
+        Check: the learning rates of all 40 steps against that product, and the one at step
+        12, inside the warmup and the second stage, against its value.
+        """
+        weight, bias = torch.nn.Linear(2, 2).parameters()
+        optimizer = torch.optim.SGD(
+            [{"params": [weight], "lr": 1.0}, {"params": [bias], "lr": 0.1}], lr=1.0
+        )
+        scheduler = IterWarmupEpochCosineLR(
+            optimizer,
+            total_steps=40,
+            max_epochs=4,
+            warmup_iters=15,
+            warmup_start_factor=0.5,
+            eta_min_factor=0.0,
+        )
+        lrs = []
+        for _ in range(40):
+            lrs.append([group["lr"] for group in optimizer.param_groups])
+            optimizer.step()
+            scheduler.step()
+
+        def factor(step: int) -> float:
+            warmup = 0.5 + 0.5 * step / 15 if step < 15 else 1.0
+            return warmup * self._cosine_factor(step // 10, 4, eta_min_factor=0.0)
+
+        assert lrs == [pytest.approx([factor(step), 0.1 * factor(step)]) for step in range(40)]
+        assert lrs[12][0] == pytest.approx(0.9 * 0.5 * (1.0 + math.cos(math.pi / 4)))
+
+    def test_every_group_anneals_towards_the_floor_of_the_default_learning_rate(self) -> None:
+        """
+        Input: an optimizer whose default learning rate is 1.0, with a backbone group at 0.1,
+        stepped through 100 one-step cosine stages without warmup and a floor factor of 0.01.
+        Expected: the floor is one absolute learning rate, 0.01 times the default one, so
+        every group anneals from its own learning rate towards that floor and the backbone
+        ends at the same floor as the default group.
+        Check: the learning rates of both groups at every step against the floor plus the
+        stage's cosine share of the gap to their own rate, and both last learning rates
+        against the floor.
+        """
+        weight, bias = torch.nn.Linear(2, 2).parameters()
+        optimizer = torch.optim.SGD([{"params": [weight]}, {"params": [bias], "lr": 0.1}], lr=1.0)
+        scheduler = IterWarmupEpochCosineLR(
+            optimizer,
+            total_steps=100,
+            max_epochs=100,
+            warmup_iters=0,
+            warmup_start_factor=1.0,
+            eta_min_factor=0.01,
+        )
+        lrs = []
+        for _ in range(100):
+            lrs.append([group["lr"] for group in optimizer.param_groups])
+            optimizer.step()
+            scheduler.step()
+
+        def annealed(base_lr: float, step: int) -> float:
+            return 0.01 + (base_lr - 0.01) * 0.5 * (1.0 + math.cos(math.pi * step / 100))
+
+        assert lrs == [
+            pytest.approx([annealed(1.0, step), annealed(0.1, step)]) for step in range(100)
+        ]
+        assert lrs[-1] == pytest.approx([0.01, 0.01], abs=3e-4)

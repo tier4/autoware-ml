@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Any, Mapping
+from typing import Any
+from collections.abc import Sequence, Mapping
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
@@ -55,9 +56,11 @@ class CategoryMappingDataModel(BaseModel, DataModelInterface):
     def model_post_init(self, __context: Any) -> None:
         """Validate that all attributes are of the same length."""
 
-        assert len(self.category_names) == len(self.category_indices), (
-            "All attributes must be of the same length"
-        )
+        if len(self.category_names) != len(self.category_indices):
+            raise ValueError(
+                f"All attributes must be of the same length, but got {len(self.category_names)} "
+                f"category names and {len(self.category_indices)} category indices"
+            )
 
     def to_dictionary(self) -> Mapping[str, Any]:
         """

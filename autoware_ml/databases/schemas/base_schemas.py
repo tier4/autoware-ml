@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import NamedTuple, Sequence, Mapping, Any
+from typing import NamedTuple, Any
+from collections.abc import Sequence, Mapping
 
 import polars as pl
 

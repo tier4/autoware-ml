@@ -2,7 +2,7 @@
 This script defines classes to merge 3D bounding boxes based on the different implementations.
 """
 
-from typing import Sequence
+from collections.abc import Sequence
 from types import MappingProxyType
 
 import numpy as np
@@ -12,7 +12,6 @@ from shapely.geometry import Polygon
 from autoware_ml.types.geometry import Box3DFieldIndex
 from autoware_ml.databases.box3d_pipelines.box3d_pipeline import Box3DPipeline
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
-from autoware_ml.databases.taxonomy import LabelTaxonomy
 
 
 class Box3DMerger(Box3DPipeline):
@@ -24,7 +23,6 @@ class Box3DMerger(Box3DPipeline):
         self,
         target_labels: MappingProxyType[str, Sequence[str]],
         proximity_distance_threshold: float,
-        taxonomy: LabelTaxonomy,
     ):
         """
         Initialize Box3DMerger.
@@ -33,12 +31,10 @@ class Box3DMerger(Box3DPipeline):
           target_labels: Mapping of the target labels to the list of source labels.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
-          taxonomy: Taxonomy that maps a label name to its class index.
         """
         super().__init__()
         self.target_labels = target_labels
         self.proximity_distance_threshold = proximity_distance_threshold
-        self.taxonomy = taxonomy
 
         # Check if target labels are valid, it supports only two source labels for each target label
         for target_label, source_labels in self.target_labels.items():
@@ -48,9 +44,11 @@ class Box3DMerger(Box3DPipeline):
                     f"must have exactly 2 labels, but it's {len(source_labels)}"
                 )
 
-        assert self.proximity_distance_threshold > 0, (
-            "Proximity distance threshold must be positive"
-        )
+        if self.proximity_distance_threshold <= 0:
+            raise ValueError(
+                "Proximity distance threshold must be positive, "
+                f"but it's {self.proximity_distance_threshold}"
+            )
 
     def __call__(self, boxes3d_data_model: Sequence[Box3DDataModel]) -> Sequence[Box3DDataModel]:
         """
@@ -256,7 +254,6 @@ class Box3DMerger(Box3DPipeline):
                     box3d_idx_1
                 ].box3d_dataset_label_name
                 merged_box3d_label_name = target_label
-                merged_box3d_label_index = self.taxonomy.class_index(target_label)
                 merged_box3d_num_lidar_points = (
                     boxes3d_data_model[box3d_idx_1].box3d_num_lidar_points
                     + boxes3d_data_model[box3d_idx_2].box3d_num_lidar_points
@@ -280,7 +277,6 @@ class Box3DMerger(Box3DPipeline):
                         box3d_instance_id=merged_box3d_instance_id,
                         box3d_dataset_label_name=merged_box3d_dataset_label_name,
                         box3d_label_name=merged_box3d_label_name,
-                        box3d_label_index=merged_box3d_label_index,
                         box3d_num_lidar_points=merged_box3d_num_lidar_points,
                         box3d_num_radar_points=merged_box3d_num_radar_points,
                         box3d_valid=merged_box3d_valid,
@@ -322,7 +318,6 @@ class Box3DExtendLongerMerger(Box3DMerger):
         self,
         target_labels: MappingProxyType[str, Sequence[str]],
         proximity_distance_threshold: float,
-        taxonomy: LabelTaxonomy,
     ):
         """
         Initialize Box3DExtendLongerMerger.
@@ -331,13 +326,11 @@ class Box3DExtendLongerMerger(Box3DMerger):
           target_labels: Mapping of the target labels to the list of source labels.
           proximity_distance_threshold: Proximity distance threshold to check if two boxes are
             close to each other.
-          taxonomy: Taxonomy that maps a label name to its class index.
         """
 
         super().__init__(
             target_labels=target_labels,
             proximity_distance_threshold=proximity_distance_threshold,
-            taxonomy=taxonomy,
         )
 
     def __str__(self) -> str:
@@ -349,8 +342,7 @@ class Box3DExtendLongerMerger(Box3DMerger):
         """
         return (
             f"{self.__class__.__name__}(target_labels={self.target_labels}, "
-            f"proximity_distance_threshold={self.proximity_distance_threshold}, "
-            f"taxonomy={self.taxonomy})"
+            f"proximity_distance_threshold={self.proximity_distance_threshold})"
         )
 
     @staticmethod

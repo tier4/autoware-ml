@@ -31,12 +31,14 @@ from typing import Any
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from torch.onnx.operators import shape_as_tensor
 from torch.utils.checkpoint import checkpoint
 
 from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
 from autoware_ml.ops.spconv.sparse_conv import ExportableSubMConv3d
+from autoware_ml.ops.submanifold_conv import SubMConv3d
 from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 
@@ -62,11 +64,17 @@ def is_sparse_conv_module(module: nn.Module) -> bool:
     Returns:
         ``True`` when the module expects sparse convolution tensors.
     """
-    return spconv.modules.is_spconv_module(module) or isinstance(module, ExportableSubMConv3d)
+    return spconv.modules.is_spconv_module(module) or isinstance(
+        module, (SubMConv3d, ExportableSubMConv3d)
+    )
 
 
 def replace_submconv3d_for_export(module: nn.Module) -> None:
-    """Replace native ``spconv.SubMConv3d`` layers with exportable wrappers.
+    """Replace native submanifold convolution layers with exportable spconv wrappers.
+
+    :class:`SubMConv3d` of either library is converted: both carry spconv's
+    constructor attributes and the KRSC weight layout, so the parameters move over
+    unchanged. Export runs on spconv even when training ran on t4sparse.
 
     Args:
         module: Module hierarchy traversed in-place.
@@ -74,7 +82,7 @@ def replace_submconv3d_for_export(module: nn.Module) -> None:
     for name, child in list(module.named_children()):
         if isinstance(child, ExportableSubMConv3d):
             continue
-        if isinstance(child, spconv.SubMConv3d):
+        if isinstance(child, (spconv.SubMConv3d, SubMConv3d)):
             exportable_child = ExportableSubMConv3d(
                 child.in_channels,
                 child.out_channels,
@@ -696,7 +704,8 @@ class SerializedAttention(PointModule):
             attention = self.attn_drop(attention).to(qkv.dtype)
             feat = (attention @ v).transpose(1, 2).reshape(-1, channel_count)
         else:
-            assert cu_seqlens is not None
+            if cu_seqlens is None:
+                raise ValueError("Flash attention needs the cumulative sequence lengths")
             if self.flash_attn is None:
                 self.flash_attn = load_flash_attn_module()
             packed = (
@@ -704,8 +713,13 @@ class SerializedAttention(PointModule):
                 if roped is None
                 else torch.stack(roped, dim=1)
             )
+            # flash attention takes fp16 or bf16; keep the autocast dtype instead of forcing
+            # fp16, and fall back to fp16 outside autocast.
+            flash_dtype = (
+                packed.dtype if packed.dtype in (torch.float16, torch.bfloat16) else torch.float16
+            )
             feat = self.flash_attn.flash_attn_varlen_qkvpacked_func(
-                packed.half(),
+                packed.to(flash_dtype),
                 cu_seqlens,
                 max_seqlen=patch_size,
                 dropout_p=self.attn_drop_p if self.training else 0.0,
@@ -848,9 +862,7 @@ class Block(PointModule):
 
         if self.enable_conv:
             self.cpe = PointSequential(
-                spconv.SubMConv3d(
-                    channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key
-                ),
+                SubMConv3d(channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key),
                 nn.Linear(channels, channels),
                 nn.LayerNorm(channels),
             )
@@ -908,8 +920,6 @@ class Block(PointModule):
                 # The window metadata of the point is read from the closure and stays as it
                 # is; only the features are differentiable inputs, so the recomputation in
                 # the backward pass reproduces the forward exactly (dropout RNG included).
-                # The recomputation rewrites `point.feat` of this stage's container while the
-                # backward runs; nothing reads the container then.
                 point.feat = checkpoint(
                     partial(self._attention_and_mlp, point), point.feat, use_reentrant=False
                 )
@@ -921,6 +931,10 @@ class Block(PointModule):
     def _attention_and_mlp(self, point: Point, feat: torch.Tensor) -> torch.Tensor:
         """Run the attention and MLP sublayers on ``feat`` and return the new features.
 
+        Works on a shallow copy of ``point``: under activation checkpointing this function
+        runs again during the backward pass, and the copy keeps that recomputation from
+        rewriting the features of the caller's container. The tensors are shared, not copied.
+
         Args:
             point: Point container carrying the serialization and window metadata.
             feat: Input features of the sublayers.
@@ -928,6 +942,7 @@ class Block(PointModule):
         Returns:
             Features after both residual sublayers.
         """
+        point = Point(point)
         point.feat = feat
         point = self._attention_sublayer(point)
         point = self._mlp_sublayer(point)
@@ -979,6 +994,34 @@ class Block(PointModule):
         return point
 
 
+class FullPrecisionLinear(nn.Linear):
+    """``nn.Linear`` that always computes in fp32 under CUDA autocast.
+
+    Used for the projections that feed a BatchNorm. Batch normalisation makes the
+    network invariant to the scale of the layer in front of it, so nothing keeps
+    that layer's output small. Under bf16 the output mean drifts far from zero
+    relative to its spread, the 8-bit mantissa quantizes the per-point variation
+    away and the gradients explode. Run in fp32 to avoid this. Outside autocast
+    this is a plain linear layer.
+    """
+
+    def forward(
+        self, input: Float[torch.Tensor, "num_points in_channels"]
+    ) -> Float[torch.Tensor, "num_points out_channels"]:
+        """Apply the projection, in fp32 when CUDA autocast is enabled.
+
+        Args:
+            input: Input features, in whatever precision autocast produced.
+
+        Returns:
+            fp32 projection of ``input`` under autocast, otherwise the plain projection.
+        """
+        if input.is_cuda and torch.is_autocast_enabled("cuda"):
+            with torch.autocast("cuda", enabled=False):
+                return super().forward(input.float())
+        return super().forward(input)
+
+
 class SerializedPooling(PointModule):
     """Pool serialized point groups into a coarser hierarchy level.
 
@@ -1009,7 +1052,7 @@ class SerializedPooling(PointModule):
         self.shuffle_orders = shuffle_orders
         self.export_mode = False
         self.export_stage_index = export_stage_index
-        self.proj = nn.Linear(in_channels, out_channels)
+        self.proj = FullPrecisionLinear(in_channels, out_channels)
         self.norm = PointSequential(nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01))
         self.act = PointSequential(nn.GELU())
 
@@ -1124,12 +1167,12 @@ class SerializedUnpooling(PointModule):
         """
         super().__init__()
         self.proj = PointSequential(
-            nn.Linear(in_channels, out_channels),
+            FullPrecisionLinear(in_channels, out_channels),
             nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
         self.proj_skip = PointSequential(
-            nn.Linear(skip_channels, out_channels),
+            FullPrecisionLinear(skip_channels, out_channels),
             nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
             nn.GELU(),
         )
@@ -1181,7 +1224,7 @@ class Embedding(PointModule):
             # Utonia-style stem: drop the submanifold conv for a per-point Linear.
             stem = nn.Linear(in_channels, embed_channels)
         elif stem_type == "conv":
-            stem = spconv.SubMConv3d(
+            stem = SubMConv3d(
                 in_channels, embed_channels, kernel_size=kernel_size, bias=False, indice_key="stem"
             )
         else:

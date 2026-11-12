@@ -7,12 +7,15 @@ defaults:
   - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
+  - /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: ???
+  - /ego@ego: ???
   - _self_
 
-point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
+taxonomy:
+  detection3d:
+    class_names: [car, truck, bus, bicycle, pedestrian, barrier, traffic_cone]
 
-# Largest GT distance of every class, from the detection taxonomy of the database.
-eval_class_range: ${database.taxonomy.detection3d.eval_range}
+point_cloud_range: [-122.4, -122.4, -3.0, 122.4, 122.4, 5.0]
 
 # Boxes carrying one of these (class, attribute) pairs are dropped from training, evaluation
 # and the frame sampler alike.
@@ -35,8 +38,8 @@ model:
   # flagged False those classes are not supervised, so the head is not taught they are absent.
   partial_annotations:
     _target_: autoware_ml.models.detection3d.task_modules.partial_annotations.PartialAnnotations
-    class_names: ${database.taxonomy.detection3d.class_names}
-    partial_ignore_labels: [traffic_cone, barrier]
+    class_names: ${taxonomy.detection3d.class_names}
+    partially_annotated_classes: [traffic_cone, barrier]
   bbox_head:
     num_proposals: 500
     dense_heatmap_pooling_class_names: [car, truck, bus, barrier]
@@ -149,11 +152,10 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.geometry.PointsRandomShuffle
           _convert_: all
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesRangeFilter
           _convert_: all
@@ -221,11 +223,10 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
-        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesLabelNameFilter
+        - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesIgnoreIndexFilter
           _convert_: all
 
-          label_names_to_keep: ${database.taxonomy.detection3d.class_names}
-          class_names: ${database.taxonomy.detection3d.class_names}
+          ignore_index: ${taxonomy.detection3d.ignore_index}
 
         - _target_: autoware_ml.transforms.boxes3d.filters.BBoxesAttributeFilter
           _convert_: all

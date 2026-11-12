@@ -114,7 +114,6 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
             raise ValueError("The datamodule needs at least one dataset source.")
 
         self.sources: dict[str, DatasetSource] = dict(sources)
-        self._validate_shared_taxonomy()
         self.datasets: dict[SplitType, ConcatDataset] = {}
         self.train_dataloader_config = train_dataloader
         self.validation_dataloader_config = validation_dataloader
@@ -122,22 +121,6 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
         self.predict_dataloader_config = predict_dataloader
         self.train_frame_sampling = train_frame_sampling
         self.resumable_train_sampler = resumable_train_sampler
-
-    def _validate_shared_taxonomy(self) -> None:
-        """
-        Reject sources whose taxonomies disagree.
-
-        Sources mixed in one run must use the same class indices, otherwise one output would
-        learn two classes.
-        """
-        taxonomies = {
-            source.database.taxonomy: source.database.version for source in self.sources.values()
-        }
-        if len(taxonomies) > 1:
-            raise ValueError(
-                "All dataset sources must use the same taxonomy, got different ones in "
-                f"{sorted(taxonomies.values())}."
-            )
 
     def databases(self) -> Sequence[BaseDatabase]:
         """

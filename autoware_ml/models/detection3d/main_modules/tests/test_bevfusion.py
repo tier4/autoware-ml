@@ -403,6 +403,7 @@ class _BEVFusionDetection3DModelTestCase(unittest.TestCase):
                 point_cloud_gt_batch=None,
                 detection3d_gt_batch=self._build_detection3d_gt_batch(),
                 image_gt_batch=image_data,
+                padding_mask=torch.zeros(self.batch_size, dtype=torch.bool, device=self.device),
                 segmentation3d_gt_batch=None,
             ),
             voxels_data=voxels_data,
@@ -574,7 +575,11 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         self.assertEqual(list(export_specs), ["bevfusion_lidar"])
         spec = export_specs["bevfusion_lidar"]
         self.assertIsInstance(spec.module, _BEVFusionLidarExportWrapper)
-        self.assertEqual(spec.input_param_names, ["voxels", "coors", "num_points_per_voxel"])
+        self.assertEqual(spec.input_names, ["voxels", "coors", "num_points_per_voxel"])
+        self.assertEqual(
+            spec.dynamic_axes,
+            {name: {0: "voxels_num"} for name in ["voxels", "coors", "num_points_per_voxel"]},
+        )
         voxels, coors, num_points_per_voxel = spec.args
         self.assertEqual(voxels.shape[0], num_first_sample_voxels)
         self.assertEqual(coors.shape, (num_first_sample_voxels, 3))
@@ -596,7 +601,7 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
             lidar_network=self._build_lidar_network(),
             camera_network=None,
             partial_annotations=PartialAnnotations(
-                class_names=self.class_names, partial_ignore_labels=["cyclist"]
+                class_names=self.class_names, partially_annotated_classes=["cyclist"]
             ),
         )
 
@@ -840,7 +845,8 @@ class TestBEVFusionDetection3DModelCameraLidar(_BEVFusionDetection3DModelTestCas
 
         backbone_spec = export_specs["bevfusion_image_backbone"]
         self.assertIsInstance(backbone_spec.module, BEVFusionImageBackboneExportWrapper)
-        self.assertEqual(backbone_spec.input_param_names, ["imgs"])
+        self.assertEqual(backbone_spec.input_names, ["imgs"])
+        self.assertEqual(backbone_spec.dynamic_axes, {"imgs": {0: "num_imgs"}})
         (imgs,) = backbone_spec.args
         self.assertEqual(imgs.dtype, torch.uint8)
         self.assertEqual(imgs.shape, (self.num_cams, 3, self.image_size, self.image_size))
@@ -851,7 +857,7 @@ class TestBEVFusionDetection3DModelCameraLidar(_BEVFusionDetection3DModelTestCas
         main_body_spec = export_specs["bevfusion_camera_lidar"]
         self.assertIsInstance(main_body_spec.module, _BEVFusionExportWrapper)
         self.assertEqual(
-            main_body_spec.input_param_names,
+            main_body_spec.input_names,
             [
                 "voxels",
                 "coors",

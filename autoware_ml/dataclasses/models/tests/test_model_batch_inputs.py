@@ -37,6 +37,7 @@ class TestModelBatchInputs(unittest.TestCase):
             detection3d_gt_batch=None,
             segmentation3d_gt_batch=None,
             image_gt_batch=None,
+            padding_mask=torch.zeros(1, dtype=torch.bool),
         )
         num_voxels, max_points, channels = 4, 5, 4
         self.voxels_data = VoxelsData(

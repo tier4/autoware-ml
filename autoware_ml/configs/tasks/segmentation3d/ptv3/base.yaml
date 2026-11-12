@@ -1,9 +1,9 @@
 # @package _global_
 defaults:
   - /tasks/default_task
-  - /tasks/segmentation3d/ptv3/encoder_base
+  - /tasks/segmentation3d/ptv3/encoder
   - /tasks/segmentation3d/ptv3/voxel_encoder
-  - /tasks/segmentation3d/ptv3/seg3d_head_base
+  - /tasks/segmentation3d/ptv3/seg3d_head
   - _self_
 
 database: ???
@@ -50,7 +50,6 @@ deploy:
     do_constant_folding: false
     modules:
       ptv3_encoder:
-        output_names: [point_feat_0, point_feat_1, point_feat_2, point_feat_3, point_feat_4]
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
@@ -59,10 +58,9 @@ deploy:
           enc_channels: ${model.encoder.enc_channels}
           patch_sizes: ${model.encoder.enc_patch_size}
       ptv3_seg3d_head:
-        output_names: [pred_labels, pred_probs]
         metainfo:
           dec_depths: ${model.seg3d_head.dec_depths}
-          class_names: ${database.taxonomy.segmentation3d.class_names}
+          class_names: ${taxonomy.segmentation3d.class_names}
   tensorrt:
     enabled: false
 

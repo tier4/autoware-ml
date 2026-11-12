@@ -111,6 +111,7 @@ class _BEVFusionExportWrapperBase(nn.Module):
             point_cloud_gt_batch=None,
             detection3d_gt_batch=None,
             image_gt_batch=None,
+            padding_mask=torch.zeros(1, dtype=torch.bool, device=coors.device),
             io_processing_time=0.0,
             segmentation3d_gt_batch=None,
         )
@@ -401,7 +402,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
             TransFusion-based detection head outputs for the configured branches.
         """
         if batch_size is None:
-            batch_size = multi_task_batch_inputs.multi_task_gt_batch.infer_batch_size()
+            batch_size = multi_task_batch_inputs.multi_task_gt_batch.batch_size
 
         # Run camera branch if image BEV is not provided and camera network is configured
         # Camera must run before the lidar branch because the lidar branch requires image BEV for
@@ -572,7 +573,13 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                 "bevfusion_lidar": ExportSpec(
                     module=_BEVFusionLidarExportWrapper(export_model),
                     args=(voxels, coors, num_points_per_voxel),
-                    input_param_names=["voxels", "coors", "num_points_per_voxel"],
+                    input_names=["voxels", "coors", "num_points_per_voxel"],
+                    output_names=["bbox_pred", "score", "label_pred"],
+                    dynamic_axes={
+                        "voxels": {0: "voxels_num"},
+                        "coors": {0: "voxels_num"},
+                        "num_points_per_voxel": {0: "voxels_num"},
+                    },
                 )
             }
 
@@ -610,7 +617,9 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
             "bevfusion_image_backbone": ExportSpec(
                 module=BEVFusionImageBackboneExportWrapper(export_model.camera_network),
                 args=(imgs_uint8,),
-                input_param_names=["imgs"],
+                input_names=["imgs"],
+                output_names=["image_feats"],
+                dynamic_axes={"imgs": {0: "num_imgs"}},
             ),
             "bevfusion_camera_lidar": ExportSpec(
                 module=_BEVFusionExportWrapper(export_model),
@@ -625,7 +634,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     ranks.long(),
                     indices.long(),
                 ),
-                input_param_names=[
+                input_names=[
                     "voxels",
                     "coors",
                     "num_points_per_voxel",
@@ -636,6 +645,18 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
                     "ranks",
                     "indices",
                 ],
+                output_names=["bbox_pred", "score", "label_pred"],
+                dynamic_axes={
+                    "voxels": {0: "voxels_num"},
+                    "coors": {0: "voxels_num"},
+                    "num_points_per_voxel": {0: "voxels_num"},
+                    "image_feats": {0: "num_imgs"},
+                    "depth_maps": {0: "num_imgs"},
+                    "geom_feats": {0: "num_kept"},
+                    "kept": {0: "num_frustum_points"},
+                    "ranks": {0: "num_kept"},
+                    "indices": {0: "num_kept"},
+                },
             ),
         }
 

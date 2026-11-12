@@ -24,6 +24,8 @@ from autoware_ml.metrics.detection3d.heading_flip import HeadingFlipRate
 from autoware_ml.metrics.detection3d.nearest_surface_error import NearestSurfaceError
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
+from autoware_ml.metrics.report import MetricKey
+from autoware_ml.types.metrics import MatchCost
 
 
 def _box(cx=10.0, cy=0.0, dx=4.0, dy=2.0, yaw=0.0) -> np.ndarray:
@@ -49,7 +51,7 @@ def test_nearest_surface_distance_and_sign() -> None:
     assert signed_nearest_surface_error(_box(cx=11.0), _box(cx=10.0)) == pytest.approx(1.0)
 
 
-def _yaw_state(yaw_err: float, match_cost: str = "center") -> Detection3DState:
+def _yaw_state(yaw_err: float, match_cost: MatchCost = MatchCost.CENTER) -> Detection3DState:
     gt = torch.tensor([[10.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
     pred = gt.clone()
     pred[0, 6] = yaw_err
@@ -65,31 +67,33 @@ def _yaw_state(yaw_err: float, match_cost: str = "center") -> Detection3DState:
 
 def test_heading_flip_rate_no_flip_for_small_error() -> None:
     out = HeadingFlipRate().evaluate(_yaw_state(0.1), EvalStage.TEST)
-    assert out["flip_count_car"] == 0.0
-    assert out["flip_rate_car"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="flip_count_car")) == 0.0
+    assert out.metric_value(MetricKey(name="flip_rate_car")) == pytest.approx(0.0)
 
 
 def test_heading_flip_rate_counts_a_reversal() -> None:
     # A near-180 deg error is a flip: uniform +1 regardless of exact angle.
     out = HeadingFlipRate().evaluate(_yaw_state(pi - 0.1), EvalStage.TEST)
-    assert out["flip_count_car"] == 1.0
-    assert out["flip_rate_car"] == pytest.approx(1.0)
-    assert out["mflip_rate"] == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="flip_count_car")) == 1.0
+    assert out.metric_value(MetricKey(name="flip_rate_car")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="mflip_rate")) == pytest.approx(1.0)
 
 
 def test_corner_error_positive_under_yaw() -> None:
     out = CornerError().evaluate(_yaw_state(0.1), EvalStage.TEST)
-    assert out["corner_mean_car"] > 0.0
-    assert out["corner_max_car"] >= out["corner_mean_car"]
+    assert out.metric_value(MetricKey(name="corner_mean_car")) > 0.0
+    assert out.metric_value(MetricKey(name="corner_max_car")) >= out.metric_value(
+        MetricKey(name="corner_mean_car")
+    )
 
 
 def test_nearest_surface_error_present() -> None:
     out = NearestSurfaceError().evaluate(_yaw_state(0.1), EvalStage.TEST)
-    assert "nsurf_absmax_car" in out
-    assert out["nsurf_absmax_car"] >= 0.0
+    assert MetricKey(name="nsurf_absmax_car") in out.metric_names()
+    assert out.metric_value(MetricKey(name="nsurf_absmax_car")) >= 0.0
 
 
 def test_corner_matching_mode_still_matches() -> None:
     # A near-identical box must remain a true positive under corner-distance matching.
-    out = CornerError().evaluate(_yaw_state(0.05, match_cost="corner"), EvalStage.TEST)
-    assert not np.isnan(out["corner_mean_car"])
+    out = CornerError().evaluate(_yaw_state(0.05, match_cost=MatchCost.CORNER), EvalStage.TEST)
+    assert not np.isnan(out.metric_value(MetricKey(name="corner_mean_car")))

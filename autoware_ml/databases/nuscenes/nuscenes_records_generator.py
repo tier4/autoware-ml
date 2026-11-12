@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import numpy.typing as npt
@@ -35,7 +36,6 @@ from autoware_ml.databases.schemas.lidar_sources import LidarSourceDataModel
 from autoware_ml.databases.schemas.utils import relative_to_database_root
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.types.dataset import SweepDirection
@@ -65,7 +65,6 @@ class NuScenesRecordsGenerator:
         database_root_path: str,
         scenario_data: ScenarioData,
         lidar_pointcloud_num_features: int,
-        taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
     ) -> None:
         """
@@ -76,7 +75,6 @@ class NuScenesRecordsGenerator:
           scenario_data: Scenario data of one NuScenes scene with the dataset parameters, which
             set the sweep window on either side of a sample and the sampling step.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
-          taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
         """
 
@@ -84,7 +82,6 @@ class NuScenesRecordsGenerator:
         self.scenario_data = scenario_data
         self.sample_steps = scenario_data.dataset_params.sample_steps
         self.lidar_pointcloud_num_features = lidar_pointcloud_num_features
-        self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
 
         self.nusc = self._construct_nuscenes_devkit_dataset()
@@ -273,8 +270,6 @@ class NuScenesRecordsGenerator:
                     box3d_instance_id=sample_annotation_record["instance_token"],
                     box3d_dataset_label_name=box3d.name,
                     box3d_label_name=box3d.name,
-                    # Initially, set all label indices to the ignore label index
-                    box3d_label_index=self.taxonomy.detection3d.ignore_index,
                     box3d_num_lidar_points=sample_annotation_record["num_lidar_pts"],
                     box3d_num_radar_points=sample_annotation_record["num_radar_pts"],
                     box3d_valid=box3d_valid,

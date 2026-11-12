@@ -1,6 +1,7 @@
 # @package _global_
 # ResNet-18 classifier of the camera-lidar calibration status, one sample per camera. The
-# database base below names its cameras and its datamodule, the pipelines are shared.
+# database base below names its cameras, their image sizes and its datamodule, the pipelines are
+# shared.
 defaults:
   - /tasks/default_task
   - _self_
@@ -12,9 +13,6 @@ camera_sources: ???
 # The classifier scores itself through its head, there are no metric suites to run.
 metrics: []
 metric_ranges: []
-
-# Ego body cut out of the point cloud before the fusion, [x_min, y_min, z_min, x_max, y_max, z_max].
-ego_box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]
 
 optimizer:
   _target_: torch.optim.AdamW
@@ -36,17 +34,7 @@ callbacks:
 deploy:
   onnx:
     modules:
-      end_to_end:
-        input_names: [input]
-        output_names: [output]
-        dynamic_shapes:
-          fused_img: { 2: height, 3: width }
-  tensorrt:
-    input_shapes:
-      input:
-        min_shape: [1, 5, 1080, 1920]
-        opt_shape: [1, 5, 1860, 2880]
-        max_shape: [1, 5, 2160, 3840]
+      end_to_end: {}
 
 model:
   _target_: autoware_ml.models.calibration_status.calibration_status.CalibrationStatusClassifier
@@ -101,7 +89,7 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
           _convert_: all
 
-          crop_box: ${ego_box}
+          crop_box: ${ego.box}
 
         - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
           _convert_: all
@@ -179,7 +167,7 @@ datasets:
 
           max_depth: 128.0
           dilation_size: 1
-          ego_box: ${ego_box}
+          ego_box: ${ego.box}
 
         - _target_: autoware_ml.transforms.camera_lidar.camera_lidar.SaveFusionPreview
           _convert_: all
@@ -210,7 +198,7 @@ datasets:
         - _target_: autoware_ml.transforms.point_cloud.geometry.CropBoxInner
           _convert_: all
 
-          crop_box: ${ego_box}
+          crop_box: ${ego.box}
 
         - _target_: autoware_ml.transforms.camera.distortion.UndistortImage
           _convert_: all
@@ -267,7 +255,7 @@ datasets:
 
           max_depth: 128.0
           dilation_size: 1
-          ego_box: ${ego_box}
+          ego_box: ${ego.box}
 
 # The datamodule binds the datasets above to the splits of its sources. Validation and predict
 # read the test dataset.

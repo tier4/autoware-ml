@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - base
+  - /database@database: t4dataset/t4dataset_base
+  - override /ego@ego: default_t4dataset
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: calibration_status/${database.version}/t4dataset
+experiment_name: resnet18_b8_30e_t4dataset
+
+trainer:
+  max_epochs: 30

@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     PointCloudSeg3DState,
     class_token,
@@ -63,7 +64,7 @@ class ErrorClusters(Metric[PointCloudSeg3DState]):
         if self.min_cluster_points < 1:
             raise ValueError("min_cluster_points must be >= 1.")
 
-    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> MetricReport:
         """Aggregate the error rate and cluster counts, whole-scene and per class.
 
         Args:
@@ -71,7 +72,7 @@ class ErrorClusters(Metric[PointCloudSeg3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         # Scored points are the ones the filter and the ignore index kept, a point is
         # wrong when its predicted class differs from its target.
@@ -97,19 +98,23 @@ class ErrorClusters(Metric[PointCloudSeg3DState]):
                 wrong_per_class[class_index] += int(wrong_class.sum())
                 clusters_per_class[class_index] += self._clusters(coord[wrong_class])
 
-        report = {
-            "error_rate": (wrong_points / scored_points) if scored_points else float("nan"),
-            "error_cluster_count": float(clusters),
-            "error_clusters_per_frame": clusters / frames_seen if frames_seen else float("nan"),
-        }
+        report = MetricReport()
+        report.record(
+            "error_rate", (wrong_points / scored_points) if scored_points else float("nan")
+        )
+        report.record("error_cluster_count", float(clusters))
+        report.record(
+            "error_clusters_per_frame", clusters / frames_seen if frames_seen else float("nan")
+        )
         for class_index in range(num_classes):
             name = class_token(class_index, state.class_names)
-            report[f"error_rate_{name}"] = (
+            report.record(
+                f"error_rate_{name}",
                 wrong_per_class[class_index] / scored_per_class[class_index]
                 if scored_per_class[class_index]
-                else float("nan")
+                else float("nan"),
             )
-            report[f"error_cluster_count_{name}"] = float(clusters_per_class[class_index])
+            report.record(f"error_cluster_count_{name}", float(clusters_per_class[class_index]))
         return report
 
     def _clusters(self, coord: np.ndarray) -> int:

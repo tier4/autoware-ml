@@ -21,6 +21,10 @@ from jaxtyping import Bool, Float32, Int64
 import torch
 import torch.nn as nn
 
+from autoware_ml.models.common.multiview_image_encoder import (
+    MultiviewFeatures,
+    encode_multiview_pyramid,
+)
 from autoware_ml.models.detection3d.view_transforms.depth_lss import (
     BEVPoolResult,
     DepthLSSTransform,
@@ -61,7 +65,7 @@ class BEVFusionCamera(nn.Module):
 
     def extract_image_features(
         self, image_batch: Float32[torch.Tensor, "batch_size num_cams 3 height width"]
-    ) -> Float32[torch.Tensor, "batch_size num_cams channels feature_height feature_width"]:
+    ) -> MultiviewFeatures:
         """Encode multiview images into the neck features expected by the view transform.
 
         Args:
@@ -70,25 +74,7 @@ class BEVFusionCamera(nn.Module):
         Returns:
             Neck feature tensor consumed by the view transform.
         """
-        batch_size, num_cams, channels, image_height, image_width = image_batch.shape
-        flat_images = image_batch.view(batch_size * num_cams, channels, image_height, image_width)
-        image_features = self.img_backbone(flat_images)
-        if isinstance(image_features, torch.Tensor):
-            image_features = (image_features,)
-        image_features = self.img_neck(image_features)
-        primary_feature = (
-            image_features[0] if isinstance(image_features, (list, tuple)) else image_features
-        )
-        _, primary_feature_channels, primary_feature_height, primary_feature_width = (
-            primary_feature.shape
-        )
-        return primary_feature.view(
-            batch_size,
-            num_cams,
-            primary_feature_channels,
-            primary_feature_height,
-            primary_feature_width,
-        )
+        return encode_multiview_pyramid(self.img_backbone, self.img_neck, image_batch)[0]
 
     def forward(
         self,
@@ -97,10 +83,7 @@ class BEVFusionCamera(nn.Module):
         camera_intrinsics: Float32[torch.Tensor, "batch_size num_cams 3 3"],
         aug_lidar2cam: Float32[torch.Tensor, "batch_size num_cams 4 4"],
         geom_feats_precomputed: BEVPoolResult | None = None,
-        image_features: Float32[
-            torch.Tensor, "batch_size num_cams channels feature_height feature_width"
-        ]
-        | None = None,
+        image_features: MultiviewFeatures | None = None,
         img_aug_matrix: Float32[torch.Tensor, "batch_size num_cams 4 4"] | None = None,
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         """Encode multiview images into a BEV feature map.

@@ -52,11 +52,12 @@ class PeriodicCheckpoint(L.Callback):
 
     A stop request is a file: the launcher creates the path named by the
     :attr:`STOP_FILE_ENV` environment variable (or ``stop_file``) when the time
-    limit approaches. Every rank checks for it at the end of every batch, the ranks
-    agree on the decision through one all-reduce, save a checkpoint together and set
+    limit approaches, or a user creates it to stop the run by hand. Every rank
+    checks for it at the end of every batch, the ranks agree on the decision
+    through one all-reduce, save a checkpoint together and set
     ``trainer.should_stop``. Signals are not used for this: Lightning's SIGTERM
     handler broadcasts from inside the signal handler, which deadlocks against the
-    collective the ranks are already running (stage 2 of the foundation model hung
+    collective the ranks are already running (an eight GPU run hung
     for its whole 15 minute grace period and was hard-killed without a requeue).
     """
 
@@ -269,7 +270,8 @@ class PeriodicCheckpoint(L.Callback):
 
     def _save(self, trainer: L.Trainer) -> None:
         """Write the checkpoint on every rank's strategy, then rotate on rank zero."""
-        assert self.dirpath is not None
+        if self.dirpath is None:
+            raise RuntimeError("PeriodicCheckpoint has no dirpath; setup() runs before any save.")
         filepath = os.path.join(
             self.dirpath,
             self.filename.format(epoch=trainer.current_epoch, step=trainer.global_step),

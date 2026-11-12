@@ -1,6 +1,4 @@
 # Coarse taxonomy of nuScenes
-_target_: autoware_ml.databases.taxonomy.DatabaseTaxonomy
-_convert_: all
 
 defaults:
   - /database/nuscenes/taxonomy/detection3d@detection3d: default_coarse

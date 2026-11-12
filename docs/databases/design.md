@@ -117,7 +117,7 @@ class BaseDatabase:
         cache_path: str,
         cache_file_prefix_name: str,
         num_workers: int,
-        taxonomy: DatabaseTaxonomy,
+        vocabulary: LabelVocabulary,
         box3d_pipelines: Sequence[Box3DPipeline],
         lidar_intensity_scale: float,
         lidar_pointcloud_num_features: int,
@@ -158,31 +158,35 @@ class Scenarios(BaseModel):
         raise NotImplementedError("Subclasses must implement build_scenarios!")
 ```
 
-### Label sets, category aliases and record options
+### Label sets, category aliases and dataset options
 
-A taxonomy level may declare `class_sets`: named groups of at least two of its classes. A fine
-label mapped to a set names a point that belongs to one of the set's classes without saying
-which. Such points resolve to the label index `num_classes + k` for set `k`; the segmentation
-head trains the summed probability of the set for them (cross entropy of the marginal, also
-after the voxel reduction of the targets), leaves them out of the Lovasz term, and every
-metric skips them because the target is outside the class range. This is how a corpus
-annotated at a coarser specification than the level supervises exactly what it knows instead
-of forcing a guess. The `foundation` level uses it for the old J6 gen2 specification
-(`manmade` covering poles, signs and barriers; curbs inside the flat surfaces) and for the
-pseudo labels predicted at that specification.
+A dataset may be annotated at a coarser specification than the classes a model trains: an
+older annotation specification may label `manmade` for what the trained classes split into
+buildings, poles, signs and barriers. A taxonomy declares such coarser labels as `class_sets`,
+each a *label set*: a name for at least two of its classes. A fine label mapped to a label set
+says that a point belongs to one of the set's classes, but not to which one.
 
-Raw category names are shared across corpora, but their meaning is not: `sidewalk` in the old
-specification still contains the curbs, in the new one it does not. A dataset's
-`DatasetParams.category_aliases` maps such raw names to alias names (`legacy_sidewalk`) when
-its record table is generated; the vocabulary of the level lists the aliases as fine names of
-their own and the level maps them to the class or set they mean there. Only the foundation
-vocabularies list the aliases, so a corpus with aliases is bound to that level.
+- Its points get the label index `num_classes + k` for the set at position `k`.
+- The segmentation head trains them on the summed probability of the set's classes (cross
+  entropy of the marginal, also after the voxel reduction of the targets) and leaves them out
+  of the Lovasz term.
+- Every metric skips them, because their index is outside the class range.
 
-`DatasetParams` also carries `semantic_masks` (keep only the samples whose LiDAR frame has a
-semantic mask, for a corpus labelled at a lower rate than it was recorded) and `camera_frames`
-(off for a LiDAR only corpus or a mirror without the images). These options, the aliases and
-the label sets enter the database hash only when they differ from their defaults, so the
-record tables of every other database keep their hash.
+So the dataset supervises exactly what it knows instead of forcing a guess.
+
+Raw category names are shared across datasets, but their meaning is not: `sidewalk` in an
+older specification may still contain the curbs, in a newer one not. A dataset's
+`DatasetParams.category_aliases` renames such raw names (`sidewalk` to `legacy_sidewalk`) when
+its record table is generated. The vocabulary lists the renamed categories as fine names of
+their own, and the taxonomy maps them to the class or label set they mean there. A dataset with
+aliases therefore needs a vocabulary that lists them.
+
+`DatasetParams` has one more dataset option, `require_semantic_mask`: keep only the samples
+whose LiDAR frame has a semantic mask, for a dataset labelled at a lower rate than it was
+recorded.
+
+The dataset options and the label sets enter the database hash only when they differ from their
+defaults, so the record tables of every other database keep their hash.
 
 ### Packed LiDAR frames
 
@@ -216,8 +220,8 @@ See `autoware_ml/databases/t4pack/t4pack.py`.
 
 ### Record Generation
 
-There is no separate generation entrypoint. A task config composes its database from
-`autoware_ml/configs/database/`, Hydra instantiates it, and the datamodule builds the record
+There is no separate generation entrypoint. A task config composes its database from the
+`database` config group, Hydra instantiates it, and the datamodule builds the record
 table of every database that has no cache yet in `prepare_data()`, which Lightning calls once
 on the main node before `setup()`:
 
@@ -234,11 +238,10 @@ the cached table. Override the generation parameters from the command line with 
 autoware-ml train --config-name <task>/<model>/<config> database.num_workers=32
 ```
 
-The table is written under `cache_root_path`, `<data_root_path>/.cache` next to the data by
-default where `data_root_path` is `AUTOWARE_ML_DATA_PATH`, as
-`<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet`. The hash covers the scenario
-lists and every field that changes the records, so a changed database writes a new table next
-to the old one. See [Configuration Guide](../user-guide/configuration.md) for the path keys.
+The table is written under `cache_root_path`, `AUTOWARE_ML_CACHE_PATH` of `.env` or `.cache` of
+the repository root, as `<cache_path>/<cache_file_prefix_name>_<database_hash>.parquet`. The
+hash covers the scenario lists and every field that changes the records, so a changed database
+writes a new table next to the old one. See [Configuration Guide](../user-guide/configuration.md) for the path keys.
 
 ## Extending the Database
 
@@ -257,4 +260,4 @@ to the old one. See [Configuration Guide](../user-guide/configuration.md) for th
 | `autoware_ml/databases/database_interface.py` | `DatabaseInterface` protocol                          |
 | `autoware_ml/databases/base_database.py`      | Shared `BaseDatabase` implementation                  |
 | `autoware_ml/datamodule/data_module.py`       | `prepare_data()` builds the record tables             |
-| `autoware_ml/configs/database/`               | YAML configs of every database                        |
+| `autoware_ml/configs/database/`               | Bundled database configs                              |

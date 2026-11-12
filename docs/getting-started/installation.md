@@ -276,7 +276,7 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
     Then run with:
 
     ```bash
-    ./docker/container.sh --run --data-path /path/to/your/datasets
+    ./docker/container.sh --run
     ```
 
     The container image builds the full locked contributor `pixi`
@@ -327,6 +327,17 @@ Autoware-ML runs well in a Docker container with GPU support. We encourage you t
         pixi shell --environment dev
         ```
 
+    === "Contributor (with t4sparse)"
+
+        The `dev` environment plus `t4sparse` (see
+        [PointTransformerV3](../models/ptv3.md#mixed-precision)). Currently only available to TIER IV members.
+
+        ```bash
+        pixi install --locked --environment t4sparse
+        pixi run --environment t4sparse setup-project
+        pixi shell --environment t4sparse
+        ```
+
     The separate `docs` environment is reserved for documentation-only
     workflows and CI - you do not need to install it manually.
 
@@ -346,24 +357,31 @@ We assume all datasets are stored in the same directory. You can organize paths 
                   ├── ...
 ```
 
-The directory is mounted read only into the container. Everything the framework writes, such
-as the record tables it generates from the datasets, goes below the workspace. You can set the
-internal environment variable `AUTOWARE_ML_DATA_PATH` using the provided script:
+## Settings
+
+The settings of a checkout live in `.env` at the repository root. Docker and `pixi` runs read
+the same file, and it is the only place autoware-ml reads them from. Set the dataset root
+there:
 
 ```bash
-cd ~/autoware-ml
-./set_data_path.sh /path/to/your/datasets
-source ~/.bashrc
+# Required, read only.
+AUTOWARE_ML_DATA_PATH=/path/to/your/datasets
 ```
 
-The following files will use this variable to locate your datasets:
+| Setting                      | Meaning                                                                                                   | When empty                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `AUTOWARE_ML_DATA_PATH`      | Root of the datasets                                                                                      | Commands that read data stop with an error |
+| `AUTOWARE_ML_CONFIGS_PATH`   | External configs, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists) | Only the bundled configs                   |
+| `AUTOWARE_ML_SCENARIOS_PATH` | Root of the scenario lists, the T4Dataset configs read `t4dataset/` below it                              | T4Dataset configs stop with an error       |
+| `AUTOWARE_ML_CACHE_PATH`     | Root of the cached record tables                                                                          | `.cache` of the repository root            |
+| `AUTOWARE_ML_WORKING_DIR`    | Root of the experiment outputs                                                                            | The repository root                        |
 
-- `./docker/container.sh --run`
-- `.devcontainer/devcontainer.json`
-- Model config files
+Every setting is an absolute host path. `./docker/container.sh --run` and the
+[dev container](devcontainer.md) mount each setting that is set at the same path inside the
+container, the dataset root read only.
 
-Record tables are cached in `.cache/` of the data mount, `AUTOWARE_ML_DATA_PATH`, next to the data
-they are built from. Override `cache_root_path` to use another directory.
+Record tables are cached below `AUTOWARE_ML_CACHE_PATH`, so the dataset root stays read only.
+Users who share the datasets can point it at a shared directory, so every table is built once.
 
 ## Next Steps
 

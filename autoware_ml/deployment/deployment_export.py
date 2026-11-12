@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import logging
 from pathlib import Path
 from types import MappingProxyType
@@ -20,10 +20,9 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict
 from omegaconf import DictConfig, OmegaConf
 
-from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.deploy import (
-    resolve_export_specs,
+    ExportSpec,
     merge_module_onnx_cfg,
     should_export_stage,
     supports_export_stage,
@@ -60,8 +59,8 @@ class DeploymentExport:
         self,
         deploy_cfg: DictConfig,
         output_dir: Path,
-        datamodule: DataModule,
         model: ModuleBaseModel,
+        export_specs: Mapping[str, ExportSpec],
         config_name: str,
         release: str | None,
         tracker: str | None = None,
@@ -72,8 +71,9 @@ class DeploymentExport:
         Args:
             deploy_cfg: ``deploy`` section of the Hydra configuration.
             output_dir: Directory that receives the exported ONNX and TensorRT files.
-            datamodule: Data module providing the example batch used for tracing.
             model: Trained model whose export modules are traced.
+            export_specs: The model's export specifications, resolved and checked by the caller
+                (see :func:`autoware_ml.utils.deploy.resolve_export_specs`).
             config_name: User-facing config name stamped into every ONNX module.
             release: ``vMAJOR.MINOR.PATCH`` stamped into every ONNX module, or ``None``
                 for an unversioned export.
@@ -82,8 +82,8 @@ class DeploymentExport:
         """
         self.deploy_cfg = deploy_cfg
         self.output_dir = output_dir
-        self.datamodule = datamodule
         self.model = model
+        self.export_specs: MappingProxyType[str, ExportSpec] = MappingProxyType(dict(export_specs))
         self.config_name = config_name
         self.release = release
         self.tracker = tracker
@@ -91,18 +91,11 @@ class DeploymentExport:
         self.device = self.model.device
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def prepare_export_specs(self) -> MappingProxyType[str, dict]:
-        """Prepare export specifications for the model."""
-        export_specs = resolve_export_specs(
-            datamodule=self.datamodule, model=self.model, device=self.device
-        )
-        return MappingProxyType(export_specs)
-
     def export(self) -> DeploymentExportOutputs:
         """Export the trained model for deployment."""
         logger.info("Starting model export...")
 
-        export_specs = self.prepare_export_specs()
+        export_specs = self.export_specs
         export_git_sha = get_git_sha()
 
         onnx_exported_paths: Sequence[Path] = []
@@ -121,15 +114,7 @@ class DeploymentExport:
                     )
                 else:
                     validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
-                    export_to_onnx(
-                        export_spec.module,
-                        export_spec.args,
-                        module_onnx_cfg,
-                        export_spec.input_param_names,
-                        export_spec.output_names,
-                        export_spec.dynamic_axes,
-                        module_onnx_path,
-                    )
+                    export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
                     modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                     if should_modify_graph(modify_graph_cfg):
                         module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)

@@ -17,12 +17,12 @@ nav = [
   { "Framework" = [
     { "Design" = "framework/design.md" },
     { "Metrics" = "framework/metrics.md" },
+    { "Visualization" = "framework/visualization.md" },
     { "Identity" = "framework/identity.md" },
     { "Troubleshooting" = "framework/troubleshooting.md" },
   ]},
   { "Databases" = [
     { "Design" = "databases/design.md" },
-    { "Foundation level mapping" = "databases/foundation_level_mapping.md" },
     { "Schemas" = "databases/schemas.md" },
     { "T4Dataset" = "databases/t4dataset.md" },
   ]},
@@ -31,7 +31,6 @@ nav = [
     { "Configuration" = "user-guide/configuration.md" },
     { "Training" = "user-guide/training.md" },
     { "Preemptible training" = "user-guide/preemption_resume.md" },
-    { "Offline foundation model" = "user-guide/foundation_model.md" },
     { "MLflow" = "user-guide/mlflow.md" },
     { "Optuna" = "user-guide/optuna.md" },
     { "Deployment" = "user-guide/deployment.md" },

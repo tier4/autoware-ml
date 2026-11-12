@@ -1,0 +1,16 @@
+car: { group: grouped_vehicle }
+truck: { group: grouped_vehicle }
+bus: { group: grouped_vehicle }
+motorcycle: { group: grouped_two_wheeler }
+bicycle: { group: grouped_two_wheeler }
+pedestrian: { group: grouped_living }
+animal: { group: grouped_living }
+barrier: { group: grouped_obstacle }
+traffic_cone: { group: grouped_obstacle }
+debris: { group: grouped_obstacle }
+manmade: { group: grouped_static_structure }
+vertical_thin: { group: grouped_static_structure }
+vegetation: { group: grouped_static_structure }
+driveable_flat: { group: grouped_flat_surface }
+non_driveable_flat: { group: grouped_flat_surface }
+noise: { group: grouped_artifact }

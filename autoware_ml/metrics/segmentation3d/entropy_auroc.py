@@ -19,6 +19,7 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     PointCloudSeg3DState,
     valid_point_mask,
@@ -69,7 +70,7 @@ class UncertaintyUsefulness(Metric[PointCloudSeg3DState]):
         if self.num_bins < 2:
             raise ValueError("num_bins must be >= 2.")
 
-    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> MetricReport:
         """Accumulate per-frame entropy histograms and score the AUROC.
 
         Args:
@@ -77,7 +78,7 @@ class UncertaintyUsefulness(Metric[PointCloudSeg3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         wrong_hist = np.zeros(self.num_bins, dtype=np.float64)
         correct_hist = np.zeros(self.num_bins, dtype=np.float64)
@@ -99,10 +100,13 @@ class UncertaintyUsefulness(Metric[PointCloudSeg3DState]):
 
         # Every key is always present, a bucket without errors reports NaN rather
         # than a key that comes and goes between epochs.
-        return {
-            "entropy_auroc": binned_auroc(wrong_hist, correct_hist),
-            "mean_entropy_wrong": wrong_entropy / wrong_count if wrong_count else float("nan"),
-            "mean_entropy_correct": (
-                correct_entropy / correct_count if correct_count else float("nan")
-            ),
-        }
+        report = MetricReport()
+        report.record("entropy_auroc", binned_auroc(wrong_hist, correct_hist))
+        report.record(
+            "mean_entropy_wrong", wrong_entropy / wrong_count if wrong_count else float("nan")
+        )
+        report.record(
+            "mean_entropy_correct",
+            correct_entropy / correct_count if correct_count else float("nan"),
+        )
+        return report

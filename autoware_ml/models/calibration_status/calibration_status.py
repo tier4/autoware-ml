@@ -147,7 +147,11 @@ class CalibrationStatusClassifier(ModuleBaseModel):
                 head=self.head,
             ),
             args=(_image_data(batch_inputs).fused_images(),),
-            input_param_names=["fused_img"],
+            # The tensor names the autoware_calibration_status_classifier node binds; the
+            # wrapper's parameter name does not matter to the graph.
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes={"input": {2: "height", 3: "width"}},
         )
 
 

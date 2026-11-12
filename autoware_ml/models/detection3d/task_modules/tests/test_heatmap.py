@@ -14,7 +14,7 @@
 
 """Unit tests for heatmap utilities."""
 
-from typing import Sequence
+from collections.abc import Sequence
 import math
 import unittest
 

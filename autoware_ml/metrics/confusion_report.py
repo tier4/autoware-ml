@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from autoware_ml.metrics.detection3d.naming import metric_token
+from autoware_ml.metrics.report import MetricReport
 
 
 def confusion_class_token(index: int, class_names: tuple[str, ...] | None) -> str:
@@ -37,7 +38,7 @@ def confusion_class_token(index: int, class_names: tuple[str, ...] | None) -> st
     return metric_token(class_names[index])
 
 
-def confusion_cells(matrix: np.ndarray, class_names: tuple[str, ...] | None) -> dict[str, float]:
+def confusion_cells(matrix: np.ndarray, class_names: tuple[str, ...] | None) -> MetricReport:
     """Flatten a ``(C, C)`` true vs. pred matrix into ``confusion_<true>__<pred>`` counts.
 
     Args:
@@ -48,10 +49,12 @@ def confusion_cells(matrix: np.ndarray, class_names: tuple[str, ...] | None) -> 
         One count per cell, keyed by the true and predicted class tokens.
     """
     num_classes = int(matrix.shape[0])
-    cells: dict[str, float] = {}
+    cells = MetricReport()
     for true_index in range(num_classes):
         true_name = confusion_class_token(true_index, class_names)
         for pred_index in range(num_classes):
             pred_name = confusion_class_token(pred_index, class_names)
-            cells[f"confusion_{true_name}__{pred_name}"] = float(matrix[true_index, pred_index])
+            cells.record(
+                f"confusion_{true_name}__{pred_name}", float(matrix[true_index, pred_index])
+            )
     return cells

@@ -1,6 +1,13 @@
 name: docs
 
 on:
+  pull_request:
+    paths:
+      - docs/**
+      - zensical.toml
+      - pyproject.toml
+      - pixi.lock
+      - .github/workflows/docs.yml
   push:
     branches:
       - main
@@ -10,20 +17,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
     steps:
-      - uses: actions/configure-pages@v6
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.1.0
+        with:
+          persist-credentials: false
       - name: Install pixi
         env:
           PIXI_VERSION: 0.80.0
@@ -48,8 +52,23 @@ jobs:
         run: pixi install --locked --environment docs
       - name: Build docs
         run: pixi run --environment docs docs
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v4.0.0
         with:
           path: site
-      - uses: actions/deploy-pages@v4
+
+  deploy:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    steps:
+      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/deploy-pages@v4.0.5
         id: deployment

@@ -18,7 +18,8 @@ A detection corpus is dominated by cars, and a frame that carries a rare class i
 often as one that does not. Repeat factor sampling gives every frame a weight from the
 rarest category it carries, so frames with rare objects come up more often within an epoch
 of the same length. The weights come straight from the record table, before any transform.
-The scene streaming sampler feeds temporal models whole scenes frame by frame.
+The scene streaming sampler feeds temporal models scenes frame by frame, one stream per batch
+position.
 """
 
 from __future__ import annotations
@@ -31,12 +32,13 @@ from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import Dataset, Sampler
+from torch.utils.data import Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
+from autoware_ml.databases.taxonomy import LabelTaxonomy
+from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset, PaddingSlot
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -59,8 +61,8 @@ class FrameSamplingConfig:
       low_pedestrian_height_threshold: Height in meters below which a pedestrian counts as a
         low pedestrian, for example a child or a person bending down.
       low_pedestrian_bev_range: BEV range the center of a low pedestrian has to fall in.
-      class_names: Trained class names, the categories a box is counted into.
-      ignore_index: Label index of the boxes of no trained class.
+      taxonomy: Detection taxonomy of the run, its classes are the categories a box is counted
+        into.
       filter_attributes: Class and attribute pairs of boxes that are not detection targets,
         same as the attribute filter transform.
       seed: Seed of the draw, every epoch adds its number.
@@ -71,8 +73,7 @@ class FrameSamplingConfig:
     pedestrian_class_name: str
     low_pedestrian_height_threshold: float
     low_pedestrian_bev_range: Sequence[float]
-    class_names: Sequence[str]
-    ignore_index: int
+    taxonomy: LabelTaxonomy
     filter_attributes: Sequence[Sequence[str]]
     seed: int
 
@@ -89,11 +90,11 @@ class FrameSamplingConfig:
                     f"{name} must be [x_min, y_min, x_max, y_max] with min below max, got "
                     f"{bev_range}."
                 )
-        if self.pedestrian_class_name not in self.class_names:
+        if self.pedestrian_class_name not in self.taxonomy.class_names:
             raise ValueError(
                 f"The pedestrian class {self.pedestrian_class_name!r} is not a trained class."
             )
-        if LOW_PEDESTRIAN_CATEGORY in self.class_names:
+        if LOW_PEDESTRIAN_CATEGORY in self.taxonomy.class_names:
             raise ValueError(
                 f"The low pedestrian category {LOW_PEDESTRIAN_CATEGORY!r} clashes with a "
                 "trained class."
@@ -108,7 +109,7 @@ class FrameSamplingConfig:
     @property
     def categories(self) -> tuple[str, ...]:
         """Sampling categories, the trained classes and the low pedestrian bucket."""
-        return (*self.class_names, LOW_PEDESTRIAN_CATEGORY)
+        return (*self.taxonomy.class_names, LOW_PEDESTRIAN_CATEGORY)
 
 
 def compute_frame_sampling_weights(
@@ -211,19 +212,13 @@ def _record_category_counts(
     excluded = config.excluded
     counts: dict[str, int] = {}
     for box in boxes:
-        # A box keeps its annotated name, its class is read from its label index
-        label_index = box[Box3DDatasetSchema.BOX3D_LABEL_INDEX.name]
-        if label_index == config.ignore_index:
+        # A box keeps its fine name, the taxonomy folds it onto its class
+        label_name = box[Box3DDatasetSchema.BOX3D_LABEL_NAME.name]
+        class_name = config.taxonomy.class_name(label_name)
+        if class_name is None:
             continue
-        if not 0 <= label_index < len(config.class_names):
-            raise ValueError(
-                f"Box label index {label_index} is outside the {len(config.class_names)} "
-                "trained classes."
-            )
         if not box[Box3DDatasetSchema.BOX3D_VALID.name]:
             continue
-        class_name = config.class_names[label_index]
-        label_name = box[Box3DDatasetSchema.BOX3D_LABEL_NAME.name]
         if box[Box3DDatasetSchema.BOX3D_NUM_LIDAR_POINTS.name] <= 0:
             continue
         attributes = box[Box3DDatasetSchema.BOX3D_ATTRIBUTES.name]
@@ -247,6 +242,13 @@ def _center_in_range(params: Sequence[float], bev_range: Sequence[float]) -> boo
     """Whether the box center lies inside [x_min, y_min, x_max, y_max]."""
     x, y = params[Box3DFieldIndex.X], params[Box3DFieldIndex.Y]
     return bev_range[0] <= x <= bev_range[2] and bev_range[1] <= y <= bev_range[3]
+
+
+def _world_size_and_rank() -> tuple[int, int]:
+    """Return the world size and the rank of this process, (1, 0) outside a process group."""
+    if dist.is_available() and dist.is_initialized():
+        return dist.get_world_size(), dist.get_rank()
+    return 1, 0
 
 
 class DistributedWeightedRandomSampler(DistributedSampler):
@@ -273,8 +275,7 @@ class DistributedWeightedRandomSampler(DistributedSampler):
         """
         if len(weights) != len(dataset):
             raise ValueError(f"Expected {len(dataset)} sampler weights, got {len(weights)}.")
-        num_replicas = dist.get_world_size() if dist.is_available() and dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+        num_replicas, rank = _world_size_and_rank()
         super().__init__(
             dataset,
             num_replicas=num_replicas,
@@ -304,114 +305,125 @@ class DistributedWeightedRandomSampler(DistributedSampler):
         return iter(indices)
 
 
-class GroupStreamingSampler(Sampler[int]):
-    """Interleave scene-contiguous frame indices across dataloader lanes.
+class GroupStreamingSampler(DistributedSampler):
+    """Feed every batch position the frames of one scene after another, in time order.
 
-    Each of the ``batch_size`` dataloader lanes walks whole scenes frame by
-    frame, so consecutive iterations feed consecutive frames of the same scene
-    into the same batch position. Stateful temporal models can therefore carry
-    per-lane memory across iterations, with scene changes signalled by the
-    dataset's ``prev_exists`` metadata. Scenes are shuffled per epoch and
-    partitioned round-robin over distributed ranks and lanes. Each rank builds
-    its own index list, and every list is then truncated to the length of the
-    shortest one, so all ranks iterate the same number of steps and every
-    batch stays complete. Without that equalization the ranks would run a
-    different number of steps and collective operations would deadlock.
+    A lane is one position of a rank's batch. Across iterations a lane walks its frames
+    one after another, so a temporal model can keep one memory per lane; it tells from
+    the frame metadata of the batch where a lane starts a new stream and resets that
+    lane's memory there.
 
-    The sampler shards by rank itself, so the trainer must run with
-    ``use_distributed_sampler: false`` (the StreamPETR base config does):
-    Lightning would otherwise wrap it in a ``DistributedSamplerWrapper``,
-    re-striding the indices and destroying the lane/scene contiguity.
+    Every epoch the scenes are joined, in order or shuffled by ``seed + epoch``, and their
+    frames are cut into ``num_lanes`` (``num_replicas * batch_size``) lanes whose lengths
+    differ by at most one; rank ``r`` serves lanes ``r * batch_size`` to
+    ``(r + 1) * batch_size - 1``. A cut can fall inside a scene, and the lane after it
+    starts a new stream there.
+
+    Every lane is padded to ``rounds_per_epoch``, ``ceil(total_frames / num_lanes)`` rounds,
+    in every split. Every rank then serves the same number of batches, so none waits forever
+    in a DDP collective (the gradient sync of every training step, or an ``all_reduce`` a
+    model may run in its validation loss), and the epoch length never changes (Lightning
+    derives the validation interval and the total step count once, from the first epoch). A
+    lane one frame shorter than the others ends with a ``PaddingSlot`` holding the index of
+    its last frame, which the batch flags in ``ModelGTBatch.padding_mask``. Fewer than
+    ``num_lanes`` slots of an epoch are padding, and no frame is dropped or served twice as a
+    real sample, in training, evaluation and prediction alike.
+
+    As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
+    only every ``num_replicas``-th index of each rank and make its lanes skip frames.
     """
 
     def __init__(
         self,
         dataset: Dataset,
         batch_size: int,
-        shuffle: bool = True,
-        seed: int = 0,
+        *,
+        shuffle: bool,
+        seed: int,
     ) -> None:
         """Initialize the streaming sampler.
 
         Args:
-            dataset: Dataset exposing ``scene_index_groups()`` with
-                scene-contiguous dataset indices.
+            dataset: Dataset exposing ``scene_index_groups()``, the indices of
+                every scene in frame order.
             batch_size: Number of dataloader lanes fed in parallel. Must match
                 the dataloader batch size.
             shuffle: Whether to shuffle the scene order every epoch.
-            seed: Base seed for the per-epoch scene shuffle.
+            seed: Base seed for the per-epoch scene shuffle, the experiment seed.
         """
+        num_replicas, rank = _world_size_and_rank()
+        # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
+        # __iter__ below replace them.
+        super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle, seed=seed)
         self.scene_groups = dataset.scene_index_groups()
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.seed = seed
-        self.epoch = 0
-        self._cached_epoch: int | None = None
-        self._cached_indices: list[list[int]] = []
-        if dist.is_available() and dist.is_initialized():
-            self.rank = dist.get_rank()
-            self.world_size = dist.get_world_size()
-        else:
-            self.rank = 0
-            self.world_size = 1
+        self.total_frames = sum(len(group) for group in self.scene_groups)
+        self._validate_lanes()
 
-    def _epoch_indices(self, epoch: int) -> list[list[int]]:
-        """Build (or reuse) the per-rank interleaved index lists for one epoch."""
-        if epoch == self._cached_epoch:
-            return self._cached_indices
-        if self.shuffle:
-            generator = torch.Generator()
-            generator.manual_seed(self.seed + epoch)
-            scene_order = torch.randperm(len(self.scene_groups), generator=generator).tolist()
-        else:
-            scene_order = list(range(len(self.scene_groups)))
+    @property
+    def num_lanes(self) -> int:
+        """Lanes over every rank, ``num_replicas * batch_size``."""
+        return self.num_replicas * self.batch_size
 
-        per_rank_indices: list[list[int]] = []
-        for rank in range(self.world_size):
-            lanes: list[list[int]] = [[] for _ in range(self.batch_size)]
-            for scene_position, scene_index in enumerate(scene_order[rank :: self.world_size]):
-                lanes[scene_position % self.batch_size].extend(self.scene_groups[scene_index])
-            rounds = min(len(lane) for lane in lanes)
-            indices = [lane[round_index] for round_index in range(rounds) for lane in lanes]
-            per_rank_indices.append(indices)
+    @property
+    def rounds_per_epoch(self) -> int:
+        """Rounds every rank serves per epoch in every split, the longest lane's length."""
+        return math.ceil(self.total_frames / self.num_lanes)
 
-        min_length = min(len(indices) for indices in per_rank_indices)
-        if min_length == 0:
+    def _validate_lanes(self) -> None:
+        """Reject a split with fewer frames than lanes, which would leave a lane empty."""
+        if self.total_frames < self.num_lanes:
             raise ValueError(
-                f"GroupStreamingSampler cannot fill {self.world_size} rank(s) x "
-                f"{self.batch_size} lane(s) from {len(self.scene_groups)} scene(s); "
+                f"GroupStreamingSampler cannot fill {self.num_replicas} rank(s) x "
+                f"{self.batch_size} lane(s) from {self.total_frames} frame(s); "
                 "reduce batch_size or world size."
             )
-        self._cached_epoch = epoch
-        self._cached_indices = [indices[:min_length] for indices in per_rank_indices]
-        total_frames = sum(len(group) for group in self.scene_groups)
-        dropped = total_frames - min_length * self.world_size
-        if dropped:
-            logger.warning(
-                "GroupStreamingSampler serves %d/%d frames this epoch; %d tail frames are "
-                "trimmed to keep %d rank(s) x %d lane(s) aligned.",
-                min_length * self.world_size,
-                total_frames,
-                dropped,
-                self.world_size,
-                self.batch_size,
-            )
-        return self._cached_indices
+
+    def _scene_order(self, epoch: int) -> Sequence[int]:
+        """Order the scenes for one epoch: as listed, or shuffled by the epoch's seed."""
+        if not self.shuffle:
+            return range(len(self.scene_groups))
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + epoch)
+        return torch.randperm(len(self.scene_groups), generator=generator).tolist()
+
+    def _cut_lanes(self, scene_order: Sequence[int]) -> Sequence[Sequence[int]]:
+        """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length."""
+        frames = [index for scene_index in scene_order for index in self.scene_groups[scene_index]]
+        bounds = [lane * len(frames) // self.num_lanes for lane in range(self.num_lanes + 1)]
+        return [frames[start:end] for start, end in zip(bounds[:-1], bounds[1:])]
+
+    @staticmethod
+    def _pad_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
+        """End a lane with padding slots holding its last frame, up to a length of ``rounds``."""
+        return [*lane, *[PaddingSlot(lane[-1])] * (rounds - len(lane))]
+
+    def _log_epoch(self, epoch: int) -> None:
+        """Log the padding slots that keep the lanes of an epoch aligned."""
+        logger.info(
+            "GroupStreamingSampler epoch %d: %d frames in %d rank(s) x %d lane(s) of %d "
+            "rounds, %d padding slot(s).",
+            epoch,
+            self.total_frames,
+            self.num_replicas,
+            self.batch_size,
+            self.rounds_per_epoch,
+            self.rounds_per_epoch * self.num_lanes - self.total_frames,
+        )
 
     def __iter__(self):
-        """Yield this rank's interleaved indices for the current epoch."""
-        return iter(self._epoch_indices(self.epoch)[self.rank])
+        """Yield this rank's lanes for the current epoch, one frame of every lane a round."""
+        lanes = self._cut_lanes(self._scene_order(self.epoch))
+        first_lane = self.rank * self.batch_size
+        rank_lanes = [
+            self._pad_lane(lane, self.rounds_per_epoch)
+            for lane in lanes[first_lane : first_lane + self.batch_size]
+        ]
+        self._log_epoch(self.epoch)
+        return iter([index for round_frames in zip(*rank_lanes) for index in round_frames])
 
     def __len__(self) -> int:
-        """Return the per-rank sample count of the current epoch."""
-        return len(self._epoch_indices(self.epoch)[self.rank])
-
-    def set_epoch(self, epoch: int) -> None:
-        """Select the epoch used for the scene shuffle.
-
-        Lightning calls this before every training epoch, which is what
-        advances the shuffle; without it every epoch replays the same order.
-        """
-        self.epoch = epoch
+        """Return the per-rank sample count, the same in every epoch and every split."""
+        return self.rounds_per_epoch * self.batch_size

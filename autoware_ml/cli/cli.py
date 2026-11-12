@@ -19,6 +19,7 @@ completion helpers used by the ``autoware-ml`` executable.
 """
 
 import logging
+from enum import StrEnum
 from importlib.metadata import version
 from pathlib import Path
 from typing import NamedTuple
@@ -87,9 +88,10 @@ session_app = typer.Typer(
 )
 
 TASK_CONFIG_PREFIX = "tasks"
-TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.train"
-DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.deploy"
-TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.test"
+TRAIN_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.train"
+DEPLOY_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.deploy"
+TEST_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.test"
+VISUALIZE_ENTRYPOINT_MODULE = "autoware_ml.scripts.cli.visualize"
 CLI_RUNTIME_MODULE = "autoware_ml.cli.runtime"
 
 
@@ -243,7 +245,8 @@ def _resolve_resume_latest(checkpoints_dir: Path, weights: list[str] | None) -> 
     Returns:
         The checkpoint to resume from and the weights to initialize with.
     """
-    from autoware_ml.resume.checkpoint_locator import CheckpointLocator
+    # Imports torch, which the rest of the CLI does not need to start
+    from autoware_ml.resume.checkpoint_locator import CheckpointLocator  # noqa: PLC0415
 
     latest = CheckpointLocator(checkpoints_dir.expanduser()).find_latest()
     if latest is None:
@@ -526,6 +529,171 @@ def test(
     )
 
 
+class VisualizationBackendChoice(StrEnum):
+    """Supported CLI visualization backends."""
+
+    RERUN = "rerun"
+    NOOP = "noop"
+
+
+@app.command(
+    name="visualize",
+    cls=OptionFirstTyperCommand,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def visualize(
+    ctx: typer.Context,
+    config_name: Annotated[
+        str,
+        typer.Option(
+            "--config-name",
+            help="Config name or YAML config path",
+            autocompletion=complete_task_config,
+        ),
+    ],
+    weights: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--weights",
+            help="One or more checkpoint paths to load for a prediction preview "
+            "(repeatable; later checkpoints overwrite earlier ones). Omit to preview the data",
+            autocompletion=complete_checkpoint_path,
+        ),
+    ] = None,
+    mode: Annotated[
+        str,
+        typer.Option("--mode", help="Visualization mode: auto, predictions, or data"),
+    ] = "auto",
+    split: Annotated[
+        str,
+        typer.Option("--split", help="Dataset split to preview: train, val, test, or predict"),
+    ] = "test",
+    sample_index: Annotated[
+        int,
+        typer.Option("--sample-index", help="First dataset sample index to preview"),
+    ] = 0,
+    max_samples: Annotated[
+        int,
+        typer.Option("--max-samples", help="Number of consecutive samples to preview"),
+    ] = 1,
+    prediction_frequency_hz: Annotated[
+        float | None,
+        typer.Option(
+            "--prediction-frequency-hz",
+            help="Also predict the stored lidar frames between two samples at this rate",
+        ),
+    ] = None,
+    backend: Annotated[
+        VisualizationBackendChoice,
+        typer.Option("--backend", help="Visualization backend: rerun or noop"),
+    ] = VisualizationBackendChoice.RERUN,
+    device: Annotated[
+        str,
+        typer.Option("--device", help="Preview execution device: cpu, cuda, or auto"),
+    ] = "auto",
+    point_labels: Annotated[
+        bool,
+        typer.Option("--point-labels/--no-point-labels", help="Log per-point label text"),
+    ] = False,
+    point_color_mode: Annotated[
+        str,
+        typer.Option("--point-color-mode", help="Point colors: semantic, intensity, or solid"),
+    ] = "semantic",
+    camera_frustums_visible: Annotated[
+        bool,
+        typer.Option(
+            "--camera-frustums/--no-camera-frustums",
+            help="Show camera frustums and image planes initially in 3D views",
+        ),
+    ] = False,
+    web_port: Annotated[
+        int,
+        typer.Option("--web-port", help="Rerun web viewer HTTP port"),
+    ] = 9090,
+    grpc_port: Annotated[
+        int,
+        typer.Option("--grpc-port", help="Rerun SDK gRPC port"),
+    ] = 9876,
+    wait: Annotated[
+        bool,
+        typer.Option("--wait/--no-wait", help="Keep the Rerun web server alive after logging"),
+    ] = True,
+    recording_id: Annotated[
+        str | None,
+        typer.Option("--recording-id", help="Optional visualization recording ID"),
+    ] = None,
+    sync_views: Annotated[
+        bool,
+        typer.Option(
+            "--sync-views/--no-sync-views",
+            help="Also serve the synced comparison page, whose two 3D views share one eye",
+        ),
+    ] = False,
+    sync_port: Annotated[
+        int,
+        typer.Option("--sync-port", help="HTTP port of the synced comparison page"),
+    ] = 9091,
+) -> None:
+    """Preview a dataset split, and the predictions of a model, in the visualization backend.
+
+    Args:
+        ctx: Typer context containing additional Hydra overrides.
+        config_name: Config name or config file path to visualize.
+        weights: Checkpoint paths loaded for a prediction preview, None to preview the data.
+        mode: Whether to preview transformed data, model predictions, or infer the mode
+            automatically from checkpoint availability.
+        split: Dataset split to preview.
+        sample_index: First dataset sample index to visualize.
+        max_samples: Number of consecutive samples to visualize.
+        prediction_frequency_hz: Rate of the prediction-only frames rebuilt from the stored
+            lidar frames between two samples, None to show the samples only.
+        backend: Visualization backend name.
+        device: Preview execution device.
+        point_labels: Whether to log per-point label text.
+        point_color_mode: Point coloring that is initially active.
+        camera_frustums_visible: Whether camera geometry starts visible in 3D views.
+        web_port: HTTP port for the Rerun web viewer.
+        grpc_port: gRPC port used by the Rerun SDK and web viewer proxy.
+        wait: Whether to keep the web viewer server alive after logging.
+        recording_id: Optional explicit recording ID for the preview session.
+        sync_views: Whether to serve the synced comparison page as well.
+        sync_port: HTTP port of the synced comparison page.
+    """
+    hydra_overrides = [
+        f"+visualization.mode={mode}",
+        f"+visualization.split={split}",
+        f"+visualization.sample_index={sample_index}",
+        f"+visualization.max_samples={max_samples}",
+        f"+visualization.backend={backend}",
+        f"+visualization.device={device}",
+        f"+visualization.point_labels={str(point_labels).lower()}",
+        f"+visualization.point_color_mode={point_color_mode}",
+        f"+visualization.camera_frustums_visible={str(camera_frustums_visible).lower()}",
+        f"+visualization.web_port={web_port}",
+        f"+visualization.grpc_port={grpc_port}",
+        f"+visualization.wait={str(wait).lower()}",
+        f"+visualization.sync_views={str(sync_views).lower()}",
+        f"+visualization.sync_port={sync_port}",
+    ]
+    if prediction_frequency_hz is not None:
+        hydra_overrides.append(f"+visualization.prediction_frequency_hz={prediction_frequency_hz}")
+    if weights:
+        hydra_overrides.append("+weights=[" + ",".join(weights) + "]")
+    if recording_id is not None:
+        hydra_overrides.append(f"+visualization.recording_id={recording_id}")
+
+    run_lazy_script(
+        CLI_RUNTIME_MODULE,
+        "run_hydra_entrypoint",
+        entrypoint_module=VISUALIZE_ENTRYPOINT_MODULE,
+        config_name=config_name,
+        stage=None,
+        extra_args=ctx.args,
+        hydra_overrides=hydra_overrides,
+        config_prefix=TASK_CONFIG_PREFIX,
+    )
+
+
 @mlflow_app.command(name="ui", cls=OptionFirstTyperCommand)
 def mlflow_ui(
     host: Annotated[str, typer.Option("--host", "-h", help="Host to listen on")] = "0.0.0.0",
@@ -547,7 +715,7 @@ def mlflow_ui(
         db_path: Path to the SQLite backend store file.
     """
     run_lazy_script(
-        "autoware_ml.scripts.mlflow_wrapper",
+        "autoware_ml.scripts.cli.mlflow_wrapper",
         "run_mlflow_ui",
         host=host,
         port=port,
@@ -599,7 +767,7 @@ def mlflow_export(
         override: Whether to overwrite an existing export directory.
     """
     run_lazy_script(
-        "autoware_ml.scripts.mlflow_wrapper",
+        "autoware_ml.scripts.cli.mlflow_wrapper",
         "export_experiment_from_db",
         db_path=db_path,
         experiment_name=experiment_name,
@@ -652,7 +820,7 @@ def session_start(
         command_args: Command tokens forwarded to the managed shell.
     """
     run_lazy_script(
-        "autoware_ml.scripts.session",
+        "autoware_ml.scripts.cli.session",
         "start_session",
         name=name,
         command_args=command_args or [],
@@ -679,7 +847,7 @@ def session_attach(
     Args:
         name: Name of the session to view.
     """
-    run_lazy_script("autoware_ml.scripts.session", "attach_session", name=name)
+    run_lazy_script("autoware_ml.scripts.cli.session", "attach_session", name=name)
 
 
 @session_app.command(name="detach", cls=OptionFirstTyperCommand)
@@ -694,7 +862,7 @@ def session_detach(
     Args:
         name: Name of the session whose tmux clients should be detached.
     """
-    run_lazy_script("autoware_ml.scripts.session", "detach_session", name=name)
+    run_lazy_script("autoware_ml.scripts.cli.session", "detach_session", name=name)
 
 
 @session_app.command(name="ls", cls=OptionFirstTyperCommand)
@@ -704,7 +872,7 @@ def session_ls() -> None:
     The command prints formatted session information and exits quietly when no
     managed sessions are currently running.
     """
-    output = run_lazy_script("autoware_ml.scripts.session", "list_sessions")
+    output = run_lazy_script("autoware_ml.scripts.cli.session", "list_sessions")
     if output:
         typer.echo(output)
 
@@ -721,7 +889,7 @@ def session_stop(
     Args:
         name: Name of the session to stop.
     """
-    run_lazy_script("autoware_ml.scripts.session", "stop_session", name=name)
+    run_lazy_script("autoware_ml.scripts.cli.session", "stop_session", name=name)
 
 
 def main() -> None:

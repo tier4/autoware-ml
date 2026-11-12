@@ -50,6 +50,7 @@ class T4Dataset(BaseDataset):
         database_root_path: str,
         *,
         max_num_3d_gt_bboxes: int | None = None,
+        max_num_2d_gt_bboxes: int | None = None,
         dataset_records_dataframe: pl.DataFrame | None = None,
         transforms: TransformsCompose | None,
         dataset_tasks: Mapping[TaskType | str, Callable[..., BaseDatasetTask]],
@@ -71,6 +72,9 @@ class T4Dataset(BaseDataset):
           database_root_path: Root directory of the database the dataset reads.
           max_num_3d_gt_bboxes: Number of 3D boxes every sample is padded to in a batch, extra
             boxes are dropped. Required when the samples carry 3D boxes, None otherwise.
+          max_num_2d_gt_bboxes: Number of 2D boxes every camera of a sample is padded to in a
+            batch, extra boxes are dropped. Required when the samples carry 2D boxes, None
+            otherwise.
           dataset_records_dataframe: Records of the corpus. None until bound to records.
           transforms: Global transforms to be applied to the dataset records.
           dataset_tasks: Factory of every task dataset, mapped by task type name. Each one is
@@ -117,6 +121,7 @@ class T4Dataset(BaseDataset):
         super().__init__(
             database_root_path=database_root_path,
             max_num_3d_gt_bboxes=max_num_3d_gt_bboxes,
+            max_num_2d_gt_bboxes=max_num_2d_gt_bboxes,
             dataset_records_dataframe=None,
             transforms=transforms,
             det3d_supervised=det3d_supervised,
@@ -347,7 +352,8 @@ class T4Dataset(BaseDataset):
     ) -> FrameMetaSample:
         """
         Return the map pose and the scene id of the keyframe lidar frame. The evaluation uses
-        them to find the lanelet map of the scene.
+        them to find the lanelet map of the scene; temporal models read the scene and the
+        sample time of the record to place the frame in its stream.
 
         Args:
           idx: Index of the specific record to be processed.
@@ -375,6 +381,9 @@ class T4Dataset(BaseDataset):
             # hands the metrics the map of its corpus rather than one looked up elsewhere.
             lanelet_map_path=(
                 self.map_provider.osm_path(scene_token) if self.map_provider is not None else None
+            ),
+            timestamp=float(
+                self.dataset_records_dataframe.item(idx, DatasetTableSchema.TIMESTAMP_SECONDS.name)
             ),
         )
 

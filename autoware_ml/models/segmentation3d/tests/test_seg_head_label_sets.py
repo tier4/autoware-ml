@@ -22,7 +22,10 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import build
 from autoware_ml.models.segmentation3d.heads.ptv3 import PTv3Seg3DDecoderHead, voxel_supervision
 
 _CLASSES = ["car", "pole", "sign", "light"]
-_SETS = {"thin_or_sign": ["pole", "sign", "light"], "any": ["car", "pole", "sign", "light"]}
+_SETS = {
+    "legacy_vertical_thin_set": ["pole", "sign", "light"],
+    "any": ["car", "pole", "sign", "light"],
+}
 
 
 def _head_with_sets() -> PTv3Seg3DDecoderHead:

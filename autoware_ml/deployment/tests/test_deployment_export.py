@@ -35,7 +35,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.deployment.deployment_export import DeploymentExport, DeploymentExportOutputs
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.utils.deploy import ExportSpec
+from autoware_ml.utils.deploy import ExportSpec, resolve_export_specs
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import MODEL_DOMAIN, PRODUCER_NAME
 
@@ -65,7 +65,9 @@ class _ExportModel(ModuleBaseModel):
     """A model exporting its head once per configured module name."""
 
     def __init__(
-        self, module_names: Sequence[str] = ("head",), supported_stages: frozenset[str] = ALL_STAGES
+        self,
+        module_names: Sequence[str] = ("head",),
+        supported_stages: frozenset[str] = ALL_STAGES,
     ) -> None:
         super().__init__(
             log_dict_configs=LogDictConfigs(prog_bar=False),
@@ -100,7 +102,7 @@ class _ExportModel(ModuleBaseModel):
         spec = ExportSpec(
             module=self.head,
             args=(point_batch.points, torch.tensor(2.0)),
-            input_param_names=["points", "scale"],
+            input_names=["points", "scale"],
             output_names=["feat"],
             dynamic_axes={"points": {0: "num_points"}, "feat": {0: "num_points"}},
             supported_stages=self.supported_stages,
@@ -114,7 +116,9 @@ class _NoInputsModel(_ExportModel):
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
-        return {"head": ExportSpec(module=self.head, args=(), input_param_names=[])}
+        return {
+            "head": ExportSpec(module=self.head, args=(), input_names=[], output_names=["feat"])
+        }
 
 
 class _PredictDatamodule:
@@ -150,6 +154,7 @@ def _point_batch() -> ModelGTBatch:
         detection3d_gt_batch=None,
         segmentation3d_gt_batch=None,
         image_gt_batch=None,
+        padding_mask=torch.zeros(1, dtype=torch.bool),
     )
 
 
@@ -164,20 +169,25 @@ def _deploy_cfg(
     return cfg
 
 
+def _specs(model: ModuleBaseModel) -> dict[str, ExportSpec]:
+    """The model's export specs from one point batch, as the deploy script resolves them."""
+    return model.build_export_specs(ModelBatchInputs.from_gt_batch(_point_batch()))
+
+
 def _exporter(
     tmp_path: Path,
     deploy_cfg: DictConfig,
     model: ModuleBaseModel | None = None,
-    datamodule: _PredictDatamodule | None = None,
     release: str | None = None,
     tracker: str | None = None,
     run_id: str | None = None,
 ) -> DeploymentExport:
+    model = model if model is not None else _ExportModel()
     return DeploymentExport(
         deploy_cfg=deploy_cfg,
         output_dir=tmp_path / "exports",
-        datamodule=datamodule if datamodule is not None else _PredictDatamodule([_point_batch()]),
-        model=model if model is not None else _ExportModel(),
+        model=model,
+        export_specs=_specs(model),
         config_name=CONFIG_NAME,
         release=release,
         tracker=tracker,
@@ -209,11 +219,12 @@ class TestOutputLayout:
         Expected: the constructor creates it, with parents, before any export.
         Check: the directory exists and the device is the model's.
         """
+        model = _ExportModel()
         exporter = DeploymentExport(
             deploy_cfg=_deploy_cfg({"head": {}}),
             output_dir=tmp_path / "exports" / "nested",
-            datamodule=_PredictDatamodule([_point_batch()]),
-            model=_ExportModel(),
+            model=model,
+            export_specs=_specs(model),
             config_name=CONFIG_NAME,
             release=None,
         )
@@ -260,37 +271,76 @@ class TestOutputLayout:
 
 
 class TestExportSpecs:
-    """The export specs come from one preprocessed predict batch."""
+    """The export specs come from one preprocessed predict batch, read before the exporter."""
 
-    def test_prepare_export_specs_reads_the_predict_split(self, tmp_path: Path) -> None:
+    def test_resolve_export_specs_reads_the_predict_split(self) -> None:
         """
         Input: a datamodule serving one batch.
-        Expected: the datamodule is prepared and set up for ``predict``, and the read-only spec
-            mapping carries the model's head with the points of that batch as example input.
-        Check: the datamodule state, the mapping type and the spec contents.
+        Expected: the datamodule is prepared and set up for ``predict``, and the spec mapping
+            carries the model's head with the points of that batch as example input.
+        Check: the datamodule state and the spec contents.
         """
         batch = _point_batch()
         datamodule = _PredictDatamodule([batch])
         model = _ExportModel()
-        exporter = _exporter(
-            tmp_path, _deploy_cfg({"head": {}}), model=model, datamodule=datamodule
-        )
 
-        specs = exporter.prepare_export_specs()
+        specs = resolve_export_specs(datamodule, model, torch.device("cpu"))
 
         assert datamodule.prepared
         assert datamodule.stage == "predict"
-        assert isinstance(specs, MappingProxyType)
         assert list(specs) == ["head"]
         assert specs["head"].module is model.head
-        assert specs["head"].input_param_names == ["points", "scale"]
+        assert specs["head"].input_names == ["points", "scale"]
         assert torch.equal(specs["head"].args[0], batch.point_cloud_gt_batch.points)
+
+    def test_given_export_specs_are_kept_read_only(self, tmp_path: Path) -> None:
+        """
+        Input: an exporter handed the resolved export specs, as the deploy script does after
+            checking them before the MLflow run exists.
+        Expected: the exporter keeps them as given, read-only.
+        Check: the mapping type and contents.
+        """
+        model = _ExportModel()
+        given = _specs(model)
+        exporter = DeploymentExport(
+            deploy_cfg=_deploy_cfg({"head": {}}),
+            output_dir=tmp_path / "exports",
+            model=model,
+            export_specs=given,
+            config_name=CONFIG_NAME,
+            release=None,
+        )
+
+        assert isinstance(exporter.export_specs, MappingProxyType)
+        assert dict(exporter.export_specs) == given
+
+    def test_spec_without_example_inputs_is_rejected(self) -> None:
+        """
+        Input: an export spec carrying no example inputs and no input names.
+        Expected: the spec is refused when the model builds it, so nothing is traced.
+        Check: a ValueError counting the names and the args is raised.
+        """
+        datamodule = _PredictDatamodule([_point_batch()])
+
+        with pytest.raises(ValueError, match="names 0 inputs for 0 args"):
+            resolve_export_specs(datamodule, _NoInputsModel(), torch.device("cpu"))
+
+    def test_empty_predict_split_has_no_example_batch(self) -> None:
+        """
+        Input: a datamodule whose predict dataloader yields nothing.
+        Expected: no example batch can be read, so the specs cannot be resolved.
+        Check: the iteration failure propagates.
+        """
+        with pytest.raises(StopIteration):
+            resolve_export_specs(_PredictDatamodule([]), _ExportModel(), torch.device("cpu"))
 
 
 class TestOnnxExport:
     """The ONNX files carry the configured names, axes, opset and metadata."""
 
-    def test_legacy_export_keeps_the_spec_names_and_dynamic_axes(self, tmp_path: Path) -> None:
+    def test_export_without_dynamo_keeps_the_spec_names_and_dynamic_axes(
+        self, tmp_path: Path
+    ) -> None:
         """
         Input: the default deploy config with ``dynamo`` disabled for the module.
         Expected: the graph inputs and outputs carry the spec names, the point axis is dynamic
@@ -298,7 +348,7 @@ class TestOnnxExport:
         Check: the loaded ONNX graph, validated by the ONNX checker.
         """
         deploy_cfg = _deploy_cfg({"head": {"dynamo": False}})
-        exporter = _exporter(tmp_path, deploy_cfg)
+        exporter = _exporter(tmp_path, deploy_cfg, model=_ExportModel())
 
         outputs = exporter.export()
 
@@ -310,15 +360,15 @@ class TestOnnxExport:
         assert _dim_params(onnx_model.graph.output[0]) == ["num_points", FEATURE_DIM]
         assert _onnx_opset(onnx_model) == deploy_cfg.onnx.opset_version
 
-    def test_dynamo_export_uses_the_configured_dynamic_shapes(self, tmp_path: Path) -> None:
+    def test_dynamo_export_uses_the_spec_dynamic_axes(self, tmp_path: Path) -> None:
         """
-        Input: the default deploy config (``dynamo`` enabled) with a ``dynamic_shapes`` block
-            naming the point axis.
+        Input: the default deploy config (``dynamo`` enabled) and a spec declaring the point
+            axis.
         Expected: the exported input carries that dynamic axis and the spec names.
         Check: the loaded ONNX graph.
         """
-        deploy_cfg = _deploy_cfg({"head": {"dynamic_shapes": {"points": {0: "num_points"}}}})
-        exporter = _exporter(tmp_path, deploy_cfg)
+        deploy_cfg = _deploy_cfg({"head": {}})
+        exporter = _exporter(tmp_path, deploy_cfg, model=_ExportModel())
 
         outputs = exporter.export()
 
@@ -332,7 +382,7 @@ class TestOnnxExport:
         self, tmp_path: Path
     ) -> None:
         """
-        Input: the legacy export run on more points than the example batch.
+        Input: the TorchScript export run on more points than the example batch.
         Expected: the graph honours the dynamic axis and matches the module's output.
         Check: ONNX Runtime output against the torch module.
         """
@@ -477,52 +527,20 @@ class TestMetadataStamp:
 class TestErrorPaths:
     """Misconfigurations fail before any file is shipped."""
 
-    def test_unknown_module_name_is_rejected(self, tmp_path: Path) -> None:
+    def test_module_without_an_entry_is_rejected(self, tmp_path: Path) -> None:
         """
-        Input: a model exporting ``head`` while the deploy config only knows ``encoder``.
-        Expected: the module cannot be resolved against ``deploy.onnx.modules``.
-        Check: a KeyError naming the module and the available ones, and no file written.
-        """
-        exporter = _exporter(tmp_path, _deploy_cfg({"encoder": {}}))
-
-        with pytest.raises(KeyError, match="'head'.*encoder"):
-            exporter.export()
-        assert list((tmp_path / "exports").iterdir()) == []
-
-    def test_missing_modules_block_is_rejected(self, tmp_path: Path) -> None:
-        """
-        Input: the default deploy config without any ``modules`` block.
-        Expected: the module cannot be resolved.
-        Check: a KeyError naming the module is raised.
+        Input: the default deploy config without any ``modules`` block, a model exporting
+            ``head``.
+        Expected: the module would silently export without its overrides, so the export stops.
+        Check: a KeyError naming the missing entry, and no file written.
         """
         deploy_cfg = OmegaConf.load(DEPLOY_YAML).deploy
         deploy_cfg.tensorrt.enabled = False
         exporter = _exporter(tmp_path, deploy_cfg)
 
-        with pytest.raises(KeyError, match="head"):
+        with pytest.raises(KeyError, match="no entry for exported module 'head'"):
             exporter.export()
-
-    def test_spec_without_example_inputs_is_rejected(self, tmp_path: Path) -> None:
-        """
-        Input: an export spec carrying no example inputs and no input names.
-        Expected: the ONNX export has nothing to trace with.
-        Check: a ValueError mentioning the missing parameters is raised.
-        """
-        exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), model=_NoInputsModel())
-
-        with pytest.raises(ValueError, match="no parameters"):
-            exporter.export()
-
-    def test_empty_predict_split_has_no_example_batch(self, tmp_path: Path) -> None:
-        """
-        Input: a datamodule whose predict dataloader yields nothing.
-        Expected: no example batch can be read, so the export cannot start.
-        Check: the iteration failure propagates.
-        """
-        exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), datamodule=_PredictDatamodule([]))
-
-        with pytest.raises(StopIteration):
-            exporter.export()
+        assert list((tmp_path / "exports").iterdir()) == []
 
     def test_module_without_onnx_support_is_rejected_when_onnx_is_enabled(
         self, tmp_path: Path

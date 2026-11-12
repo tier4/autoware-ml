@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.stats import rankdata
 import torch
 
 from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.segmentation3d.calibration import CalibrationError
 from autoware_ml.metrics.segmentation3d.confident_error import ConfidentErrorRate
-from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness
+from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness, binned_auroc
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
+from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.partial_detection3d import PartialDetection3DScore
 from autoware_ml.metrics.segmentation3d.tolerant_error import NeighbourhoodTolerantErrorRate
 from autoware_ml.metrics.segmentation3d.point_cloud import (
@@ -25,6 +27,8 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
     confidence,
     normalized_entropy,
 )
+from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
+from autoware_ml.metrics.report import MetricKey
 
 CLASS_NAMES = ("road", "obstacle")
 # The partial detection score joins the taxonomies by a shared prefix: one
@@ -57,7 +61,9 @@ def _frame(xs, target, pred, num_classes: int = 2, scores=None) -> FramePoints:
 
 
 def _state(frames, class_names=CLASS_NAMES) -> PointCloudSeg3DState:
-    return PointCloudSeg3DState(frames, num_classes=2, ignore_index=-1, class_names=class_names)
+    return PointCloudSeg3DState(
+        frames, num_classes=2, ignore_index=-1, class_names=class_names, num_frames=len(frames)
+    )
 
 
 def test_error_clusters_merges_nearby_errors_into_one() -> None:
@@ -67,8 +73,8 @@ def test_error_clusters_merges_nearby_errors_into_one() -> None:
     out = ErrorClusters(cluster_radius=1.5).evaluate(
         _state([_frame(range(10), target, pred)]), EvalStage.TEST
     )
-    assert out["error_rate"] == pytest.approx(3.0 / 10.0)
-    assert out["error_cluster_count"] == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="error_rate")) == pytest.approx(3.0 / 10.0)
+    assert out.metric_value(MetricKey(name="error_cluster_count")) == pytest.approx(1.0)
 
 
 def test_error_clusters_counts_singleton_error() -> None:
@@ -79,14 +85,14 @@ def test_error_clusters_counts_singleton_error() -> None:
     out = ErrorClusters(cluster_radius=0.5).evaluate(
         _state([_frame(range(10), target, pred)]), EvalStage.TEST
     )
-    assert out["error_cluster_count"] == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="error_cluster_count")) == pytest.approx(1.0)
 
 
 def test_error_clusters_clean_prediction() -> None:
     target = [0] * 10
     out = ErrorClusters().evaluate(_state([_frame(range(10), target, target)]), EvalStage.TEST)
-    assert out["error_rate"] == pytest.approx(0.0)
-    assert out["error_cluster_count"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="error_rate")) == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="error_cluster_count")) == pytest.approx(0.0)
 
 
 def test_suite_caches_frames_and_runs_components() -> None:
@@ -112,9 +118,31 @@ def test_suite_caches_frames_and_runs_components() -> None:
         }
     )
     report = suite.result(EvalStage.TEST)
-    assert "error_rate" in report
-    assert "tolerant_error_rate" in report
-    assert report["error_rate"] == pytest.approx(0.0)
+    assert MetricKey(name="error_rate") in report.metric_names()
+    assert MetricKey(name="tolerant_error_rate") in report.metric_names()
+    assert report.metric_value(MetricKey(name="error_rate")) == pytest.approx(0.0)
+
+
+def test_suite_frame_count_reads_the_cache_length() -> None:
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[FrameCount(stages=["test"])],
+        num_classes=2,
+        class_names=CLASS_NAMES,
+    )
+    frame = {
+        "coord": torch.tensor([[1.0, 0.0, 0.0]]),
+        "pred": torch.tensor([0]),
+        "target": torch.tensor([0]),
+        "scores": torch.full((1, 2), 0.5),
+    }
+    suite.update({"seg3d_frames": [frame, frame]})
+    suite.update({"seg3d_frames": [frame]})
+
+    report = suite.result(EvalStage.TEST)
+
+    assert report.metric_value(MetricKey(name="num_frames")) == 3.0
+    # The count is range-invariant: reported once per slice, not per window.
+    assert MetricKey(name="num_frames", range_suffix="50m_90m") not in report.metric_names()
 
 
 def test_suite_demands_boxes_for_box_reading_components() -> None:
@@ -152,7 +180,7 @@ def test_calibration_error_zero_when_confidence_matches_accuracy() -> None:
     out = CalibrationError(num_bins=10).evaluate(
         _state([_frame([0, 1, 2, 3], target, target, scores=scores)]), EvalStage.TEST
     )
-    assert out["ece"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="ece")) == pytest.approx(0.0)
 
 
 def test_calibration_error_penalizes_overconfident_mistakes() -> None:
@@ -163,7 +191,7 @@ def test_calibration_error_penalizes_overconfident_mistakes() -> None:
     out = CalibrationError(num_bins=10).evaluate(
         _state([_frame([0, 1, 2, 3], target, pred, scores=scores)]), EvalStage.TEST
     )
-    assert out["ece"] > 0.4
+    assert out.metric_value(MetricKey(name="ece")) > 0.4
 
 
 def test_entropy_auroc_perfect_separation() -> None:
@@ -174,7 +202,7 @@ def test_entropy_auroc_perfect_separation() -> None:
     out = UncertaintyUsefulness().evaluate(
         _state([_frame([0, 1, 2, 3], target, pred, scores=scores)]), EvalStage.TEST
     )
-    assert out["entropy_auroc"] == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="entropy_auroc")) == pytest.approx(1.0)
 
 
 def test_confident_error_rate_flags_confident_mistakes() -> None:
@@ -185,8 +213,8 @@ def test_confident_error_rate_flags_confident_mistakes() -> None:
     out = ConfidentErrorRate(entropy_threshold=0.3).evaluate(
         _state([_frame([0, 1, 2, 3], target, pred, scores=scores)]), EvalStage.TEST
     )
-    assert out["confident_error_rate"] == pytest.approx(1.0)
-    assert out["confident_error_count"] == pytest.approx(2.0)
+    assert out.metric_value(MetricKey(name="confident_error_rate")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="confident_error_count")) == pytest.approx(2.0)
 
 
 def test_tolerant_error_forgives_correct_neighbour() -> None:
@@ -195,18 +223,20 @@ def test_tolerant_error_forgives_correct_neighbour() -> None:
     state = _state([frame])
     # radius reaches the correct-class neighbour -> the wrong point is tolerated
     seen = NeighbourhoodTolerantErrorRate(radius=1.5).evaluate(state, EvalStage.TEST)
-    assert seen["tolerant_error_rate"] == pytest.approx(0.0)
-    assert seen["tolerant_error_count"] == pytest.approx(0.0)
+    assert seen.metric_value(MetricKey(name="tolerant_error_rate")) == pytest.approx(0.0)
+    assert seen.metric_value(MetricKey(name="tolerant_error_count")) == pytest.approx(0.0)
     # radius too small to see it -> the wrong point survives as an error
     unseen = NeighbourhoodTolerantErrorRate(radius=0.5).evaluate(state, EvalStage.TEST)
-    assert unseen["tolerant_error_rate"] == pytest.approx(0.5)
-    assert unseen["tolerant_error_count"] == pytest.approx(1.0)
+    assert unseen.metric_value(MetricKey(name="tolerant_error_rate")) == pytest.approx(0.5)
+    assert unseen.metric_value(MetricKey(name="tolerant_error_count")) == pytest.approx(1.0)
 
 
 def test_tolerant_error_radius_zero_is_strict_error_rate() -> None:
     frame = _frame([0, 1], target=[0, 0], pred=[1, 0])
     out = NeighbourhoodTolerantErrorRate(radius=0.0).evaluate(_state([frame]), EvalStage.TEST)
-    assert out["tolerant_error_rate"] == pytest.approx(0.5)  # one wrong of two, no tolerance
+    assert out.metric_value(MetricKey(name="tolerant_error_rate")) == pytest.approx(
+        0.5
+    )  # one wrong of two, no tolerance
 
 
 def test_tolerant_error_emits_global_and_per_class() -> None:
@@ -214,20 +244,20 @@ def test_tolerant_error_emits_global_and_per_class() -> None:
     # obstacle (class 1) 0 of 2. Both global and every class are logged.
     frame = _frame([0, 10, 20, 30], target=[0, 0, 1, 1], pred=[1, 0, 1, 1])
     out = NeighbourhoodTolerantErrorRate(radius=0.5).evaluate(_state([frame]), EvalStage.TEST)
-    assert out["tolerant_error_rate"] == pytest.approx(0.25)
-    assert out["tolerant_error_rate_road"] == pytest.approx(0.5)
-    assert out["tolerant_error_rate_obstacle"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="tolerant_error_rate")) == pytest.approx(0.25)
+    assert out.metric_value(MetricKey(name="tolerant_error_rate_road")) == pytest.approx(0.5)
+    assert out.metric_value(MetricKey(name="tolerant_error_rate_obstacle")) == pytest.approx(0.0)
 
 
 def test_error_clusters_emits_global_and_per_class() -> None:
     # Road: 2 adjacent wrong points -> one cluster, obstacle points all correct.
     frame = _frame([0, 1, 20, 30], target=[0, 0, 1, 1], pred=[1, 1, 1, 1])
     out = ErrorClusters(cluster_radius=1.5).evaluate(_state([frame]), EvalStage.TEST)
-    assert out["error_rate"] == pytest.approx(0.5)
-    assert out["error_rate_road"] == pytest.approx(1.0)
-    assert out["error_cluster_count_road"] == pytest.approx(1.0)
-    assert out["error_rate_obstacle"] == pytest.approx(0.0)
-    assert out["error_cluster_count_obstacle"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="error_rate")) == pytest.approx(0.5)
+    assert out.metric_value(MetricKey(name="error_rate_road")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="error_cluster_count_road")) == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="error_rate_obstacle")) == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="error_cluster_count_obstacle")) == pytest.approx(0.0)
 
 
 def test_partial_detection3d_credit_landmarks() -> None:
@@ -249,8 +279,8 @@ def test_partial_detection3d_credit_landmarks() -> None:
         class_names=("ped",),
     ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
     # s(1)/s(4) with h=1 -> (1/2)/(4/5) = 0.625
-    assert out["pd_score_ped"] == pytest.approx(0.625)
-    assert out["pd_skipped_low_point_boxes"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="pd_score_ped")) == pytest.approx(0.625)
+    assert out.metric_value(MetricKey(name="pd_skipped_low_point_boxes")) == pytest.approx(0.0)
 
 
 def test_partial_detection3d_ignores_points_outside_the_box_height() -> None:
@@ -274,7 +304,7 @@ def test_partial_detection3d_ignores_points_outside_the_box_height() -> None:
         seg3d_class_names=SEG3D_CLASS_NAMES,
         class_names=("ped",),
     ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
-    assert out["pd_score_ped"] == pytest.approx(0.625)
+    assert out.metric_value(MetricKey(name="pd_score_ped")) == pytest.approx(0.625)
 
 
 def test_partial_detection3d_scores_only_the_objects_own_points() -> None:
@@ -306,7 +336,7 @@ def test_partial_detection3d_scores_only_the_objects_own_points() -> None:
         seg3d_class_names=SEG3D_CLASS_NAMES,
         class_names=("ped",),
     ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
-    assert out["pd_score_ped"] == pytest.approx(1.0)
+    assert out.metric_value(MetricKey(name="pd_score_ped")) == pytest.approx(1.0)
 
 
 def test_partial_detection3d_does_not_credit_ground_predicted_as_the_object() -> None:
@@ -335,7 +365,7 @@ def test_partial_detection3d_does_not_credit_ground_predicted_as_the_object() ->
         seg3d_class_names=SEG3D_CLASS_NAMES,
         class_names=("ped",),
     ).evaluate(_state([frame], SEG3D_CLASS_NAMES), EvalStage.TEST)
-    assert out["pd_score_ped"] == pytest.approx(0.0)
+    assert out.metric_value(MetricKey(name="pd_score_ped")) == pytest.approx(0.0)
 
 
 def test_partial_detection3d_rejects_non_positive_half_saturation() -> None:
@@ -381,8 +411,6 @@ def test_partial_detection3d_requires_the_shared_taxonomy_prefix() -> None:
 def test_tolerant_error_mask_equals_brute_force_reference() -> None:
     # The per-class nearest-neighbour formulation must reproduce the direct
     # definition: wrong, and no point predicted the true class within radius.
-    from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
-
     rng = np.random.default_rng(3)
     coord = rng.uniform(-20, 20, (2000, 3))
     target = rng.integers(0, 3, 2000)
@@ -408,11 +436,6 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
 def test_entropy_auroc_binned_matches_rankdata_reference() -> None:
     # The histogram closed form must agree with exact tie-aware ranking to well
     # under one bin width.
-    import numpy as np
-    from scipy.stats import rankdata
-
-    from autoware_ml.metrics.segmentation3d.entropy_auroc import binned_auroc
-
     rng = np.random.default_rng(5)
     entropy = rng.beta(2.0, 5.0, 50_000)
     wrong = rng.random(50_000) < 0.2

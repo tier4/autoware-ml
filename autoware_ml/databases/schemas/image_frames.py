@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import polars as pl
@@ -60,15 +61,18 @@ class ImageFrameDatasetSchema(BaseFieldSchema):
 
 
 def distortion_model_from_coefficients(coefficients: Sequence[float]) -> str:
-    """Name the OpenCV distortion model a coefficient vector belongs to, ROS style.
+    """Name the OpenCV distortion model a coefficient vector belongs to.
 
-    The T4 calibration stores only the coefficients ``(k1, k2, p1, p2[, k3[, k4, k5, k6]])``
-    and leaves the model implicit in their count, so it is recovered here the way
-    ``sensor_msgs/CameraInfo`` names it: ``plumb_bob`` for the 4 and 5 coefficient radial and
-    tangential model, ``rational_polynomial`` for the 8 coefficient one. Images that ship
-    already rectified carry no coefficients and get the empty string. The name records the
-    model of the frame; whether a camera still has to be undistorted is decided by the loading
-    transforms from the coefficients themselves.
+    The T4 calibration stores only the coefficients
+    ``(k1, k2, p1, p2[, k3[, k4, k5, k6[, s1, s2, s3, s4[, tx, ty]]]])`` and leaves the model
+    implicit in their count, so it is recovered here. Models with a ``sensor_msgs/CameraInfo``
+    name keep it: ``plumb_bob`` for the 4 and 5 coefficient radial and tangential model,
+    ``rational_polynomial`` for the 8 coefficient one. ROS has no name for the 12 coefficient
+    thin prism model or its 14 coefficient tilted variant, so they take the names of their
+    OpenCV flags, ``thin_prism`` and ``tilted``. Images that ship already rectified carry no
+    coefficients and get the empty string. The name records the model of the frame; whether a
+    camera still has to be undistorted is decided by the loading transforms from the
+    coefficients themselves.
 
     Args:
       coefficients: Lens distortion coefficients in OpenCV order, possibly empty.
@@ -87,9 +91,13 @@ def distortion_model_from_coefficients(coefficients: Sequence[float]) -> str:
         return "plumb_bob"
     if count == 8:
         return "rational_polynomial"
+    if count == 12:
+        return "thin_prism"
+    if count == 14:
+        return "tilted"
     raise ValueError(
-        f"No OpenCV distortion model has {count} coefficients, expected 4 or 5 (plumb_bob) or "
-        "8 (rational_polynomial)."
+        f"No OpenCV distortion model has {count} coefficients, expected 4 or 5 (plumb_bob), "
+        "8 (rational_polynomial), 12 (thin_prism) or 14 (tilted)."
     )
 
 

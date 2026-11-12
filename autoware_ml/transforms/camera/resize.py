@@ -32,7 +32,8 @@ the transformed one. They reject camera image data that already carries depth ma
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import partial
 from typing import NamedTuple
 
 from jaxtyping import Float32
@@ -212,16 +213,19 @@ class CropAndScale(ImageSpaceTransform):
         super().__init__(probability=probability)
         self.crop_ratio = crop_ratio
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Crop and scale every camera image and update its augmented intrinsics.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
+            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
             Updated ModelGTSample instance with a cropped and scaled `camera_image_data`.
         """
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         height, width = images.shape[-2:]
@@ -248,7 +252,7 @@ class CropAndScale(ImageSpaceTransform):
             images=torch.stack(cropped_images, dim=0),
             image_transforms=torch.stack(image_transforms, dim=0),
         )
-        return multi_task_gt_sample._replace(camera_image_data=cropped_camera_image_data)
+        return model_gt_sample._replace(camera_image_data=cropped_camera_image_data)
 
     def sample_crop_box(self, height: int, width: int) -> tuple[int, int, int, int]:
         """Sample a crop box keeping at least `crop_ratio` of the image.
@@ -305,16 +309,19 @@ class ResizeMultiviewImages(ImageSpaceTransform):
         super().__init__(probability=None)
         self.target_size = tuple(target_size)
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Resize every camera image and scale its augmented intrinsics accordingly.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
+            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
             Updated ModelGTSample instance with a resized `camera_image_data`.
         """
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]
@@ -332,7 +339,7 @@ class ResizeMultiviewImages(ImageSpaceTransform):
             images=resized_images,
             image_transforms=image_transform.repeat(images.shape[0], 1, 1),
         )
-        return multi_task_gt_sample._replace(camera_image_data=resized_camera_image_data)
+        return model_gt_sample._replace(camera_image_data=resized_camera_image_data)
 
 
 class PadMultiViewImage(ImageSpaceTransform):
@@ -361,18 +368,22 @@ class PadMultiViewImage(ImageSpaceTransform):
         Raises:
             ValueError: If none or both of `size` and `size_divisor` are given.
         """
-        if (size is None) == (size_divisor is None):
-            raise ValueError("Exactly one of size or size_divisor must be provided.")
         super().__init__(probability=None)
-        self.size = tuple(size) if size is not None else None
-        self.size_divisor = size_divisor
+        self._resolve_padded_size: Callable[[int, int], tuple[int, int]]
+        if size is not None and size_divisor is None:
+            fixed_height, fixed_width = size
+            self._resolve_padded_size = partial(self._fixed_size, fixed_height, fixed_width)
+        elif size_divisor is not None and size is None:
+            self._resolve_padded_size = partial(self._divisible_size, size_divisor)
+        else:
+            raise ValueError("Exactly one of size or size_divisor must be provided.")
         self.pad_value = pad_value
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Pad every camera image to the configured size.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
+            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
             Updated ModelGTSample instance with a padded `camera_image_data`.
@@ -380,7 +391,10 @@ class PadMultiViewImage(ImageSpaceTransform):
         Raises:
             ValueError: If the images are larger than the size they are padded to.
         """
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         height, width = images.shape[-2:]
@@ -404,9 +418,9 @@ class PadMultiViewImage(ImageSpaceTransform):
             images=padded_images,
             image_transforms=torch.eye(3, dtype=torch.float32).repeat(images.shape[0], 1, 1),
         )
-        return multi_task_gt_sample._replace(camera_image_data=padded_camera_image_data)
+        return model_gt_sample._replace(camera_image_data=padded_camera_image_data)
 
-    def resolve_padded_size(self, height: int, width: int) -> tuple[int, ...]:
+    def resolve_padded_size(self, height: int, width: int) -> tuple[int, int]:
         """Resolve the size the images are padded to.
 
         Args:
@@ -416,11 +430,40 @@ class PadMultiViewImage(ImageSpaceTransform):
         Returns:
             Padded image size as ``(height, width)``.
         """
-        if self.size is not None:
-            return self.size
+        return self._resolve_padded_size(height, width)
+
+    @staticmethod
+    def _fixed_size(
+        fixed_height: int, fixed_width: int, height: int, width: int
+    ) -> tuple[int, int]:
+        """Return the fixed size the images are padded to, whatever their size.
+
+        Args:
+            fixed_height: Height the images are padded to.
+            fixed_width: Width the images are padded to.
+            height: Height of the images before padding, unused.
+            width: Width of the images before padding, unused.
+
+        Returns:
+            Padded image size as ``(height, width)``.
+        """
+        return fixed_height, fixed_width
+
+    @staticmethod
+    def _divisible_size(size_divisor: int, height: int, width: int) -> tuple[int, int]:
+        """Round the image size upward to a multiple of the size divisor.
+
+        Args:
+            size_divisor: Divisor the image dimensions are rounded upward to.
+            height: Height of the images before padding.
+            width: Width of the images before padding.
+
+        Returns:
+            Padded image size as ``(height, width)``.
+        """
         return (
-            int(np.ceil(height / self.size_divisor) * self.size_divisor),
-            int(np.ceil(width / self.size_divisor) * self.size_divisor),
+            int(np.ceil(height / size_divisor) * size_divisor),
+            int(np.ceil(width / size_divisor) * size_divisor),
         )
 
 
@@ -468,16 +511,19 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         self.random_horizontal_flip = random_horizontal_flip
         self.rotation_range = tuple(rotation_range) if rotation_range is not None else (0.0, 0.0)
 
-    def transform(self, multi_task_gt_sample: ModelGTSample) -> ModelGTSample:
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Augment every camera image and update its augmented intrinsics.
 
         Args:
-            multi_task_gt_sample: ModelGTSample instance containing `camera_image_data`.
+            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
 
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        camera_image_data = multi_task_gt_sample.camera_image_data
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
 
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]
@@ -495,7 +541,7 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
             images=torch.stack(augmented_images, dim=0),
             image_transforms=torch.stack(image_transforms, dim=0),
         )
-        return multi_task_gt_sample._replace(camera_image_data=augmented_camera_image_data)
+        return model_gt_sample._replace(camera_image_data=augmented_camera_image_data)
 
     def sample_augmentation(
         self, source_height: int, source_width: int

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 import logging
 import os
 
@@ -51,7 +51,6 @@ from autoware_ml.databases.schemas.image_frames import (
     ImageFrameDataModel,
 )
 from autoware_ml.databases.schemas.category_mapping import CategoryMappingDataModel
-from autoware_ml.databases.taxonomy import DatabaseTaxonomy
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDataModel, Box3DDatasetSchema
 from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame
 from autoware_ml.databases.scenarios import ScenarioData
@@ -93,7 +92,6 @@ class T4RecordsGenerator:
         lidar_channel: LidarChannel,
         lidar_pointcloud_num_features: int,
         box_annotation_dir: str,
-        taxonomy: DatabaseTaxonomy,
         box3d_pipelines: Sequence[Box3DPipeline],
         recompute_boxes3d_lidar_points_num: bool = False,
     ) -> None:
@@ -107,7 +105,6 @@ class T4RecordsGenerator:
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
           box_annotation_dir: Directory of each scene with the category and instance tables to
             read box names from.
-          taxonomy: Taxonomies the database labels are built with.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
           recompute_boxes3d_lidar_points_num: Whether to recompute the number of lidar points in
             each box3d annotation. Note that this slows down a lot, so it's not recommended
@@ -124,7 +121,6 @@ class T4RecordsGenerator:
         self.lidarseg_by_sample_data = self._index_lidarseg()
         self.box_annotation_dir = box_annotation_dir
         self.box_category_tokens, self.box_category_names = self._index_box_categories()
-        self.taxonomy = taxonomy
         self.box3d_pipelines = box3d_pipelines
         self.recompute_boxes3d_lidar_points_num = recompute_boxes3d_lidar_points_num
 
@@ -231,11 +227,11 @@ class T4RecordsGenerator:
             f"sample steps: {self.sample_steps} and max sweeps: {MAX_SWEEPS}"
         )
 
-        # A corpus labelled at a lower rate than it was recorded keeps its labelled samples only
-        masked_samples_only = self.scenario_data.dataset_params.semantic_masks
+        # A dataset labelled at a lower rate than it was recorded keeps its labelled samples only
+        require_semantic_mask = self.scenario_data.dataset_params.require_semantic_mask
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
-            if masked_samples_only and not self._has_semantic_mask(sample):
+            if require_semantic_mask and not self._has_semantic_mask(sample):
                 continue
             t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
@@ -361,8 +357,6 @@ class T4RecordsGenerator:
                     box3d_instance_id=box3d.uuid,
                     box3d_dataset_label_name=box3d_category_name,
                     box3d_label_name=box3d_category_name,
-                    # Initially, set all label indices to the ignore label index
-                    box3d_label_index=self.taxonomy.detection3d.ignore_index,
                     box3d_num_lidar_points=box3d.num_points,
                     box3d_num_radar_points=sample_annotation_record.num_radar_pts,
                     box3d_valid=box3d_valid,
@@ -745,9 +739,6 @@ class T4RecordsGenerator:
         """
 
         camera_channel_names = []
-        # A LiDAR only corpus, or a mirror that lacks the images, records no camera frames
-        if not self.scenario_data.dataset_params.camera_frames:
-            return camera_channel_names
         for channel_name, sample_data_token in sample.data.items():
             sd_record: SampleData = self.t4_devkit_dataset.get(
                 SchemaName.SAMPLE_DATA, sample_data_token
@@ -995,13 +986,12 @@ class T4RecordsGenerator:
         if not len(boxes_3d_data_model):
             return []
 
+        # The records carry no class index, the boxes are built for their geometry only
         lidar_bboxes_3d = LidarBBoxes3D.from_numpy(
             bbox_params=np.asarray(
                 [box.box3d_params for box in boxes_3d_data_model], dtype=np.float32
             ),
-            bbox_labels=np.asarray(
-                [box.box3d_label_index for box in boxes_3d_data_model], dtype=np.int32
-            ),
+            bbox_labels=np.full(len(boxes_3d_data_model), -1, dtype=np.int32),
             bbox_label_names=[box.box3d_label_name for box in boxes_3d_data_model],
             bbox_num_lidar_points=np.asarray(
                 [box.box3d_num_lidar_points for box in boxes_3d_data_model], dtype=np.int32

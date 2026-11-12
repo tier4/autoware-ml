@@ -19,6 +19,7 @@ import numpy as np
 from autoware_ml.geometry.utils import points_in_rotated_box
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import mean_valid
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     PointCloudSeg3DState,
     valid_point_mask,
@@ -110,7 +111,7 @@ class PartialDetection3DScore(Metric[PointCloudSeg3DState]):
 
         return saturate(k) / saturate(n)
 
-    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> MetricReport:
         """Mean per-instance credit per detection class, over small-object boxes.
 
         Args:
@@ -118,7 +119,7 @@ class PartialDetection3DScore(Metric[PointCloudSeg3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         if state.class_names != self.seg3d_class_names:
             raise ValueError(
@@ -173,15 +174,16 @@ class PartialDetection3DScore(Metric[PointCloudSeg3DState]):
                 correct = int(np.sum(pred[inside] == label))
                 credits[label].append(self._credit(correct, n))
 
-        report: dict[str, float] = {"pd_skipped_low_point_boxes": float(skipped)}
+        report = MetricReport()
+        report.record("pd_skipped_low_point_boxes", float(skipped))
         per_class_means: list[float] = []
         for label, values in credits.items():
             name = self.scored_labels[label]
             if not values:
-                report[f"pd_score_{name}"] = float("nan")
+                report.record(f"pd_score_{name}", float("nan"))
                 continue
             mean_credit = float(np.mean(values))
-            report[f"pd_score_{name}"] = mean_credit
+            report.record(f"pd_score_{name}", mean_credit)
             per_class_means.append(mean_credit)
-        report["mpd_score"] = mean_valid(per_class_means)
+        report.record("mpd_score", mean_valid(per_class_means))
         return report

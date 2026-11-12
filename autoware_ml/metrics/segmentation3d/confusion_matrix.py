@@ -10,13 +10,14 @@ from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.confusion_report import confusion_cells
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
 
 
 class ConfusionMatrix(Metric[ConfusionState]):
     """Point true vs. predicted class counts, read straight from the suite's matrix."""
 
-    def evaluate(self, state: ConfusionState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: ConfusionState, stage: EvalStage) -> MetricReport:
         """Emit the accumulated confusion matrix as flat count keys.
 
         Args:
@@ -24,6 +25,6 @@ class ConfusionMatrix(Metric[ConfusionState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         return confusion_cells(state.confusion.cpu().numpy(), state.class_names)

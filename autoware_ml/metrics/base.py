@@ -12,6 +12,8 @@ Metrics are built on ``torchmetrics``. The design separates two concerns:
 
 This module holds only the task-agnostic pieces: the lifecycle ``EvalStage``,
 the radial ``MetricRange`` used for distance buckets, and the two base classes.
+Every metric value travels in a :class:`~autoware_ml.metrics.report.MetricReport`,
+whose typed keys place it in a filter slice, a range window and a suite prefix.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from typing import Any, Generic, TypeVar
 import numpy as np
 import torch.distributed
 import torchmetrics
+
+from autoware_ml.metrics.report import MetricReport
 
 logger = logging.getLogger(__name__)
 
@@ -191,13 +195,16 @@ class Metric(ABC, Generic[StateT]):
     it. The default reads every prediction, so a metric that does not think
     about the floor stays correct. ``needs_boxes`` declares that the metric reads
     per-frame detection ground truth, so a suite can demand those annotations
-    instead of caching empty placeholders.
+    instead of caching empty placeholders. ``range_invariant`` declares that the
+    metric's values do not depend on the radial window (a frame count, say), so
+    the suite reports it once per filter slice instead of once per range.
     """
 
     required_eval_keys: tuple[str, ...] = ()
     needs_ttc: bool = False
     ttc_score_floor: float = 0.0
     needs_boxes: bool = False
+    range_invariant: bool = False
 
     def __init__(
         self,
@@ -217,15 +224,18 @@ class Metric(ABC, Generic[StateT]):
         self.filter: MetricFilter = filter if filter is not None else IDENTITY
 
     @abstractmethod
-    def evaluate(self, state: StateT, stage: EvalStage) -> dict[str, float]:
-        """Compute this metric's keys from the suite's synced ``state``.
+    def evaluate(self, state: StateT, stage: EvalStage) -> MetricReport:
+        """Compute this metric's values from the suite's synced ``state``.
+
+        The metric records its values under bare names. The suite places them in
+        the filter slice and range window it evaluated the state for.
 
         Args:
             state: State for one (filter, range) bucket.
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
 
 
@@ -276,6 +286,11 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         # Availability-gated filters (lanelet region / collision area) register here so
         # the base can log per-filter frame coverage, empty means nothing to gate.
         self._coverage_filters: list[MetricFilter] = []
+        # Frames accumulated by this suite, DDP-summed. The whole-scene source of
+        # ``frame_count``: filter slices read ``region_frames_covered`` instead.
+        self.add_state(
+            "frames_seen", default=torch.zeros((), dtype=torch.long), dist_reduce_fx="sum"
+        )
         if not self.components:
             logger.warning(
                 "%s was constructed with no components, so it will log nothing.",
@@ -405,44 +420,58 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
             State restricted to the requested (filter, range) bucket.
         """
 
-    def compute(self) -> dict[str, float]:
+    def compute(self) -> MetricReport:
         """Build state and run metrics across the filter and range axes.
 
         Components are grouped by filter so each filtered sub-state (and its
         memoized matching) is built once and shared by every component using it.
 
         Returns:
-            Metric keys mapped to values, across all components and buckets.
+            The report across all components, filter slices and range windows.
         """
         self._log_coverage()
         return self._compute_report(self.active_components(), self.state_for)
 
-    def _compute_report(self, components: list[Metric[StateT]], state_builder) -> dict[str, float]:
+    def _compute_report(self, components: list[Metric[StateT]], state_builder) -> MetricReport:
         """Run ``components`` across the filter and range axes of ``state_builder``.
 
         ``state_builder(range, filter)`` supplies the state. Parameterizing it
         lets a suite serve a second taxonomy view (e.g. behaviour groups) from
         the same accumulation.
         """
-        report: dict[str, float] = {}
+        report = MetricReport()
         groups: dict[str, tuple[MetricFilter, list[Metric[StateT]]]] = {}
         for component in components:
             metric_filter = component.filter
             groups.setdefault(metric_filter.cache_key, (metric_filter, []))[1].append(component)
         for metric_filter, group_components in groups.values():
-            for key, value in self._run_group(
-                metric_filter, group_components, state_builder
-            ).items():
-                # Groups are keyed by cache_key but keys carry the filter's
-                # display name: two same-name filters with different parameters
-                # must not silently overwrite each other across groups.
-                if key in report:
-                    raise ValueError(
-                        f"Two filter groups emit the same key {key!r}. Give one "
-                        "filter a distinct name."
-                    )
-                report[key] = value
+            # Groups are keyed by cache_key but keys carry the filter's display
+            # name: two same-name filters with different parameters must not
+            # silently overwrite each other across groups, the merge rejects that.
+            report.merge(self._run_group(metric_filter, group_components, state_builder))
         return report
+
+    def _note_frame(self) -> None:
+        """Tally one accumulated frame. Subclasses call this once per frame in ``update``."""
+        self.frames_seen += 1
+
+    def frame_count(self, metric_filter: MetricFilter) -> int:
+        """Frames the given filter's slice holds, after the DDP sync.
+
+        The identity filter sees every accumulated frame. A registered filter sees
+        the frames it covered, read from the coverage counter the suite already
+        keeps, so a slice's frame count and its coverage log never disagree.
+
+        Args:
+            metric_filter: Filter whose slice is being built.
+
+        Returns:
+            The number of frames in the slice.
+        """
+        index = self._filter_index(metric_filter)
+        if index is None:
+            return int(self.frames_seen.item())
+        return int(self.region_frames_covered[index].item())
 
     def _note_frame_coverage(self, index: int, available: bool) -> None:
         """Tally one frame for an availability-gated filter.
@@ -525,31 +554,26 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
 
     def _run_group(
         self, metric_filter: MetricFilter, components: list[Metric[StateT]], state_builder
-    ) -> dict[str, float]:
+    ) -> MetricReport:
         windows: list[tuple[MetricRange | None, str]] = [(None, "")]
         windows += [(metric_range, range_suffix(metric_range)) for metric_range in self.ranges]
-        report: dict[str, float] = {}
+        report = MetricReport()
         for metric_range, suffix in windows:
             state = state_builder(metric_range, metric_filter)
             for component in components:
                 if self._stage not in component.stages:
                     continue
-                for name, value in component.evaluate(state, self._stage).items():
-                    # Key names come from the component's OWN filter: filters are
-                    # grouped by cache_key (equal masks), but two same-mask
-                    # filters may carry different display names.
-                    key = self._compose_key(component.filter, name, suffix)
-                    if key in report:
-                        raise ValueError(
-                            f"Two metrics emit the same key {key!r}. Give one a distinct name."
-                        )
-                    report[key] = value
+                if metric_range is not None and component.range_invariant:
+                    continue
+                # Keys are placed under the component's OWN filter name: filters
+                # are grouped by cache_key (equal masks), but two same-mask
+                # filters may carry different display names.
+                report.merge(
+                    component.evaluate(state, self._stage),
+                    range_suffix=suffix,
+                    filter_name=component.filter.name,
+                )
         return report
-
-    @staticmethod
-    def _compose_key(metric_filter: MetricFilter, name: str, suffix: str) -> str:
-        base = f"{name}_{suffix}" if suffix else name
-        return f"{metric_filter.name}/{base}" if metric_filter.name else base
 
     def runs_at(self, stage: EvalStage) -> bool:
         """Whether any component reports at ``stage``.
@@ -566,7 +590,7 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         """
         return any(stage in component.stages for component in self.components)
 
-    def result(self, stage: EvalStage) -> dict[str, float]:
+    def result(self, stage: EvalStage) -> MetricReport:
         """Set the reporting stage and compute. torchmetrics syncs inside compute.
 
         Call once per epoch on a freshly ``reset`` suite. The mixin clones a suite
@@ -576,7 +600,7 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
             stage: Evaluation stage to report for.
 
         Returns:
-            Metric keys mapped to values.
+            The suite's report, keys placed in their filter slice and range window.
         """
         self._stage = stage
         return self.compute()

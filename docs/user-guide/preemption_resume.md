@@ -35,7 +35,7 @@ and accumulation, so keep those identical across relaunches.
 
 ```yaml
 defaults:
-  - /tasks/multi/ptv3/t4dataset/voxel006_m3_b1_24e_t4dataset_122m_base_pseudo
+  - /tasks/multi/ptv3/t4dataset/base_voxel012_122m
   - /defaults/amp_bf16
   - /defaults/preemption
   - _self_
@@ -44,8 +44,10 @@ defaults:
 - `PeriodicCheckpoint` saves the full state `saves_per_epoch` times per epoch
   (default 4, the period is derived from the epoch length in optimizer steps)
   and at the end of every epoch, keeps the newest `keep_last` files (default 2)
-  and points `last.ckpt` at the newest one. It also saves when the job receives
-  SIGTERM.
+  and points `last.ckpt` at the newest one. It also saves when the run is asked to stop
+  through the stop file (see [Stopping a run by hand](#stopping-a-run-by-hand)), and on
+  Ctrl-C or Lightning's SIGTERM exception. It does not save after other errors: one rank may
+  fail alone, and a save needs every rank.
 - `AtomicCheckpointIO` writes every checkpoint to a temporary file and renames it
   into place, so a kill during a write never leaves a truncated file behind.
 
@@ -93,14 +95,37 @@ A batch-scheduler wrapper (slurm or similar) needs three hooks, all generic:
   it would need a collective. A preemption needs none of it: the relaunch resumes from the
   newest periodic file.
 
-## Memory of the 6 cm foundation model
+## Stopping a run by hand
 
-The PT-v3m3 model at 6 cm over the 122 m range holds up to about a million voxels per
-frame (three frames: the current one, one past and one future sweep). With the
-hardware-aligned widths, bf16 and activation checkpointing
-(`model.encoder.activation_checkpointing: true`, set by `tasks/multi/ptv3/t4dataset/base_foundation.yaml`) one frame peaks at 13 to 16 GB on a 96 GB GPU, and a stage 2 run on eight H100
-used about 42 GB per GPU. The foundation stage configs use one frame per GPU with four
-accumulation steps on eight GPUs for a global batch of 32. Checkpointing recomputes the
+To free the GPUs and continue later without losing any step, stop the run through its stop
+file instead of killing it:
+
+```bash
+# The file named by AUTOWARE_ML_STOP_FILE for this run
+touch "$AUTOWARE_ML_STOP_FILE"
+```
+
+Every rank sees the file at the next batch boundary, `PeriodicCheckpoint` saves a full
+checkpoint at that step and the run exits cleanly. A relaunch with `--resume-latest`
+continues from exactly that step, with the dataloader at the same batch. A slurm wrapper that
+maps a signal to the stop file (as for the time limit above) can be stopped the same way with
+`scancel --signal=USR1 --batch <job id>`.
+
+A plain `scancel` or `kill` sends SIGTERM instead. On one GPU, Lightning turns it into an
+exception at a batch boundary and the callback still saves. With several GPUs, Lightning's
+SIGTERM handler runs a collective inside the signal handler and can hang until the job is
+killed, so nothing is saved: the relaunch resumes from the newest periodic checkpoint and
+repeats up to `1 / saves_per_epoch` of an epoch. The same holds for a preemption without a
+grace period and for a crash.
+
+## Memory of a large PTv3 model at 6 cm
+
+A large PTv3 model (`encoder_large`) at 6 cm over the 122 m range holds up to about a
+million voxels per frame (three frames: the current one, one past and one future sweep). With
+bf16, the MLP in fp32 and activation checkpointing (`model.encoder.activation_checkpointing:
+true`), one frame peaks at 13 to 16 GB on a 96 GB GPU, and a joint segmentation and detection
+run on eight H100 used about 42 GB per GPU, with one frame per GPU and four accumulation steps
+for a global batch of 32. Checkpointing recomputes the
 attention and MLP of every block in the backward pass, roughly a third more compute per
 step; it is kept on so that a heavy frame cannot run out of memory and stall a resumed run
 on the same frame.

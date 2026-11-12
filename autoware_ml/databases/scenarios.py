@@ -15,7 +15,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Sequence, Mapping
+from typing import Annotated
+from collections.abc import Sequence, Mapping
 
 from pydantic import BaseModel, ConfigDict, BeforeValidator, Field, model_validator
 
@@ -47,32 +48,31 @@ class DatasetParams(BaseModel):
     Parameters for a dataset, for example, sampling steps
     when preprocessing it.
 
+    The last two fields are dataset options: settings that change which records are built
+    from the dataset and what they hold. Only an option that differs from its default enters
+    the cache hash (see :meth:`_options_hash_repr`), so a dataset that keeps the defaults keeps
+    its record table.
+
     Attributes:
       dataset_name: Name of the dataset.
       sample_steps: Number of steps to sample.
-      semantic_masks: Whether to keep only the samples whose lidar frame has a semantic
-        segmentation mask, dropping every other sample from the record table. For a corpus
-        labelled at a lower rate than it was recorded, so it trains on its labelled samples
-        only. Not a switch for loading the masks: the masks of the kept samples are recorded
-        either way.
-      category_aliases: Raw mask category name to the name the vocabulary resolves it
-        under, for a corpus whose category names mean something else than the same names
-        elsewhere (an older annotation specification whose ``sidewalk`` still contains the
-        curbs, a pseudo label corpus written at a coarser level). Applied when the record
-        table is generated, so the records carry the aliased names.
-      camera_frames: Whether the records carry the camera frames of every sample. Off for
-        a LiDAR only corpus, or a mirror that lacks the images: the record generation then
-        neither reads nor requires them.
+      require_semantic_mask: Keep only the samples whose lidar frame has a semantic
+        segmentation mask. For a dataset that is labelled at a lower rate than it was
+        recorded, such as one labelled frame in ten, so the records hold the labelled samples
+        only.
+      category_aliases: Rename raw mask categories before the vocabulary resolves them, raw
+        name to the name to resolve instead. For a dataset whose category names mean
+        something else than the same names elsewhere, for example an older annotation
+        specification whose ``sidewalk`` still contains the curbs. The records carry the
+        renamed categories.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
     sample_steps: int = Field(ge=1)
-    # Keeps only the samples that have a semantic mask; the name is part of the database hash
-    semantic_masks: bool = False
+    require_semantic_mask: bool = False
     category_aliases: dict[str, str] = Field(default_factory=dict)
-    camera_frames: bool = True
 
     def __str__(self) -> str:
         """String representation of the database version."""
@@ -90,7 +90,7 @@ class DatasetParams(BaseModel):
 
         return (
             f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps}"
-            f"{self._record_options_str()})"
+            f"{self._options_hash_repr()})"
         )
 
     def __eq__(self, other: DatasetParams) -> bool:
@@ -98,31 +98,29 @@ class DatasetParams(BaseModel):
         return (
             self.dataset_name == other.dataset_name
             and self.sample_steps == other.sample_steps
-            and self._record_options_str() == other._record_options_str()
+            and self._options_hash_repr() == other._options_hash_repr()
         )
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
         return hash(str(self))
 
-    def _record_options_str(self) -> str:
+    def _options_hash_repr(self) -> str:
         """
-        String form of the record options that differ from their defaults.
+        Part of :attr:`hash_repr` for the dataset options that differ from their defaults.
 
-        Only the options a corpus sets are named, so the record tables of every corpus that
-        keeps the defaults keep their hash.
+        An option at its default is left out, so adding an option does not change the hash of
+        the datasets that do not use it.
 
         Returns:
           str: The options as ``, name=value`` items, empty when all are at their default.
         """
 
         options = []
-        if self.semantic_masks:
-            options.append(f", semantic_masks={self.semantic_masks}")
+        if self.require_semantic_mask:
+            options.append(f", require_semantic_mask={self.require_semantic_mask}")
         if self.category_aliases:
             options.append(f", category_aliases={sorted(self.category_aliases.items())}")
-        if not self.camera_frames:
-            options.append(f", camera_frames={self.camera_frames}")
         return "".join(options)
 
 

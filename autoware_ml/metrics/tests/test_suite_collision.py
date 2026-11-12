@@ -25,23 +25,24 @@ from autoware_ml.metrics.tests.conftest import (
     collision_box,
     serve_fake_map,
 )
+from autoware_ml.metrics.report import MetricKey
 
-KINDS = {
+MOTION_MODELS = {
     "car": "wheeled",
     "truck": "wheeled",
     "bus": "wheeled",
     "train": "wheeled",
     "motorcycle": "wheeled",
-    "bicycle": "living",
-    "pedestrian": "living",
-    "animal": "living",
+    "bicycle": "omnidirectional",
+    "pedestrian": "omnidirectional",
+    "animal": "omnidirectional",
     "barrier": "static",
     "traffic_cone": "static",
     "debris": "static",
     "bicycle_rack": "static",
     "vehicle_extension": "static",
 }
-LIVING_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
+MAX_SPEEDS = {"pedestrian": 3.0, "animal": 4.0, "bicycle": 6.0}
 
 
 @pytest.fixture(autouse=True)
@@ -54,8 +55,8 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
         vehicle=EGO,
-        kinds=KINDS,
-        living_speeds=LIVING_SPEEDS,
+        motion_models=MOTION_MODELS,
+        max_speeds=MAX_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -100,11 +101,56 @@ def test_suite_computes_ttc_and_criticality_metrics() -> None:
     assert gt_ttc[1] != inf  # barrier ahead reachable
 
     b1 = CriticalFPFN(confidences=(0.5,), match_threshold=2.0).evaluate(state, EvalStage.TEST)
-    assert b1["critical_fp_conf0p5"] == 1.0  # the phantom barrier in path
-    assert b1["critical_fn_conf0p5"] == 0.0  # both GT are matched
+    assert (
+        b1.metric_value(MetricKey(name="critical_fp_conf0p5")) == 1.0
+    )  # the phantom barrier in path
+    assert b1.metric_value(MetricKey(name="critical_fn_conf0p5")) == 0.0  # both GT are matched
 
     b2 = CollisionWeightedMeanAP(thresholds=(2.0,), decay=0.5).evaluate(state, EvalStage.TEST)
-    assert not np.isnan(b2["cw_mAP"])  # the reachable barrier carries the weight
+    assert not np.isnan(
+        b2.metric_value(MetricKey(name="cw_mAP"))
+    )  # the reachable barrier carries the weight
+
+
+def test_a_padding_frame_takes_no_part_in_the_metrics() -> None:
+    """
+    Input: two identical frames, the second flagged in padding_mask as a streaming padding slot.
+    Expected: the padding frame is gathered like the other (the ranks must hold as many entries)
+    but counts nowhere: not in the frames the metrics see, not in the TTC coverage.
+    Check: the per-frame state length, the samples of the state and the TTC frame counters.
+    """
+    suite = Detection3DMetricSuite(
+        components=[CriticalFPFN(confidences=(0.5,), match_threshold=2.0)],
+        class_names=CLASS_NAMES,
+        collision=CollisionTTC(
+            CLASS_NAMES,
+            vehicle=EGO,
+            motion_models=MOTION_MODELS,
+            max_speeds=MAX_SPEEDS,
+            params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
+        ),
+    )
+    gt_boxes = torch.tensor([collision_box(25.0, 0.0)], dtype=torch.float32)
+    preds = {
+        "bboxes_3d": gt_boxes.clone(),
+        "scores_3d": torch.tensor([0.9], dtype=torch.float32),
+        "labels_3d": torch.tensor([0], dtype=torch.long),
+    }
+    suite.update(
+        {
+            "predictions": [preds, preds],
+            "gt_boxes": [gt_boxes, gt_boxes],
+            "gt_labels": [torch.tensor([0]), torch.tensor([0])],
+            "ego2global": [np.eye(4), np.eye(4)],
+            "lanelet_map_path": [STUB_MAP_PATH, STUB_MAP_PATH],
+            "padding_mask": [False, True],
+        }
+    )
+
+    assert len(suite.gt_boxes) == 2
+    assert len(suite.state_for(None).samples) == 1
+    assert int(suite.ttc_frames_seen) == 1
+    assert int(suite.ttc_frames_covered) == 1
 
 
 def test_collision_provider_declares_context_keys() -> None:
@@ -116,8 +162,8 @@ def test_collision_provider_declares_context_keys() -> None:
         collision=CollisionTTC(
             CLASS_NAMES,
             vehicle=EGO,
-            kinds=KINDS,
-            living_speeds=LIVING_SPEEDS,
+            motion_models=MOTION_MODELS,
+            max_speeds=MAX_SPEEDS,
             params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         ),
     )
@@ -132,8 +178,8 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     collision = CollisionTTC(
         CLASS_NAMES,
         vehicle=EGO,
-        kinds=KINDS,
-        living_speeds=LIVING_SPEEDS,
+        motion_models=MOTION_MODELS,
+        max_speeds=MAX_SPEEDS,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
         max_speed_mps=10.0,
     )
@@ -171,7 +217,7 @@ def test_the_score_floor_skips_only_what_no_metric_reads() -> None:
     assert np.isfinite(pred_ttc[1])  # exactly on the floor, still propagated
     assert np.isnan(pred_ttc[2])  # just below the floor, skipped
     assert np.isnan(pred_ttc[3])  # below the floor, skipped
-    assert suite.result(EvalStage.TEST)["critical_fp_conf0p5"] == 0.0
+    assert suite.result(EvalStage.TEST).metric_value(MetricKey(name="critical_fp_conf0p5")) == 0.0
 
 
 def test_a_metric_reading_a_skipped_prediction_fails_loud() -> None:

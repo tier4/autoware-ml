@@ -1,7 +1,0 @@
-# Detection classes of the foundation level: the 20 classes of the fine level, read through the
-# foundation vocabulary, which also lists the box names of the foundation corpora that are
-# outside every detection level.
-defaults:
-  - default_fine
-  - override /database/t4dataset/taxonomy/vocabulary@vocabulary: foundation_detection3d
-  - _self_

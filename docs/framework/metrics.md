@@ -88,8 +88,8 @@ sequenceDiagram
     S->>S: compute() syncs state across GPUs
     S->>S: state_for(range, filter) builds the state
     S->>Me: evaluate(state, stage) for each metric in this stage
-    Me-->>S: per metric report
-    S-->>M: merged report
+    Me-->>S: MetricReport with bare names
+    S-->>M: MetricReport placed in filter slices and range windows
     M->>L: log under val/prefix/key
 ```
 
@@ -101,8 +101,8 @@ function torchmetrics uses to combine that state across GPUs.
 | Suite                                      | `prefix`   | Required keys                          | State (`dist_reduce_fx`)                                  |
 | ------------------------------------------ | ---------- | -------------------------------------- | --------------------------------------------------------- |
 | `Detection3DMetricSuite`                   | `det3d`    | `predictions`, `gt_boxes`, `gt_labels` | per-frame box tensors as list states (`None`)             |
-| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg3d_frames`                           | one confusion tensor over (filter, range) buckets (`sum`) |
-| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg3d_frames`                           | per-frame point tensors (`None`)                          |
+| `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `seg3d_frames`                         | one confusion tensor over (filter, range) buckets (`sum`) |
+| `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `seg3d_frames`                         | per-frame point tensors (`None`)                          |
 
 A confusion matrix is a bounded sufficient statistic, so its counts sum across ranks. Detection
 matching is score ordered inside each frame and the point-level metrics read raw points, so those
@@ -116,10 +116,17 @@ need (`ego2global`, `lanelet_map_path`). `required_keys()` extends the base tupl
 the configuration demands: a detection suite with a collision provider also requires
 `ego2global` and `lanelet_map_path`, and a ground-truth point filter requires `gt_num_points`.
 
-Keys are logged as `{split}/{prefix}/{key}`. A filtered metric prefixes its filter name and a
-range window appends a distance suffix, for example `test/det3d/region_road/mAP_0m_50m`. Two
-suites of the same class run side by side under distinct configured prefixes, and the mixin
-rejects duplicate prefixes.
+A metric records its values under bare names such as `mAP_car` in a `MetricReport`. Every
+value travels with a typed `MetricKey` that names the suite `prefix`, the taxonomy `view`, the
+`filter_name`, the metric `name` and the `range_suffix`, and renders them as
+`{prefix}/{view}/{filter_name}/{name}_{range_suffix}` with the empty levels left out. The suite
+places each metric's keys in the filter slice and range window it evaluated, the model places each
+suite's keys under its prefix, and the key is logged as `{split}/{rendered key}`, for example
+`test/det3d/region_road/mAP_0m_50m`. A report rejects a duplicate key at every level and the log
+payload rejects two keys that render to one name, so two metrics, two filters or two suites can
+never silently overwrite each other. A value is read back by its key, `report.metric_value(MetricKey(...))`,
+and `report.metric_names()` lists the keys. Two suites of the same class run side by side under
+distinct configured prefixes, and the mixin rejects duplicate prefixes.
 
 ## Class structure
 
@@ -173,13 +180,13 @@ optional capability adds a concrete requirement, checked loud at the first batch
 | Capability                                       | Eval-output keys                           | External data              |
 | ------------------------------------------------ | ------------------------------------------ | -------------------------- |
 | detection metrics                                | `predictions`, `gt_boxes`, `gt_labels`     | none                       |
-| segmentation metrics                             | `seg3d_frames`                               | none                       |
+| segmentation metrics                             | `seg3d_frames`                             | none                       |
 | ground-truth point filter, occlusion split       | `gt_num_points` (per-box point count)      | none                       |
 | corridor filter (straight strip)                 | none                                       | none                       |
 | region filters and collision filter              | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
 | collision metrics (critical FP/FN, weighted mAP) | `ego2global`, `lanelet_map_path` per frame | one lanelet2 map per scene |
 | velocity error (TP errors, NDS)                  | boxes with velocity components             | none                       |
-| partial-detection score                          | ground-truth boxes inside `seg3d_frames`     | none                       |
+| partial-detection score                          | ground-truth boxes inside `seg3d_frames`   | none                       |
 
 The map-based features never read a map path directly. They pass the frame's `scene_token` to a
 map provider, and an injected resolver turns that identifier into the scene's `lanelet2_map.osm`.
@@ -364,6 +371,12 @@ own reachable sets enter through the collision metrics, not through the filter.
     </svg>
 </div>
 
+**Class catalog.** Every dataset family keeps a class catalog per task in
+`configs/metrics/<dataset>/<task>/class_catalog/`, one row per class name with its behaviour group,
+the distance it is evaluated up to (`max_distance`), its collision `motion_model` and `max_speed`,
+and whether the partial detection score checks it. A model reads the rows of the classes it
+trains, and a trained class the catalog does not list stops the run.
+
 **Behaviour groups.** `class_groups` folds the trained classes onto behaviour-equivalent groups.
 Confusing a bus for a truck does not change how the vehicle drives, so inside a group it counts
 as a hit. Grouping always replaces the class axis, never extends it: the same suite is configured
@@ -481,9 +494,9 @@ configs and tunable there, the rest are code defaults.
 | object body                           | the object's own box length and width                                                     |
 | wheeled speed on the map              | the lanelet speed limit at the agent's position                                           |
 | off-map fallback speed                | 16.7 m/s (config)                                                                         |
-| living run speeds                     | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
+| omnidirectional max speeds            | pedestrian 3.0, animal 4.0, bicycle 6.0 m/s                                               |
 | wheeled classes                       | car, truck, bus, train, motorcycle                                                        |
-| living classes                        | pedestrian, animal, bicycle                                                               |
+| omnidirectional classes               | pedestrian, animal, bicycle                                                               |
 | static classes (footprint only)       | barrier, traffic_cone, debris, bicycle_rack, vehicle_extension                            |
 | corridor width                        | 3.0 m (config)                                                                            |
 
@@ -945,7 +958,15 @@ the label-confusion view among detections that did match, not a recall metric.
 </svg>
 </div>
 
-### Box counts
+### Frame and box counts
+
+`FrameCount` reports how many frames the other metrics scored, as `num_frames`. A region-filtered
+component counts only the frames its filter covered, so a slice reported over fewer scenes than the
+whole-scene metrics shows it next to its scores. Range clipping removes boxes, never frames, so the
+component declares itself `range_invariant` and the suite reports it once per slice instead of once
+per range window. The segmentation suites ship the same component under
+`autoware_ml.metrics.segmentation3d.frame_count`, reading the frame count every suite keeps in its
+base class: one whole-scene counter, and the coverage counter for each filter slice.
 
 `BoxCounts` reports how many ground-truth and predicted boxes the other metrics scored, in total
 and per class. The ground truth is already filtered by the minimum point count and the class range
@@ -1148,8 +1169,8 @@ right there.
 rewards partial hits with a saturating credit: for a pedestrian or a cone, classifying even a few
 points correctly is far better than none, which point-averaged mIoU cannot see. A diagnostic
 metric of the joint detection plus segmentation suite (`datasets/<dataset>/det3d_seg3d`), whose
-`seg3d_frames` carry the detection ground-truth boxes. The metric config of each taxonomy lists the
-classes it reports in `partial_detection3d_classes`.
+`seg3d_frames` carry the detection ground-truth boxes. The detection class catalog marks the
+classes it reports with `partial_detection`.
 
 <div class="metrics-fig">
 <svg viewBox="0 0 660 210" width="660" height="210" role="img" aria-labelledby="fig-d3-title">
@@ -1291,8 +1312,8 @@ it, so overriding a suite directly would mean restating every field.
 model:
   metrics:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
-      class_names: ${database.taxonomy.detection3d.class_names}
-      eval_class_range: ${eval_class_range}
+      class_names: ${taxonomy.detection3d.class_names}
+      max_distances: ${metric_params.detection3d.max_distances}
       ranges: ${metric_ranges}
       components:
         - { _target_: autoware_ml.metrics.detection3d.mean_ap.MeanAP, stages: [val, test] }
@@ -1327,11 +1348,11 @@ segmentation without touching the suite.
 ```python
 class PerClassAccuracy(Metric):
     def evaluate(self, state, stage):
-        return {
-            f"acc_class_{i}": float(state.recall[i].item())
-            for i in range(state.num_classes)
-            if bool(state.has_support[i])
-        }
+        report = MetricReport()
+        for i in range(state.num_classes):
+            if bool(state.has_support[i]):
+                report.record(f"acc_class_{i}", float(state.recall[i].item()))
+        return report
 ```
 
 Add it to the suite's `components` list in config and its keys appear under the suite prefix. A

@@ -19,6 +19,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from omegaconf import OmegaConf
+import re
+
+import onnx
 import pytest
 import torch
 
@@ -28,13 +31,14 @@ from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 import autoware_ml.utils.deploy as deploy
 from autoware_ml.utils.deploy import (
     ExportSpec,
-    build_dynamic_shapes,
-    build_dynamic_axes,
+    dynamic_shapes_from_spec,
     export_to_onnx,
     merge_module_onnx_cfg,
     normalize_dynamic_shapes_for_model,
     resolve_export_specs,
     should_modify_graph,
+    validate_onnx_modules_exported,
+    validate_onnx_names_not_configured,
     supports_export_stage,
 )
 
@@ -44,73 +48,116 @@ class _DummyModel(torch.nn.Module):
         return voxels + num_points.unsqueeze(-1)
 
 
-def test_export_to_onnx_prefers_export_spec_output_names(tmp_path: Path) -> None:
-    class _SingleOutput(torch.nn.Module):
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            return x + 1
-
+def test_export_to_onnx_names_the_tensors_after_the_spec(tmp_path: Path) -> None:
+    """The ONNX inputs and outputs carry the spec's names."""
     output_path = tmp_path / "model.onnx"
-    onnx_cfg = OmegaConf.create(
-        {
-            "opset_version": 17,
-            "dynamo": False,
-            "do_constant_folding": True,
-            "input_names": ["input"],
-            "output_names": ["configured_output"],
-        }
+    spec = ExportSpec(
+        module=torch.nn.Identity(),
+        args=(torch.ones(2, 3),),
+        input_names=["spec_input"],
+        output_names=["spec_output"],
     )
 
-    export_to_onnx(
-        model=_SingleOutput(),
-        input_sample=(torch.ones(2, 3),),
-        onnx_cfg=onnx_cfg,
-        input_param_names=["input"],
-        output_names_override=["exported_output"],
-        dynamic_axes_override=None,
-        output_path=output_path,
+    export_to_onnx(spec, OmegaConf.create({"opset_version": 17, "dynamo": False}), output_path)
+
+    graph = onnx.load(str(output_path)).graph
+    assert [tensor.name for tensor in graph.input] == ["spec_input"]
+    assert [tensor.name for tensor in graph.output] == ["spec_output"]
+
+
+def test_configured_names_are_refused_when_the_config_is_read() -> None:
+    """A config that names tensors or axes fails up front, naming the entry, shared or per module."""
+    validate_onnx_names_not_configured(
+        OmegaConf.create({"opset_version": 17, "modules": {"m": {}}})
+    )
+    for cfg, entry in (
+        ({"input_names": ["x"]}, "deploy.onnx.input_names"),
+        ({"modules": {"head": {"output_names": ["y"]}}}, "deploy.onnx.modules.head.output_names"),
+        (
+            {"modules": {"head": {"dynamic_axes": {"x": {0: "n"}}}}},
+            "deploy.onnx.modules.head.dynamic_axes",
+        ),
+        ({"dynamic_shapes": {"x": {0: "n"}}}, "deploy.onnx.dynamic_shapes"),
+    ):
+        with pytest.raises(ValueError, match=re.escape(entry)):
+            validate_onnx_names_not_configured(OmegaConf.create(cfg))
+
+
+def _identity_spec(dynamic_axes: dict[str, dict[int, str]] | None = None) -> ExportSpec:
+    return ExportSpec(
+        module=torch.nn.Identity(),
+        args=(torch.ones(2, 3),),
+        input_names=["input"],
+        output_names=["output"],
+        dynamic_axes=dynamic_axes,
     )
 
-    assert output_path.exists()
 
-
-def test_export_to_onnx_prefers_export_spec_dynamic_axes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+def test_export_to_onnx_applies_the_spec_dynamic_axes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The TorchScript exporter gets the axes the spec declares; the config has none."""
     captured_kwargs: dict[str, object] = {}
-    monkeypatch.setattr(
-        torch.onnx,
-        "export",
-        lambda **kwargs: captured_kwargs.update(kwargs),
-    )
-
-    dynamic_axes_override = {"input": {0: "export_spec_batch"}}
-    onnx_cfg = OmegaConf.create(
-        {
-            "opset_version": 17,
-            "dynamo": False,
-            "dynamic_axes": {"input": {0: "configured_batch"}},
-        }
-    )
+    monkeypatch.setattr(torch.onnx, "export", lambda **kwargs: captured_kwargs.update(kwargs))
+    axes = {"input": {0: "batch"}, "output": {0: "batch"}}
 
     export_to_onnx(
-        model=torch.nn.Identity(),
-        input_sample=(torch.ones(2, 3),),
-        onnx_cfg=onnx_cfg,
-        input_param_names=["input"],
-        output_names_override=None,
-        dynamic_axes_override=dynamic_axes_override,
-        output_path=tmp_path / "model.onnx",
+        _identity_spec(axes),
+        OmegaConf.create({"opset_version": 17, "dynamo": False}),
+        tmp_path / "m.onnx",
     )
 
-    assert captured_kwargs["dynamic_axes"] == dynamic_axes_override
+    assert captured_kwargs["dynamic_axes"] == axes
+
+
+def test_export_to_onnx_derives_the_dynamo_shapes_from_the_spec(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """torch.export gets one Dim per input axis the spec declares; the config has none."""
+    captured_kwargs: dict[str, object] = {}
+    monkeypatch.setattr(torch.onnx, "export", lambda **kwargs: captured_kwargs.update(kwargs))
+
+    export_to_onnx(
+        _identity_spec({"input": {0: "batch"}, "output": {0: "batch"}}),
+        OmegaConf.create({"opset_version": 17, "dynamo": True}),
+        tmp_path / "m.onnx",
+    )
+
+    (shapes,) = captured_kwargs["dynamic_shapes"]
+    assert list(shapes) == [0]
+    assert shapes[0].__name__ == "batch"
+    assert "dynamic_axes" not in captured_kwargs
+
+
+def test_export_spec_refuses_dynamic_axes_of_unknown_tensors() -> None:
+    """The TorchScript exporter only warns about such an axis and exports it static."""
+    with pytest.raises(ValueError, match=r"for \['inputs'\], which are not among"):
+        _identity_spec({"input": {0: "batch"}, "inputs": {0: "batch"}})
+
+
+def test_export_spec_names_every_input_and_some_output() -> None:
+    """A spec that leaves an input or every output unnamed is refused when it is built."""
+    args = (torch.ones(1, 1), torch.ones(1))
+    for input_names, output_names, message in (
+        (["voxels"], ["out"], "names 1 inputs for 2 args"),
+        (["voxels", "num_points", "extra"], ["out"], "names 3 inputs for 2 args"),
+        (["voxels", "num_points"], [], "names no outputs"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            ExportSpec(
+                module=_DummyModel(),
+                args=args,
+                input_names=input_names,
+                output_names=output_names,
+            )
 
 
 def test_supports_export_stage_uses_export_spec_capabilities() -> None:
     spec = ExportSpec(
         module=_DummyModel(),
         args=(torch.ones(1, 1), torch.ones(1)),
-        input_param_names=["voxels", "num_points"],
+        input_names=["voxels", "num_points"],
+        output_names=["out"],
         supported_stages=frozenset({"onnx"}),
     )
 
@@ -118,60 +165,28 @@ def test_supports_export_stage_uses_export_spec_capabilities() -> None:
     assert supports_export_stage(spec, "tensorrt") is False
 
 
-def test_build_dynamic_axes_supports_legacy_export_config() -> None:
-    deploy_cfg = OmegaConf.create(
-        {
-            "dynamic_axes": {
-                "feat": {0: "voxels_num"},
-                "pred_probs": {0: "voxels_num"},
-            }
-        }
+def test_dynamic_shapes_from_spec_follow_the_input_order_and_share_a_dim_per_name() -> None:
+    spec = ExportSpec(
+        module=torch.nn.Identity(),
+        args=(torch.ones(3, 4), torch.ones(3, 3), torch.ones(2, 3), torch.ones(3)),
+        input_names=["points", "coors", "voxel_coors", "inverse_map"],
+        output_names=["pred_probs"],
+        dynamic_axes={
+            "points": {0: "num_points"},
+            "coors": {0: "num_points"},
+            "inverse_map": {0: "num_points"},
+            "pred_probs": {0: "num_points"},
+        },
     )
 
-    assert build_dynamic_axes(deploy_cfg) == {
-        "feat": {0: "voxels_num"},
-        "pred_probs": {0: "voxels_num"},
-    }
+    shapes = dynamic_shapes_from_spec(spec)
 
-
-def test_build_dynamic_axes_falls_back_to_dynamic_shapes() -> None:
-    deploy_cfg = OmegaConf.create(
-        {
-            "dynamic_shapes": {
-                "points": {0: {"name": "num_points", "min": 2}},
-                "inverse_map": {0: {"name": "num_points", "min": 2}},
-            }
-        }
-    )
-
-    assert build_dynamic_axes(deploy_cfg) == {
-        "points": {0: "num_points"},
-        "inverse_map": {0: "num_points"},
-    }
-
-
-def test_build_dynamic_shapes_matches_positional_export_inputs() -> None:
-    deploy_cfg = OmegaConf.create(
-        {
-            "dynamic_shapes": {
-                "points": {0: {"name": "num_points", "min": 2}},
-                "coors": {0: {"name": "num_points", "min": 2}},
-                "inverse_map": {0: {"name": "num_points", "min": 2}},
-            }
-        }
-    )
-
-    dynamic_shapes = build_dynamic_shapes(
-        deploy_cfg,
-        ["points", "coors", "voxel_coors", "inverse_map"],
-    )
-
-    assert dynamic_shapes is not None
-    assert len(dynamic_shapes) == 4
-    assert dynamic_shapes[0] is not None
-    assert dynamic_shapes[1] is not None
-    assert dynamic_shapes[2] is None
-    assert dynamic_shapes[3] is not None
+    assert shapes is not None
+    assert len(shapes) == 4
+    assert shapes[2] is None
+    assert shapes[0] is not None and shapes[0][0].__name__ == "num_points"
+    assert shapes[0][0] is shapes[1][0] is shapes[3][0]
+    assert dynamic_shapes_from_spec(_identity_spec()) is None
 
 
 def test_normalize_dynamic_shapes_wraps_varargs_forward() -> None:
@@ -214,10 +229,47 @@ def test_merge_module_onnx_cfg_overlays_shared_and_module_settings() -> None:
     assert "modules" not in head
 
 
-def test_merge_module_onnx_cfg_raises_for_unknown_module() -> None:
-    onnx_cfg = OmegaConf.create({"opset_version": 17, "modules": {"backbone": {}}})
-    with pytest.raises(KeyError):
-        merge_module_onnx_cfg(onnx_cfg, "missing")
+def test_merge_module_onnx_cfg_gives_the_shared_settings_to_an_empty_entry() -> None:
+    """``{}`` and a bare key both mean "no overrides"."""
+    for modules in ({"head": {}}, {"head": None}):
+        onnx_cfg = OmegaConf.create({"opset_version": 17, "dynamo": False, "modules": modules})
+        head = merge_module_onnx_cfg(onnx_cfg, "head")
+        assert head.opset_version == 17
+        assert head.dynamo is False
+        assert "modules" not in head
+
+
+def test_merge_module_onnx_cfg_refuses_a_module_without_an_entry() -> None:
+    """A module added to the model must be listed, or it would silently lose its overrides."""
+    for onnx_cfg in (
+        OmegaConf.create({"opset_version": 17, "dynamo": False}),
+        OmegaConf.create({"opset_version": 17, "dynamo": False, "modules": {"other": {}}}),
+    ):
+        with pytest.raises(KeyError, match="no entry for exported module 'head'"):
+            merge_module_onnx_cfg(onnx_cfg, "head")
+
+
+def test_every_exported_module_needs_an_entry() -> None:
+    """A missing entry drops a module's overrides; a misspelled one shows up as the missing one.
+
+    Entries of modules the model does not export pass: BEVFusion lists the entries of both its
+    lidar-only and camera-lidar variants in one base config.
+    """
+    validate_onnx_modules_exported(
+        OmegaConf.create({"modules": {"encoder": {}, "head": {"precision": "fp16"}}}),
+        ["encoder", "head"],
+    )
+    validate_onnx_modules_exported(
+        OmegaConf.create({"modules": {"lidar": {}, "image_backbone": {}, "camera_lidar": {}}}),
+        ["lidar"],
+    )
+    with pytest.raises(ValueError, match=r"no entry for the exported modules \['head'\]"):
+        validate_onnx_modules_exported(OmegaConf.create({"opset_version": 17}), ["head"])
+    with pytest.raises(ValueError, match=r"\['head'\].*entries are \['encoder', 'heads'\]"):
+        validate_onnx_modules_exported(
+            OmegaConf.create({"modules": {"encoder": {}, "heads": {"precision": "fp16"}}}),
+            ["encoder", "head"],
+        )
 
 
 def test_resolve_export_specs_forwards_batch_and_preserves_order(monkeypatch) -> None:

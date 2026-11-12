@@ -6,6 +6,7 @@ from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name, threshold_token
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
+from autoware_ml.metrics.report import MetricReport
 
 
 class HeadingAP(Metric[Detection3DState]):
@@ -32,7 +33,7 @@ class HeadingAP(Metric[Detection3DState]):
         if not self.thresholds:
             raise ValueError("thresholds must not be empty.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Compute heading-aware AP metrics for the accumulated detection state.
 
         Args:
@@ -40,18 +41,19 @@ class HeadingAP(Metric[Detection3DState]):
             stage: Evaluation stage requesting the metrics.
 
         Returns:
-            Mapping of metric names to scalar values.
+            This metric's report.
         """
         labels = state.labels(full=True)
         per_class_aph = {
             label: mean_valid([state.curve_metrics(label, t).aph for t in self.thresholds])
             for label in labels
         }
-        report = {"mAPH": mean_valid(list(per_class_aph.values()))}
+        report = MetricReport()
+        report.record("mAPH", mean_valid(list(per_class_aph.values())))
         for label, aph in per_class_aph.items():
             name = label_metric_name(label, state.class_names)
-            report[f"mAPH_{name}"] = aph
+            report.record(f"mAPH_{name}", aph)
             for threshold in self.thresholds:
                 token = threshold_token(threshold)
-                report[f"APH_{name}_{token}"] = state.curve_metrics(label, threshold).aph
+                report.record(f"APH_{name}_{token}", state.curve_metrics(label, threshold).aph)
         return report

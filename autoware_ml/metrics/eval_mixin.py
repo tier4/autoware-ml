@@ -20,6 +20,7 @@ import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.base import EvalStage, MetricSuite
+from autoware_ml.metrics.report import MetricReport
 
 
 class MetricEvalMixin:
@@ -159,17 +160,10 @@ class MetricEvalMixin:
                 )
 
     def _log_metrics(self, stage: EvalStage) -> None:
-        metrics = self._stage_metrics(stage)
-        report: dict[str, float] = {}
-        for metric in metrics:
-            for name, value in metric.result(stage).items():
-                key = f"{stage.value}/{metric.prefix}/{name}"
-                if key in report:
-                    raise ValueError(
-                        f"Two metrics log the same key {key!r}. Set a distinct prefix."
-                    )
-                report[key] = value
-        if not report:
+        report = MetricReport()
+        for metric in self._stage_metrics(stage):
+            report.merge(metric.result(stage), prefix=metric.prefix)
+        if not len(report):
             return
         # Values are already global and identical on every rank after sync, so no sync_dist.
-        self.log_dict(report, on_step=False, on_epoch=True, logger=True)
+        self.log_dict(report.to_log_dict(stage.value), on_step=False, on_epoch=True, logger=True)

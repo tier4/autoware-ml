@@ -24,12 +24,12 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import LabelVocabulary, Segmentation3DTaxonomy
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 from autoware_ml.transforms.base import TransformsCompose
-from autoware_ml.transforms.boxes3d.filters import BBoxesLabelNameFilter, BBoxesRangeFilter
+from autoware_ml.transforms.boxes3d.filters import BBoxesIgnoreIndexFilter, BBoxesRangeFilter
 from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalBEVRandomFlip,
     GlobalRotScaleTrans,
@@ -54,9 +54,8 @@ POINT_CLOUD_RANGE = (-8.0, -8.0, -2.0, 8.0, 8.0, 2.0)
 SCENE = "db_v1/scene_0/dataset_v1"
 
 VOCABULARY = LabelVocabulary({"car": "car", "vehicle.car": "car", "unpainted": None})
-SEGMENTATION3D_TAXONOMY = Segmentation3DTaxonomy(
-    VOCABULARY, ("car",), {"car": "car"}, -1, {"vehicle": ("car",)}
-)
+DETECTION3D_TAXONOMY = LabelTaxonomy(VOCABULARY, ("car",), {"car": "car"}, -1)
+SEGMENTATION3D_TAXONOMY = LabelTaxonomy(VOCABULARY, ("car",), {"car": "car"}, -1)
 
 
 def sweep_time_offset(sweep_index: int) -> float:
@@ -166,8 +165,8 @@ def write_corpus(
                 DatasetTableSchema.SAMPLE_ID.name: f"sample-{record_index}",
                 DatasetTableSchema.SAMPLE_INDEX.name: record_index,
                 DatasetTableSchema.TIMESTAMP_SECONDS.name: float(record_index),
-                DatasetTableSchema.LOCATION.name: "odaiba",
-                DatasetTableSchema.VEHICLE_TYPE.name: "j6gen2",
+                DatasetTableSchema.LOCATION.name: "city_b",
+                DatasetTableSchema.VEHICLE_TYPE.name: "vehicle_a",
                 DatasetTableSchema.SCENARIO_NAME.name: "scenario",
                 DatasetTableSchema.LIDAR_FRAMES.name: lidar_frames,
                 DatasetTableSchema.LIDAR_SOURCES.name: [],
@@ -182,7 +181,6 @@ def write_corpus(
                         "box3d_instance_id": f"box-{record_index}",
                         "box3d_dataset_label_name": "vehicle.car",
                         "box3d_label_name": "car",
-                        "box3d_label_index": 0,
                         "box3d_num_lidar_points": 64,
                         "box3d_num_radar_points": 0,
                         "box3d_valid": True,
@@ -224,7 +222,7 @@ def build_transforms() -> TransformsCompose:
             RandomStrengthJitter(
                 gamma_range=(0.8, 1.25), scale_range=(0.9, 1.1), shift_range=(-0.02, 0.02)
             ),
-            BBoxesLabelNameFilter(label_names_to_keep=["car"], class_names=["car"]),
+            BBoxesIgnoreIndexFilter(ignore_index=-1),
             BBoxesRangeFilter(point_cloud_range=POINT_CLOUD_RANGE),
         ]
     )
@@ -240,7 +238,7 @@ def build_dataset(root: Path, records: pl.DataFrame) -> T4Dataset:
         transforms=build_transforms(),
         dataset_tasks=MappingProxyType(
             {
-                "detection3d": Detection3DTask,
+                "detection3d": partial(Detection3DTask, taxonomy=DETECTION3D_TAXONOMY),
                 "segmentation3d": partial(T4Segmentation3DTask, taxonomy=SEGMENTATION3D_TAXONOMY),
             }
         ),

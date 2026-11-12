@@ -120,12 +120,27 @@ dataset for it, concatenated in declaration order, so several sources mix their 
 dataset reads the database of its source and declares whether the boxes (`det3d_supervised`) and
 semantic masks (`seg3d_supervised`) of that corpus supervise the run. A dataset with a task
 turned off still serves that task, with an empty box set or ignored point labels, so every
-sample of the split collates with the others. All sources of a datamodule must share one
-taxonomy.
+sample of the split collates with the others. Every source reads its labels through the
+taxonomies of the run.
 
 The datasets are instantiated by Hydra without records. In `setup()` the datamodule calls
 `bind(records)` on the dataset of every source, which returns a copy serving the records of that
 database in the split, and concatenates the bound copies of a split in declaration order.
+
+Temporal models that carry a memory across batches train on a `StreamingDataModule`, a `DataModule`
+that also takes the experiment `seed`. Every dataloader draws from a `GroupStreamingSampler`, which
+joins the scenes, the training split reshuffling them every epoch from `seed`, and cuts their
+frames, each scene in time order, into one lane per batch position of every rank. The lanes differ
+by at most one frame, and a shorter lane ends with a padding slot that repeats its last frame, so
+every rank runs the same number of batches and every split serves every frame exactly once as a real
+sample. The batch flags the padding slots in `ModelGTBatch.padding_mask`: a model leaves them out of
+its loss, and the logged batch size (`num_real_samples()`) and the detection metrics leave them
+out; the detection eval output still lists them, flagged, so every GPU gathers as many frames. A
+prediction writer drops them by the mask it gets with the batch. Anything that would reorder the
+frames is refused: frame sampling, a shuffling dataloader and `trainer.overfit_batches` (shorten a
+run with `limit_train_batches` / `limit_val_batches` instead). A model config switches to it by
+composing `/datamodule/streaming@datamodule: default_streaming_datamodule` after its database
+datamodule.
 
 ### Dataset
 

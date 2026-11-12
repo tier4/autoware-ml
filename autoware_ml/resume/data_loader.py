@@ -29,9 +29,10 @@ that gap.
   that the next ``__iter__`` at the same epoch consumes.
 
 The datamodule stores the loader state in the checkpoint through its own
-``state_dict`` hook (:class:`ResumableTrainLoaderMixin`), which Lightning restores before any dataloader is built, so
-the position survives even when the trainer builds the dataloaders early (it does,
-to estimate the number of optimizer steps for the scheduler).
+``state_dict`` hook (:class:`ResumableTrainLoaderMixin`), which Lightning restores
+before any dataloader is built, so the position survives even when the trainer
+builds the dataloaders early (it does, to estimate the number of optimizer steps
+for the scheduler).
 """
 
 from __future__ import annotations

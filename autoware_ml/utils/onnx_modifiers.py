@@ -20,14 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
-def _import_onnx_tooling() -> tuple[Any, Any, Any, Any, Any]:
-    """Import ONNX tooling lazily for deploy-only paths."""
-    import numpy as np
-    import onnx
-    from onnx import TensorProto, helper, numpy_helper
-
-    return np, onnx, TensorProto, helper, numpy_helper
+import numpy as np
+import onnx
+from onnx import TensorProto, helper, numpy_helper
 
 
 def _set_last_dim(value_info: Any, value: int) -> None:
@@ -80,8 +75,6 @@ class TopKConstantKModifier:
 
     def modify(self, onnx_path: str | Path) -> Path:
         """Rewrite the target TopK node to use the configured fixed K."""
-        np, onnx, TensorProto, helper, numpy_helper = _import_onnx_tooling()
-
         source_path = Path(onnx_path)
         model = onnx.load(source_path.as_posix())
         graph = model.graph
@@ -163,8 +156,6 @@ class AttentionScaleToDivModifier:
 
     def modify(self, onnx_path: str | Path) -> Path:
         """Rewrite attention score scaling Mul nodes as equivalent Div nodes."""
-        np, onnx, _TensorProto, _helper, numpy_helper = _import_onnx_tooling()
-
         source_path = Path(onnx_path)
         model = onnx.load(source_path.as_posix())
         constants = self._constant_tensor_by_output(model, numpy_helper)

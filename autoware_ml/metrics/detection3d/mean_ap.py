@@ -6,6 +6,7 @@ from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name, threshold_token
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
+from autoware_ml.metrics.report import MetricReport
 
 
 class MeanAP(Metric[Detection3DState]):
@@ -33,7 +34,7 @@ class MeanAP(Metric[Detection3DState]):
         if not self.thresholds:
             raise ValueError("thresholds must not be empty.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Compute mean AP metrics for the accumulated detection state.
 
         Args:
@@ -41,39 +42,42 @@ class MeanAP(Metric[Detection3DState]):
             stage: Evaluation stage requesting the metrics.
 
         Returns:
-            Mapping of metric names to scalar values.
+            This metric's report.
         """
         # Both stages average over the full trained class set. The val number
         # used for model selection and the reported test number therefore cover
         # the same classes, and the monitored key always exists, reporting NaN
         # when no class is measurable.
         labels = state.labels(full=True)
+        report = MetricReport()
         if not labels:
-            return {"mAP": float("nan")}
+            report.record("mAP", float("nan"))
+            return report
 
         per_class_ap = {
             label: mean_valid([state.curve_metrics(label, t).ap for t in self.thresholds])
             for label in labels
         }
-        report = {"mAP": mean_valid(list(per_class_ap.values()))}
+        report.record("mAP", mean_valid(list(per_class_ap.values())))
         for label, ap in per_class_ap.items():
-            report[f"mAP_{label_metric_name(label, state.class_names)}"] = ap
+            report.record(f"mAP_{label_metric_name(label, state.class_names)}", ap)
         if stage is EvalStage.VAL:
             return report
 
         for label in labels:
             name = label_metric_name(label, state.class_names)
-            report[f"gt_count_{name}"] = float(
-                state.match_curve(label, self.thresholds[0]).total_gt
+            report.record(
+                f"gt_count_{name}",
+                float(state.match_curve(label, self.thresholds[0]).total_gt),
             )
             for threshold in self.thresholds:
                 curve = state.match_curve(label, threshold)
                 metrics = state.curve_metrics(label, threshold)
                 token = threshold_token(threshold)
-                report[f"AP_{name}_{token}"] = metrics.ap
-                report[f"num_match_{name}_{token}"] = float(curve.num_match)
-                report[f"max_f1_{name}_{token}"] = metrics.max_f1
-                report[f"optimal_conf_{name}_{token}"] = metrics.optimal_conf
-                report[f"optimal_recall_{name}_{token}"] = metrics.optimal_recall
-                report[f"optimal_precision_{name}_{token}"] = metrics.optimal_precision
+                report.record(f"AP_{name}_{token}", metrics.ap)
+                report.record(f"num_match_{name}_{token}", float(curve.num_match))
+                report.record(f"max_f1_{name}_{token}", metrics.max_f1)
+                report.record(f"optimal_conf_{name}_{token}", metrics.optimal_conf)
+                report.record(f"optimal_recall_{name}_{token}", metrics.optimal_recall)
+                report.record(f"optimal_precision_{name}_{token}", metrics.optimal_precision)
         return report

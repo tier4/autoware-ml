@@ -16,6 +16,7 @@ per-class values become per-group and intra-group confusion counts as correct.
 from __future__ import annotations
 
 from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
     PointCloudSeg3DState,
     class_token,
@@ -46,7 +47,7 @@ class NeighbourhoodTolerantErrorRate(Metric[PointCloudSeg3DState]):
         if self.radius < 0.0:
             raise ValueError("radius must be >= 0, zero disables the tolerance.")
 
-    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: PointCloudSeg3DState, stage: EvalStage) -> MetricReport:
         """Report the tolerant error rate, whole-scene and per class.
 
         Args:
@@ -54,7 +55,7 @@ class NeighbourhoodTolerantErrorRate(Metric[PointCloudSeg3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         # Scored points are the ones the filter and the ignore index kept, a point is
         # wrong when the neighbourhood rescue still leaves it disagreeing with its target.
@@ -77,16 +78,18 @@ class NeighbourhoodTolerantErrorRate(Metric[PointCloudSeg3DState]):
                 scored_per_class[class_index] += int(is_class.sum())
                 wrong_per_class[class_index] += int((errors & is_class).sum())
 
-        report = {
-            "tolerant_error_rate": wrong_points / scored_points if scored_points else float("nan"),
-            "tolerant_error_count": float(wrong_points),
-        }
+        report = MetricReport()
+        report.record(
+            "tolerant_error_rate", wrong_points / scored_points if scored_points else float("nan")
+        )
+        report.record("tolerant_error_count", float(wrong_points))
         for class_index in range(num_classes):
             name = class_token(class_index, state.class_names)
-            report[f"tolerant_error_rate_{name}"] = (
+            report.record(
+                f"tolerant_error_rate_{name}",
                 wrong_per_class[class_index] / scored_per_class[class_index]
                 if scored_per_class[class_index]
-                else float("nan")
+                else float("nan"),
             )
-            report[f"tolerant_error_count_{name}"] = float(wrong_per_class[class_index])
+            report.record(f"tolerant_error_count_{name}", float(wrong_per_class[class_index]))
         return report

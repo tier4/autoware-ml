@@ -30,6 +30,7 @@ from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_vali
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
 from autoware_ml.metrics.geometry.reachability import collision_weights
+from autoware_ml.metrics.report import MetricReport
 
 
 class CollisionWeightedMeanAP(Metric[Detection3DState]):
@@ -61,7 +62,7 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
         if not isfinite(self.decay) or self.decay < 0.0:
             raise ValueError("decay must be a finite value >= 0.")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Weighted AP per class, averaged over thresholds, then over classes.
 
         One pass over the frames: tensors are converted and TTC-weighted once per
@@ -72,7 +73,7 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         labels = state.labels(full=True)
         total_gt_weight = {label: 0.0 for label in labels}
@@ -132,10 +133,11 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
                     for threshold in self.thresholds
                 ]
             )
-        report = {"cw_mAP": mean_valid(list(per_class.values()))}
+        report = MetricReport()
+        report.record("cw_mAP", mean_valid(list(per_class.values())))
         if stage is EvalStage.TEST:
             for label, value in per_class.items():
-                report[f"cw_mAP_{label_metric_name(label, state.class_names)}"] = value
+                report.record(f"cw_mAP_{label_metric_name(label, state.class_names)}", value)
         return report
 
     @staticmethod

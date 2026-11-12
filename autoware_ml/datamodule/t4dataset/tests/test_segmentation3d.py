@@ -24,18 +24,14 @@ import numpy as np
 import polars as pl
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
-from autoware_ml.databases.taxonomy import LabelVocabulary, Segmentation3DTaxonomy
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
 
 VOCABULARY = LabelVocabulary(
     {"car": "car", "police_car": "car", "tree": "vegetation", "unpainted": None}
 )
-TAXONOMY = Segmentation3DTaxonomy(
-    VOCABULARY,
-    ("car", "vegetation"),
-    {"car": "car", "vegetation": "vegetation"},
-    -1,
-    {"dynamic": ("car",), "static": ("vegetation",)},
+TAXONOMY = LabelTaxonomy(
+    VOCABULARY, ("car", "vegetation"), {"car": "car", "vegetation": "vegetation"}, -1
 )
 
 # The record stores the mask path relative to the database root, the task joins it onto the root

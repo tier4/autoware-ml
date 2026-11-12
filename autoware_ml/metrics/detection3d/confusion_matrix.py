@@ -18,6 +18,8 @@ from autoware_ml.metrics.confusion_report import confusion_cells
 from autoware_ml.metrics.detection3d.criticality import greedy_match
 from autoware_ml.metrics.detection3d.matching import Detection3DState
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
+from autoware_ml.metrics.report import MetricReport
+from autoware_ml.types.metrics import MatchCost
 
 
 class ConfusionMatrix(Metric[Detection3DState]):
@@ -44,7 +46,7 @@ class ConfusionMatrix(Metric[Detection3DState]):
         if not 0.0 <= self.min_score <= 1.0:
             raise ValueError("min_score must be in [0, 1].")
 
-    def evaluate(self, state: Detection3DState, stage: EvalStage) -> dict[str, float]:
+    def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Accumulate matched (true, predicted) label pairs into a confusion matrix.
 
         Args:
@@ -52,14 +54,14 @@ class ConfusionMatrix(Metric[Detection3DState]):
             stage: Evaluation stage being reported.
 
         Returns:
-            Metric keys mapped to values.
+            This metric's report.
         """
         if state.class_names is None:
             raise ValueError("ConfusionMatrix needs class_names to label its cells.")
-        if state.match_cost != "center":
+        if state.match_cost is not MatchCost.CENTER:
             raise ValueError(
                 "ConfusionMatrix matches class-agnostically by center distance, a suite "
-                f"configured with match_cost={state.match_cost!r} would report matched "
+                f"configured with match_cost={state.match_cost.value!r} would report matched "
                 "pairs inconsistent with its AP family."
             )
         num_classes = len(state.class_names)

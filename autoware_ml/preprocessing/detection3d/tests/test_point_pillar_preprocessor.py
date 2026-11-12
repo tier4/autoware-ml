@@ -46,6 +46,7 @@ def _inputs(samples: list[torch.Tensor]) -> ModelBatchInputs:
             detection3d_gt_batch=None,
             segmentation3d_gt_batch=None,
             image_gt_batch=None,
+            padding_mask=torch.zeros(len(samples), dtype=torch.bool),
         )
     )
 
@@ -183,6 +184,7 @@ class TestPointPillarPreprocessor(unittest.TestCase):
                 detection3d_gt_batch=None,
                 segmentation3d_gt_batch=None,
                 image_gt_batch=None,
+                padding_mask=torch.zeros(1, dtype=torch.bool),
             )
         )
 

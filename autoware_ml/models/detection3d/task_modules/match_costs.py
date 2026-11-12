@@ -1,17 +1,22 @@
 """Reusable matching costs for detection3d assignment.
 
-This module contains pairwise matching costs used by Hungarian assignment.
+This module contains pairwise matching costs used by Hungarian assignment. The 3D costs work
+on a padded ``(batch_size, num_bboxes, max_num_gt_bboxes)`` block and fill the padded columns
+with the highest cost; the 2D costs of the auxiliary image-plane head work on the unpadded
+``(num_queries, num_gts)`` block of one image.
 """
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from jaxtyping import Float32, Int64, Bool
 import torch
 
+from autoware_ml.geometry.bbox_2d.base_bbox2d import BaseBBoxes2D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import normalize_boxes3d
+from autoware_ml.types.geometry import Box3DFieldIndex
 
 
 @dataclass(frozen=True)
@@ -86,15 +91,16 @@ class ClassificationCost:
 class BBoxBEVL1Cost:
     """Compute normalized BEV L1 cost between proposal and target boxes.
 
-    The cost operates on BEV box centers normalized by the detector range.
+    The cost operates on BEV box centers normalized by the detector range. It takes the whole
+    boxes like :class:`BBox3DL1Cost`, so an assigner calls either cost the same way.
     """
 
     weight: float = 1.0
 
     def __call__(
         self,
-        bboxes_centers: Float32[torch.Tensor, "batch_size num_bboxes 2"],
-        gt_bboxes_centers: Float32[torch.Tensor, "batch_size max_num_gt_bboxes 2"],
+        bboxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
+        gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
         valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
         point_cloud_range: Sequence[float],
     ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
@@ -105,8 +111,9 @@ class BBoxBEVL1Cost:
         assignment never matches them.
 
         Args:
-            bboxes_centers: Predicted BEV box centers as (x, y).
-            gt_bboxes_centers: Ground-truth BEV box centers as (x, y).
+            bboxes: Predicted metric boxes, ``(x, y)`` centers first; only the BEV centers enter
+                the cost.
+            gt_bboxes: Ground-truth metric boxes in the same layout.
             valid_masks: Mask indicating valid ground-truth boxes.
             point_cloud_range: Detector point-cloud range.
 
@@ -114,11 +121,14 @@ class BBoxBEVL1Cost:
             Pairwise BEV L1 cost matrix, one (num_predictions, num_gt_bboxes) block per
             batch element.
         """
+        # (batch_size, num_predictions, 2) and (batch_size, num_gt_bboxes, 2)
+        bboxes_centers = bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1]
+        gt_bboxes_centers = gt_bboxes[..., Box3DFieldIndex.X : Box3DFieldIndex.Y + 1]
         # (2,) BEV origin and extent used to normalize both center sets into [0, 1].
         pc_start = bboxes_centers.new_tensor(point_cloud_range[0:2])
         pc_extent = bboxes_centers.new_tensor(point_cloud_range[3:5]) - pc_start
-        # Both inputs are already BEV centers, so the trailing dim is the (x, y) axis and the
-        # normalization broadcasts over batch and box axes.
+        # Both center sets end in the (x, y) axis, so the normalization broadcasts over batch
+        # and box axes.
         # (batch_size, num_predictions, 2) and (batch_size, num_gt_bboxes, 2)
         norm_bboxes = (bboxes_centers - pc_start) / pc_extent
         norm_gt_bboxes = (gt_bboxes_centers - pc_start) / pc_extent
@@ -151,23 +161,42 @@ class BBox3DL1Cost:
     code_weights: tuple[float, ...] = (1.0,) * 10
 
     def __call__(
-        self, bboxes: torch.Tensor, gt_bboxes: torch.Tensor, point_cloud_range: list[float]
-    ) -> torch.Tensor:
+        self,
+        bboxes: Float32[torch.Tensor, "batch_size num_bboxes code_size"],
+        gt_bboxes: Float32[torch.Tensor, "batch_size max_num_gt_bboxes code_size"],
+        valid_masks: Bool[torch.Tensor, "batch_size max_num_gt_bboxes"],
+        point_cloud_range: Sequence[float],
+    ) -> Float32[torch.Tensor, "batch_size num_bboxes max_num_gt_bboxes"]:
         """Compute pairwise weighted L1 cost in the normalized box encoding.
+
+        Like the other costs, this is a batch-wise implementation: the columns of the padded
+        gt boxes are filled with the highest possible cost so the assignment never matches them.
 
         Args:
             bboxes: Predicted metric boxes ``[cx, cy, cz, dx, dy, dz, yaw, vx, vy]``.
-            gt_bboxes: Ground-truth metric boxes in the same layout.
+            gt_bboxes: Ground-truth metric boxes in the same layout, zeros where padded.
+            valid_masks: Mask indicating valid ground-truth boxes.
             point_cloud_range: Unused; kept for the shared assigner interface.
 
         Returns:
-            Pairwise weighted L1 cost matrix.
+            Pairwise weighted L1 cost matrix, one (num_bboxes, num_gt_bboxes) block per
+            batch element.
         """
         del point_cloud_range
         channel_weights = bboxes.new_tensor(self.code_weights)
+        # The encoding takes the log of the sizes, which is -inf for the all-zero padded boxes
+        # and would spread as inf or nan over the whole distance row. The padded rows are
+        # encoded as unit boxes instead; their columns are overwritten with the sentinel below.
+        unit_box = gt_bboxes.new_zeros(gt_bboxes.shape[-1])
+        unit_box[Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT + 1] = 1.0
+        safe_gt_bboxes = torch.where(valid_masks.unsqueeze(-1), gt_bboxes, unit_box)
+        # (batch_size, num_bboxes, 10) and (batch_size, max_num_gt_bboxes, 10)
         norm_bboxes = normalize_boxes3d(bboxes) * channel_weights
-        norm_gt_bboxes = normalize_boxes3d(gt_bboxes) * channel_weights
-        return torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * self.weight
+        norm_gt_bboxes = normalize_boxes3d(safe_gt_bboxes) * channel_weights
+        # (batch_size, num_bboxes, max_num_gt_bboxes); the weight is applied before the
+        # sentinel so the sentinel stays exactly finfo.max.
+        cost = torch.cdist(norm_bboxes, norm_gt_bboxes, p=1) * self.weight
+        return cost.masked_fill(~valid_masks.unsqueeze(1), torch.finfo(cost.dtype).max)
 
 
 @dataclass(frozen=True)
@@ -192,3 +221,69 @@ class IoU3DCost:
             Pairwise minimization cost derived from IoU.
         """
         return -iou * self.weight
+
+
+@dataclass(frozen=True)
+class BBoxL1Cost2D:
+    """Pairwise L1 cost between normalized 2D boxes.
+
+    Predictions are ``(cx, cy, w, h)`` in [0, 1]; ground truth arrives as
+    normalized ``(x1, y1, x2, y2)`` and is converted according to
+    ``box_format``.
+    """
+
+    weight: float = 1.0
+    box_format: str = "xywh"
+
+    def __post_init__(self) -> None:
+        if self.box_format not in ("xywh", "xyxy"):
+            raise ValueError(f"Unsupported box_format '{self.box_format}'.")
+
+    def __call__(
+        self,
+        bbox_pred: Float32[torch.Tensor, "num_queries 4"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+    ) -> Float32[torch.Tensor, "num_queries num_gts"]:
+        """Compute the pairwise box L1 cost."""
+        if self.box_format == "xywh":
+            gt_bboxes = BaseBBoxes2D(gt_bboxes).cxcywh
+        else:
+            bbox_pred = BaseBBoxes2D.from_cxcywh(bbox_pred).bbox_params
+        return torch.cdist(bbox_pred, gt_bboxes, p=1) * self.weight
+
+
+@dataclass(frozen=True)
+class IoUCost2D:
+    """Pairwise negative-IoU (or GIoU) cost between unnormalized 2D boxes."""
+
+    weight: float = 1.0
+    iou_mode: str = "giou"
+
+    def __post_init__(self) -> None:
+        if self.iou_mode not in ("iou", "giou"):
+            raise ValueError(f"Unsupported iou_mode '{self.iou_mode}'.")
+
+    def __call__(
+        self,
+        bboxes: Float32[torch.Tensor, "num_queries 4"],
+        gt_bboxes: Float32[torch.Tensor, "num_gts 4"],
+    ) -> Float32[torch.Tensor, "num_queries num_gts"]:
+        """Compute the pairwise overlap cost."""
+        boxes, gt_boxes = BaseBBoxes2D(bboxes), BaseBBoxes2D(gt_bboxes)
+        overlaps = boxes.giou(gt_boxes) if self.iou_mode == "giou" else boxes.iou(gt_boxes)
+        return -overlaps * self.weight
+
+
+@dataclass(frozen=True)
+class Center2DL1Cost:
+    """Pairwise L1 cost between normalized projected 2D centers."""
+
+    weight: float = 1.0
+
+    def __call__(
+        self,
+        center_pred: Float32[torch.Tensor, "num_queries 2"],
+        gt_centers: Float32[torch.Tensor, "num_gts 2"],
+    ) -> Float32[torch.Tensor, "num_queries num_gts"]:
+        """Compute the pairwise center L1 cost."""
+        return torch.cdist(center_pred, gt_centers, p=1) * self.weight

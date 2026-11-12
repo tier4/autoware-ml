@@ -36,7 +36,7 @@ class Rotated2DIouLoss(nn.Module):
     :func:`~autoware_ml.ops.diff_iou_rotated.diff_iou_rotated.diff_iou_rotated_2d`, which
     runs the polygon intersection in float32 whatever the input dtype.
 
-    Classes listed in ``labels_to_ignore_rotation`` (for example traffic cones, whose yaw is
+    Classes listed in ``rotation_invariant_classes`` (for example traffic cones, whose yaw is
     undefined) are compared axis-aligned, so their orientation never enters the IoU.
     """
 
@@ -51,35 +51,35 @@ class Rotated2DIouLoss(nn.Module):
     def __init__(
         self,
         class_names: Sequence[str],
-        labels_to_ignore_rotation: Sequence[str] | None = None,
+        rotation_invariant_classes: Sequence[str] | None = None,
         loss_weight: float = 1.0,
     ) -> None:
         """Initialize the rotated 2D IoU loss.
 
         Args:
             class_names: All class names, in label-id order.
-            labels_to_ignore_rotation: Class names whose boxes are compared axis-aligned.
+            rotation_invariant_classes: Class names whose boxes are compared axis-aligned.
             loss_weight: Weight applied to the loss.
 
         Raises:
-            ValueError: If a name in ``labels_to_ignore_rotation`` is not in ``class_names``.
+            ValueError: If a name in ``rotation_invariant_classes`` is not in ``class_names``.
         """
         super().__init__()
         self.class_names = list(class_names)
-        self.labels_to_ignore_rotation = (
-            list(labels_to_ignore_rotation) if labels_to_ignore_rotation is not None else []
+        self.rotation_invariant_classes = (
+            list(rotation_invariant_classes) if rotation_invariant_classes is not None else []
         )
         self.labels_id_to_ignore_rotation = self._resolve_ignore_label_ids()
         self.loss_weight = loss_weight
 
     def _resolve_ignore_label_ids(self) -> list[int]:
-        """Resolve ``labels_to_ignore_rotation`` into label ids."""
-        unknown = [name for name in self.labels_to_ignore_rotation if name not in self.class_names]
+        """Resolve ``rotation_invariant_classes`` into label ids."""
+        unknown = [name for name in self.rotation_invariant_classes if name not in self.class_names]
         if unknown:
             raise ValueError(
-                f"labels_to_ignore_rotation {unknown} are not in class_names {self.class_names}."
+                f"rotation_invariant_classes {unknown} are not in class_names {self.class_names}."
             )
-        return [self.class_names.index(name) for name in self.labels_to_ignore_rotation]
+        return [self.class_names.index(name) for name in self.rotation_invariant_classes]
 
     def _bev_boxes(
         self,

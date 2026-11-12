@@ -1,0 +1,11 @@
+vehicle:
+  _target_: autoware_ml.metrics.geometry.reachability.VehicleGeometry
+  wheel_base: 4.76
+  front_overhang: 0.95
+  rear_overhang: 1.53
+  wheel_tread: 1.75
+  left_overhang: 0.27
+  right_overhang: 0.27
+  max_steer_angle: 0.64
+# Body in the lidar frame, [x_min, y_min, z_min, x_max, y_max, z_max]
+box: [-1.53, -1.15, -0.1, 5.72, 1.15, 3.1]

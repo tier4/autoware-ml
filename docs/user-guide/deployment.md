@@ -65,9 +65,15 @@ The output location is not configurable on its own.
 A model exports one or more deployable modules. Models without a dedicated
 export split produce a single module named `end_to_end`.
 
-Every exported module must have a matching entry under `deploy.onnx.modules`,
-and artifact files are named after the module. A module missing from the
-config fails the deploy immediately.
+Artifact files are named after the module. Every exported module has an entry
+under `deploy.onnx.modules`: `{}` exports it with the shared `deploy.onnx`
+settings, and any key in the entry overrides them. A module without an entry
+fails the deploy before the deploy run is created, so a module added to a model
+cannot silently export without its `metainfo` or `modify_graph`, and a
+misspelled entry shows up as the missing one. Entries of modules the model does
+not export are left alone, so a model whose modules depend on its config, as
+BEVFusion's on `camera_network`, lists the entries of every variant in one base
+config.
 
 ## Multi-head exports
 
@@ -77,9 +83,9 @@ trained parts of that model into a single export:
 
 ```bash
 autoware-ml deploy \
-    --config-name detection3d/ptv3/t4dataset/voxel012_tiny_b8_30e_t4dataset_122m_j6gen2_base \
-    --weights mlruns/ptv3_seg3d/T4Dataset-j6gen2_semaseg-v1.0.0/j6gen2_semaseg/voxel012_tiny_b16_50e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt \
-    --weights mlruns/ptv3/T4Dataset-j6gen2_base-v1.0.0/j6gen2_base/voxel012_tiny_b8_30e_t4dataset_122m/<run_id>/artifacts/checkpoints/best.ckpt
+    --config-name detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m \
+    --weights mlruns/ptv3_seg3d/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_50e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt \
+    --weights mlruns/ptv3/NuScenesDataset-base-v1.0.0/nuscenes/voxel005_b16_30e_nuscenes_51m/<run_id>/artifacts/checkpoints/best.ckpt
 ```
 
 Checkpoints are applied in the order they appear on the command line, and
@@ -112,7 +118,7 @@ deploy:
     modules:
       <module>:
         metainfo:
-          class_names: ${database.taxonomy.detection3d.class_names}
+          class_names: ${taxonomy.detection3d.class_names}
 ```
 
 Each `metainfo` value is stamped as one compact JSON document (scalars,
@@ -125,8 +131,9 @@ collide with the automatically stamped properties fail at export time.
 
 ### ONNX Settings
 
-Shared settings live at `deploy.onnx`. Per-module settings under
-`deploy.onnx.modules.<module>` override them:
+Shared settings live at `deploy.onnx`. Each exported module lists an entry
+under `deploy.onnx.modules.<module>`, `{}` to keep the shared settings or the
+keys that override them:
 
 ```yaml
 deploy:
@@ -135,15 +142,29 @@ deploy:
     dynamo: true
     opset_version: 21
     precision: fp32
-    dynamic_shapes:
-      input_tensor: { 2: height, 3: width }
     modules:
       end_to_end:
-        output_names: [output]
+        precision: fp16
 ```
 
-**input_names / output_names**: exported input names default to the export
-spec's forward parameter names. Output names are declared per module.
+**Tensor names**: the export spec names the graph inputs and outputs, either
+the names a stage graph declares (see
+[Model-Owned Export Wrappers](#model-owned-export-wrappers)) or the names a
+hand-written spec lists; the export log prints them. A spec names every one of
+its inputs and at least one output, or it is refused when built. `deploy.onnx`
+carries no `input_names` or `output_names`; an entry fails the deploy before its
+MLflow run is created or the model loads. The keys of
+`deploy.tensorrt.input_shapes` are these names. A model that lets a config
+choose its names exposes them as a model parameter, as PTv3's
+`export_output_names`.
+
+**Dynamic axes**: which axes vary between runs is a property of the model, so
+the export spec declares them once (`ExportSpec.dynamic_axes`, keyed by its
+input and output names) and both exporters derive their arguments from that
+declaration. `deploy.onnx` carries no `dynamic_axes` or `dynamic_shapes`; an
+entry fails the deploy like a configured name does. The spec refuses an axis of
+a tensor it does not name. The deployment settings that do vary, the TensorRT
+shape ranges, stay in `deploy.tensorrt.input_shapes`.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their
@@ -153,24 +174,10 @@ An fp16 export only works if the inference engine honors its dtypes instead of
 reassigning them. In Autoware, that means `trt_precision: strongly-typed` on the
 node.
 
-**dynamic_shapes**: Keys are exported input names, values map dimension indices
-to symbolic names. For the default export path these names come from
-`forward()`. Models with explicit export wrappers define their own exported
-input names through `build_export_spec()`.
-You can also provide symbolic bounds when export needs them:
-
-```yaml
-deploy:
-  onnx:
-    dynamic_shapes:
-      points:
-        0: { name: num_points, min: 2 }
-```
-
-Set `dynamo: false` for models that rely on legacy ONNX symbolic functions
-instead of `torch.export`. In that mode, `dynamic_axes` is passed to the legacy
-exporter directly, and `dynamic_shapes` can still be used as a shorthand to
-derive equivalent symbolic axes.
+**dynamo**: `true` exports through `torch.export`, which gets one `Dim` per
+axis name the spec declares over the inputs. Set `dynamo: false` for models
+that export through the TorchScript exporter and its ONNX symbolic functions;
+it takes the spec's `dynamic_axes` directly.
 
 ### TensorRT Settings
 

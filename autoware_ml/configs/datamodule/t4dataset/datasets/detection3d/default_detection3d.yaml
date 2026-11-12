@@ -1,3 +1,5 @@
 _target_: autoware_ml.datamodule.common.detection3d.Detection3DTask
 _convert_: all
 _partial_: true
+
+taxonomy: ${taxonomy.detection3d}

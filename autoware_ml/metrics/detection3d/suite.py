@@ -30,10 +30,11 @@ from autoware_ml.metrics.detection3d.matching import (
     Detection3DState,
     clip_to_range,
     gt_keep_mask,
-    resolve_match_cost,
 )
 from autoware_ml.metrics.detection3d.naming import metric_token
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
+from autoware_ml.metrics.report import MetricReport
+from autoware_ml.types.metrics import MatchCost
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +71,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             MetricRange("90-121m", 90.0, 121.0),
             MetricRange("0-121m", 0.0, 121.0),
         ),
-        eval_class_range: dict[str, float] | None = None,
+        max_distances: dict[str, float] | None = None,
         min_num_points: int = 0,
-        match_cost: str = "center",
+        match_cost: MatchCost | str = MatchCost.CENTER,
         class_groups: dict[str, list[str]] | None = None,
         collision: Any = None,
         **kwargs: Any,
@@ -84,11 +85,12 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             class_names: Ordered class names for metric keys, or ``None`` to report only
                 classes present in the ground truth.
             ranges: Radial windows every key is also emitted for.
-            eval_class_range: Class name to maximum GT distance in meters, applied as a GT
+            max_distances: Class name to maximum GT distance in meters, applied as a GT
                 filter at accumulation.
             min_num_points: Minimum LiDAR points a GT box needs to count, 0 disables the
                 filter.
-            match_cost: Matching cost name, ``center`` or ``corner``.
+            match_cost: Cost the matching pairs boxes by, or its name (``center`` or
+                ``corner``) as a config spells it.
             class_groups: Group name to member class names. When set, labels are folded onto
                 the group taxonomy at state build, so matching happens between grouped classes.
             collision: Optional collision TTC provider. When set, the per-box
@@ -99,10 +101,10 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         super().__init__(components=components, ranges=ranges, **kwargs)
         self.class_names = tuple(class_names) if class_names is not None else None
         _validate_name_tokens(self.class_names)
-        self.eval_class_range = eval_class_range
+        self.max_distances = max_distances
         self.min_num_points = int(min_num_points)
-        self.match_cost = str(match_cost)
-        resolve_match_cost(self.match_cost)  # a config typo must fail at build, not after the epoch
+        # A config typo must fail at build, not after the epoch.
+        self.match_cost = MatchCost(match_cost)
         self.collision = collision
         # When class_groups is set, GT/pred labels are folded onto the behaviour
         # taxonomy at state build (after the per-class GT filters), so matching
@@ -115,8 +117,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         # suite, so they need the same duplicate-token guard.
         _validate_name_tokens(self._grouped_names)
 
-        if eval_class_range and not self.class_names:
-            raise ValueError("class_names must be provided when eval_class_range is configured.")
+        if max_distances and not self.class_names:
+            raise ValueError("class_names must be provided when max_distances is configured.")
         self._warn_on_range_class_caps()
 
         self.add_state("pred_boxes", default=[], dist_reduce_fx=None)
@@ -124,6 +126,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         self.add_state("pred_labels", default=[], dist_reduce_fx=None)
         self.add_state("gt_boxes", default=[], dist_reduce_fx=None)
         self.add_state("gt_labels", default=[], dist_reduce_fx=None)
+        # Per-frame flag: does the frame only pad a streaming lane? It is gathered like every
+        # other frame, so the ranks hold as many entries, and left out of every metric.
+        self.add_state("padding", default=[], dist_reduce_fx=None)
         if self.collision is not None:
             self.add_state("gt_ttc", default=[], dist_reduce_fx=None)
             self.add_state("pred_ttc", default=[], dist_reduce_fx=None)
@@ -151,11 +156,11 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             self.add_state("pred_region_masks", default=[], dist_reduce_fx=None)
             self.add_state("region_available", default=[], dist_reduce_fx=None)
 
-    def compute(self) -> dict[str, float]:
+    def compute(self) -> MetricReport:
         """Log TTC frame coverage once per epoch, then run the metric groups.
 
         Returns:
-            Metric keys mapped to values.
+            The suite's report.
         """
         self._log_ttc_coverage()
         return super().compute()
@@ -186,13 +191,13 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             logger.info("Collision TTC covered %d/%d frames (full map coverage).", covered, seen)
 
     def _warn_on_range_class_caps(self) -> None:
-        if self.eval_class_range is None:
+        if self.max_distances is None:
             return
-        for class_name, max_dist in self.eval_class_range.items():
+        for class_name, max_dist in self.max_distances.items():
             for metric_range in self.ranges:
                 if metric_range.max_distance is not None and max_dist < metric_range.max_distance:
                     logger.warning(
-                        "eval_class_range['%s'] = %.1fm is smaller than bucket '%s' upper "
+                        "max_distances['%s'] = %.1fm is smaller than bucket '%s' upper "
                         "bound %.1fm, so the '%s' bucket metrics are misleading for this class.",
                         class_name,
                         max_dist,
@@ -228,6 +233,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         gt_boxes = eval_out["gt_boxes"]
         gt_labels = eval_out["gt_labels"]
         gt_num_points = eval_out.get("gt_num_points")
+        padding_mask = eval_out.get("padding_mask")
         if len(predictions) != len(gt_boxes) or len(predictions) != len(gt_labels):
             raise ValueError(
                 "Detection metric expects equal numbers of predictions, gt_boxes, and gt_labels."
@@ -260,22 +266,26 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 frame_labels,
                 num_points,
                 self.class_names or (),
-                self.eval_class_range,
+                self.max_distances,
                 self.min_num_points,
             )
 
+            self._note_frame()
             pred_boxes = prediction["bboxes_3d"].detach().to(dtype=torch.float32)
             self.pred_boxes.append(pred_boxes)
             self.pred_scores.append(prediction["scores_3d"].detach().to(dtype=torch.float32))
             self.pred_labels.append(prediction["labels_3d"].detach().to(dtype=torch.long))
             self.gt_boxes.append(frame_boxes[keep])
             self.gt_labels.append(frame_labels[keep])
+            is_padding = bool(padding_mask[i]) if padding_mask is not None else False
+            self.padding.append(torch.tensor([is_padding], device=frame_boxes.device))
 
             if self.collision is not None:
                 covered = self._ttc_frame_covered(eval_out, i)
                 self.ttc_covered.append(torch.tensor([covered], device=frame_boxes.device))
-                self.ttc_frames_seen += 1
-                self.ttc_frames_covered += int(covered)
+                if not is_padding:
+                    self.ttc_frames_seen += 1
+                    self.ttc_frames_covered += int(covered)
                 self.gt_ttc.append(
                     self._frame_ttc(frame_boxes[keep], frame_labels[keep], eval_out, i, covered)
                 )
@@ -430,7 +440,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 keep-mask computed for it at update time. Frames where the
                 filter was unavailable (e.g. a scene without a lanelet map) are
                 omitted from the slice entirely, so per-frame denominators only
-                count covered frames.
+                count covered frames. Frames that only pad a streaming lane are
+                always omitted.
 
         Returns:
             Detection state consumed by the configured metric components.
@@ -439,6 +450,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
 
         samples = []
         for index in range(len(self.gt_boxes)):
+            if bool(self.padding[index].item()):
+                continue
             if column is not None and not bool(self.region_available[index][column]):
                 continue
             pred_boxes = self.pred_boxes[index].cpu()

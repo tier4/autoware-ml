@@ -7,7 +7,7 @@ import unittest
 import torch
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch, ImageSample
-from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
 
 
 class ImageGTBatchTestCase(unittest.TestCase):
@@ -292,6 +292,77 @@ class TestImageGTBatchCollate(ImageGTBatchTestCase):
             self.assertEqual(tensor.dtype, torch.float32)
         assert batch.calibration_statuses is not None
         self.assertEqual(batch.calibration_statuses.dtype, torch.int64)
+
+
+class TestImageGTBatchAugmentedIntrinsics(ImageGTBatchTestCase):
+    """ImageGTBatch.augmented_camera_intrinsics."""
+
+    def make_augmented_sample(self, scale: float, crop_top: float, flip: bool) -> BaseImages:
+        """
+        Build a one-camera sample augmented by a resize, a bottom crop and an optional flip,
+        with a non-trivial lidar2cam so the projection carries the extrinsics too.
+        """
+        width = 8.0
+        pixel_affine = torch.tensor(
+            [[scale, 0.0, 0.0], [0.0, scale, -crop_top], [0.0, 0.0, 1.0]], dtype=torch.float32
+        )
+        if flip:
+            pixel_affine = (
+                torch.tensor([[-1.0, 0.0, width - 1.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+                @ pixel_affine
+            )
+        intrinsics = torch.tensor(
+            [[[100.0, 0.0, 4.0], [0.0, 120.0, 2.0], [0.0, 0.0, 1.0]]], dtype=torch.float32
+        )
+        lidar2cam = torch.eye(4)
+        lidar2cam[:3, :3] = torch.tensor([[0.0, -1.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]])
+        lidar2cam[:3, 3] = torch.tensor([0.3, -0.2, 1.5])
+        augmented_intrinsics = pixel_affine.unsqueeze(0) @ intrinsics
+        sample = self.make_images(1, fill=1.0)
+        return sample.model_copy(
+            update={
+                "camera_intrinsics": intrinsics,
+                "augmented_camera_intrinsics": augmented_intrinsics,
+                "image_augmentation_matrices": BaseImages.homogeneous_image_augmentation_matrices(
+                    pixel_affine.unsqueeze(0)
+                ),
+                "lidar2cams": lidar2cam.unsqueeze(0),
+                "lidar2images": compose_lidar2images(augmented_intrinsics, lidar2cam.unsqueeze(0)),
+            }
+        )
+
+    def test_composes_the_pixel_affine_onto_the_raw_intrinsics(self) -> None:
+        """
+        Input: two samples resized, cropped and one of them flipped.
+        Expected: the batched intrinsics equal the per-sample augmented intrinsics, so the
+        crop translation and the flip are kept, and they reproduce ``lidar2images`` together
+        with ``lidar2cams``.
+        Check: compare against the samples and against ``lidar2images @ inv(lidar2cams)``.
+        """
+        samples = [
+            self.make_augmented_sample(scale=0.5, crop_top=3.0, flip=False),
+            self.make_augmented_sample(scale=0.52, crop_top=2.0, flip=True),
+        ]
+
+        batch = self.collate(samples)
+        augmented = batch.augmented_camera_intrinsics()
+
+        self.assertEqual(tuple(augmented.shape), (2, 1, 3, 3))
+        for index, sample in enumerate(samples):
+            torch.testing.assert_close(augmented[index], sample.augmented_camera_intrinsics)
+        self.assertFalse(torch.allclose(augmented, batch.camera_intrinsics))
+        projection = batch.lidar2images @ torch.inverse(batch.lidar2cams)
+        torch.testing.assert_close(projection[..., :3, :3], augmented, atol=1e-4, rtol=1e-5)
+
+    def test_identity_augmentation_keeps_the_raw_intrinsics(self) -> None:
+        """
+        Input: the plain fixture samples, whose augmentation is the identity.
+        Expected: the augmented intrinsics are the raw ones.
+        Check: tensor equality.
+        """
+        batch = self.collate([self.samples[0]])
+
+        torch.testing.assert_close(batch.augmented_camera_intrinsics(), batch.camera_intrinsics)
 
 
 class TestImageGTBatchToDevice(ImageGTBatchTestCase):

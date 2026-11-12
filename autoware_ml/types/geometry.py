@@ -30,6 +30,31 @@ class Box3DFieldIndex(IntEnum):
     VELOCITY_Z = 9
 
 
+class Box2DFieldIndex(IntEnum):
+    """
+    Box 2D field index.
+
+    A 2D box is axis-aligned in the pixels of the image it is drawn on: x runs along the image
+    width and y down the image height, so the minimum corner is the top-left one.
+
+    Attributes:
+      X_MIN: X coordinate of the left edge of the box.
+      Y_MIN: Y coordinate of the top edge of the box.
+      X_MAX: X coordinate of the right edge of the box.
+      Y_MAX: Y coordinate of the bottom edge of the box.
+      CENTER_X: X coordinate of the object center, which is not the middle of the box: for a
+        box projected from a 3D box, the projection of its gravity center.
+      CENTER_Y: Y coordinate of the object center.
+    """
+
+    X_MIN = 0
+    Y_MIN = 1
+    X_MAX = 2
+    Y_MAX = 3
+    CENTER_X = 4
+    CENTER_Y = 5
+
+
 class Box3DCenterCoordinateType(StrEnum):
     """
     Box 3D center coordinate type.

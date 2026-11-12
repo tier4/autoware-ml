@@ -13,15 +13,17 @@ from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.segmentation3d.confusion import ConfusionState
 from autoware_ml.metrics.segmentation3d.confusion_matrix import ConfusionMatrix as Seg3DConfusion
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
+from autoware_ml.metrics.report import MetricKey
+from autoware_ml.types.metrics import MatchCost
 
 
 def test_confusion_cells_key_each_count_by_true_then_predicted_class() -> None:
     matrix = np.array([[5, 1], [2, 7]], dtype=np.int64)
     cells = confusion_cells(matrix, ("road", "obstacle"))
-    assert cells["confusion_road__road"] == 5.0
-    assert cells["confusion_road__obstacle"] == 1.0
-    assert cells["confusion_obstacle__road"] == 2.0
-    assert cells["confusion_obstacle__obstacle"] == 7.0
+    assert cells.metric_value(MetricKey(name="confusion_road__road")) == 5.0
+    assert cells.metric_value(MetricKey(name="confusion_road__obstacle")) == 1.0
+    assert cells.metric_value(MetricKey(name="confusion_obstacle__road")) == 2.0
+    assert cells.metric_value(MetricKey(name="confusion_obstacle__obstacle")) == 7.0
 
 
 def _det3d_sample(pred_xy_label, gt_xy_label) -> Detection3DSample:
@@ -40,28 +42,35 @@ def _det3d_sample(pred_xy_label, gt_xy_label) -> Detection3DSample:
 def test_det3d_confusion_counts_matched_label_pair() -> None:
     # A car prediction (label 0) sits on a truck GT (label 1) -> confusion[truck, car].
     sample = _det3d_sample([(10.0, 0.0, 0)], [(10.0, 0.0, 1)])
-    state = Detection3DState(samples=[sample], class_names=("car", "truck"), match_cost="center")
+    state = Detection3DState(
+        samples=[sample], class_names=("car", "truck"), match_cost=MatchCost.CENTER
+    )
     out = Det3DConfusion(match_threshold=2.0).evaluate(state, EvalStage.TEST)
-    assert out["confusion_truck__car"] == 1.0
-    assert out["confusion_truck__truck"] == 0.0
-    assert out["confusion_car__car"] == 0.0
+    assert out.metric_value(MetricKey(name="confusion_truck__car")) == 1.0
+    assert out.metric_value(MetricKey(name="confusion_truck__truck")) == 0.0
+    assert out.metric_value(MetricKey(name="confusion_car__car")) == 0.0
 
 
 def test_det3d_confusion_drops_unmatched() -> None:
     # Prediction 100 m from the only GT -> no match -> empty matrix.
     sample = _det3d_sample([(100.0, 0.0, 0)], [(10.0, 0.0, 0)])
-    state = Detection3DState(samples=[sample], class_names=("car", "truck"), match_cost="center")
+    state = Detection3DState(
+        samples=[sample], class_names=("car", "truck"), match_cost=MatchCost.CENTER
+    )
     out = Det3DConfusion(match_threshold=2.0).evaluate(state, EvalStage.TEST)
-    assert all(v == 0.0 for v in out.values())
+    assert all(out.metric_value(key) == 0.0 for key in out.metric_names())
 
 
 def test_seg3d_confusion_reads_state_matrix() -> None:
     state = ConfusionState(
-        confusion=torch.tensor([[5, 1], [2, 7]]), class_names=("road", "obstacle"), num_classes=2
+        confusion=torch.tensor([[5, 1], [2, 7]]),
+        class_names=("road", "obstacle"),
+        num_classes=2,
+        num_frames=1,
     )
     out = Seg3DConfusion().evaluate(state, EvalStage.TEST)
-    assert out["confusion_road__obstacle"] == 1.0
-    assert out["confusion_obstacle__road"] == 2.0
+    assert out.metric_value(MetricKey(name="confusion_road__obstacle")) == 1.0
+    assert out.metric_value(MetricKey(name="confusion_obstacle__road")) == 2.0
 
 
 def test_seg3d_confusion_grouped_folds_intra_group_pairs() -> None:
@@ -88,8 +97,8 @@ def test_seg3d_confusion_grouped_folds_intra_group_pairs() -> None:
     )
     report = suite.result(EvalStage.TEST)
     # Both vehicle points land in the grouped_vehicle diagonal, none leak to flat.
-    assert report["confusion_grouped_vehicle__grouped_vehicle"] == 2.0
-    assert report["confusion_grouped_vehicle__grouped_flat"] == 0.0
-    assert report["confusion_grouped_flat__grouped_vehicle"] == 0.0
-    assert report["confusion_grouped_flat__grouped_flat"] == 2.0
-    assert "confusion_car__truck" not in report
+    assert report.metric_value(MetricKey(name="confusion_grouped_vehicle__grouped_vehicle")) == 2.0
+    assert report.metric_value(MetricKey(name="confusion_grouped_vehicle__grouped_flat")) == 0.0
+    assert report.metric_value(MetricKey(name="confusion_grouped_flat__grouped_vehicle")) == 0.0
+    assert report.metric_value(MetricKey(name="confusion_grouped_flat__grouped_flat")) == 2.0
+    assert MetricKey(name="confusion_car__truck") not in report.metric_names()

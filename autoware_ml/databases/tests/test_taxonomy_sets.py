@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the label sets of a taxonomy level and the corpus record options."""
+"""Unit tests for the label sets of a taxonomy level and the dataset options."""
 
 import unittest
 from collections.abc import Mapping, Sequence
@@ -25,24 +25,23 @@ _VOCABULARY = LabelVocabulary(
     {
         "pole": "pole",
         "traffic_sign": "traffic_sign",
-        "vertical_thin": "vertical_thin_unspecified",
+        "vertical_thin": "legacy_vertical_thin",
         "manmade": "legacy_manmade",
         "building": "building",
         "ignored": None,
     }
 )
 _CLASSES = ["building", "vertical_thin", "traffic_sign"]
-_GROUPS = {"structure": ["building", "vertical_thin", "traffic_sign"]}
 _SET_MAPPING = {
     "pole": "vertical_thin",
     "traffic_sign": "traffic_sign",
-    "vertical_thin_unspecified": "thin_or_sign",
-    "legacy_manmade": "manmade_or_thin",
+    "legacy_vertical_thin": "legacy_vertical_thin_set",
+    "legacy_manmade": "legacy_manmade_set",
     "building": "building",
 }
 _SETS = {
-    "thin_or_sign": ["vertical_thin", "traffic_sign"],
-    "manmade_or_thin": ["building", "vertical_thin", "traffic_sign"],
+    "legacy_vertical_thin_set": ["vertical_thin", "traffic_sign"],
+    "legacy_manmade_set": ["building", "vertical_thin", "traffic_sign"],
 }
 
 
@@ -57,13 +56,12 @@ def _taxonomy(
         class_names=_CLASSES,
         class_mapping=class_mapping,
         ignore_index=ignore_index,
-        class_groups=_GROUPS,
         class_sets=class_sets,
     )
 
 
 def _dataset_params(**options: object) -> DatasetParams:
-    """Dataset parameters of a small test corpus with the given record options."""
+    """Dataset parameters of a small test corpus with the given dataset options."""
     return DatasetParams(dataset_name="db", sample_steps=1, **options)
 
 
@@ -75,7 +73,9 @@ class TestLabelSets(unittest.TestCase):
         taxonomy = _taxonomy()
 
         self.assertEqual(taxonomy.num_classes, 3)
-        self.assertEqual(tuple(taxonomy.class_sets), ("thin_or_sign", "manmade_or_thin"))
+        self.assertEqual(
+            tuple(taxonomy.class_sets), ("legacy_vertical_thin_set", "legacy_manmade_set")
+        )
         expected_indices = {
             "pole": 1,
             "traffic_sign": 2,
@@ -86,7 +86,7 @@ class TestLabelSets(unittest.TestCase):
         for raw_name, index in expected_indices.items():
             with self.subTest(raw_name=raw_name):
                 self.assertEqual(taxonomy.resolve_index(raw_name), index)
-        self.assertEqual(taxonomy.class_name("vertical_thin_unspecified"), "thin_or_sign")
+        self.assertEqual(taxonomy.class_name("legacy_vertical_thin"), "legacy_vertical_thin_set")
 
     def test_sets_are_part_of_the_definition_string(self) -> None:
         """Test that sets enter the string form only when the level has some."""
@@ -95,14 +95,14 @@ class TestLabelSets(unittest.TestCase):
             class_mapping={
                 "pole": "vertical_thin",
                 "traffic_sign": "traffic_sign",
-                "vertical_thin_unspecified": "vertical_thin",
+                "legacy_vertical_thin": "vertical_thin",
                 "legacy_manmade": "building",
                 "building": "building",
             },
             class_sets=None,
         )
 
-        self.assertIn("thin_or_sign", str(with_sets))
+        self.assertIn("legacy_vertical_thin_set", str(with_sets))
         self.assertNotEqual(with_sets, without)
         self.assertEqual(dict(without.class_sets), {})
         # A level without sets keeps the string form, and so the hash, it had before sets existed
@@ -111,16 +111,16 @@ class TestLabelSets(unittest.TestCase):
     def test_invalid_sets_are_rejected(self) -> None:
         """Test that malformed label sets raise a descriptive error."""
         cases = {
-            "collides with a class": {"building": ["building", "vertical_thin"]},
+            "collides with a trained class": {"building": ["building", "vertical_thin"]},
             "at least two distinct classes": {
-                "thin_or_sign": ["vertical_thin"],
-                "manmade_or_thin": _CLASSES,
+                "legacy_vertical_thin_set": ["vertical_thin"],
+                "legacy_manmade_set": _CLASSES,
             },
-            "not classes of the level": {
-                "thin_or_sign": ["vertical_thin", "flag"],
-                "manmade_or_thin": _CLASSES,
+            "which are not trained": {
+                "legacy_vertical_thin_set": ["vertical_thin", "flag"],
+                "legacy_manmade_set": _CLASSES,
             },
-            "not a class of the level": {"manmade_or_thin": _CLASSES},
+            "not a trained class": {"legacy_manmade_set": _CLASSES},
         }
         for message, class_sets in cases.items():
             with self.subTest(message=message):
@@ -137,7 +137,7 @@ class TestLabelSets(unittest.TestCase):
 
 
 class TestDatasetParams(unittest.TestCase):
-    """Unit tests for the record options of DatasetParams and their scenario data."""
+    """Unit tests for the dataset options of DatasetParams and their scenario data."""
 
     def test_default_options_keep_the_string_form(self) -> None:
         """Test that options at their default stay out of the hash input."""
@@ -150,23 +150,22 @@ class TestDatasetParams(unittest.TestCase):
         )
 
     def test_set_options_enter_the_string_form(self) -> None:
-        """Test the exact hash input of every record option."""
+        """Test the exact hash input of every dataset option."""
         params = _dataset_params(
-            semantic_masks=True,
+            require_semantic_mask=True,
             category_aliases={"manmade": "legacy_manmade"},
-            camera_frames=False,
         )
 
         self.assertEqual(
             params.hash_repr,
-            "DatasetParams(dataset_name='db', sample_steps=1, semantic_masks=True, "
-            "category_aliases=[('manmade', 'legacy_manmade')], camera_frames=False)",
+            "DatasetParams(dataset_name='db', sample_steps=1, require_semantic_mask=True, "
+            "category_aliases=[('manmade', 'legacy_manmade')])",
         )
 
     def test_category_aliases_reach_the_scenario(self) -> None:
         """Test that the aliases are carried into the scenario data and its hash input."""
         aliased = _dataset_params(
-            semantic_masks=True, category_aliases={"manmade": "legacy_manmade"}
+            require_semantic_mask=True, category_aliases={"manmade": "legacy_manmade"}
         )
 
         self.assertNotEqual(aliased, _dataset_params())
@@ -174,12 +173,3 @@ class TestDatasetParams(unittest.TestCase):
         scenario = T4Scenarios._build_scenario_data("scene/0", aliased)
         self.assertEqual(scenario.dataset_params.category_aliases, {"manmade": "legacy_manmade"})
         self.assertIn("legacy_manmade", scenario.hash_repr)
-        self.assertTrue(scenario.dataset_params.camera_frames)
-
-    def test_camera_frames_option_reaches_the_scenario(self) -> None:
-        """Test that a LiDAR only corpus records no camera frames in its scenario data."""
-        lidar_only = _dataset_params(camera_frames=False)
-
-        self.assertNotEqual(lidar_only, _dataset_params())
-        scenario = T4Scenarios._build_scenario_data("scene/0", lidar_only)
-        self.assertFalse(scenario.dataset_params.camera_frames)
