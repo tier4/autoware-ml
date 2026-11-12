@@ -15,7 +15,8 @@
 """Synthetic-inputs entrypoint for Autoware-ML PTv3 models.
 
 This script writes the export inputs of every module at set voxel counts per encoder stage.
-The voxels are as clustered as ``target_neighbors`` asks per stage.
+The voxels are as clustered as ``target_neighbors`` asks per stage. ``measure_neighbors``
+measures the targets of a config on its train split.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ from autoware_ml.utils.synthetic_inputs import (
 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
+_NEIGHBOR_TOLERANCE = 0.1
 
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH)
@@ -119,14 +121,20 @@ def main(cfg: DictConfig) -> None:
     counts = [len(stage) for stage in stages]
     if counts != list(spec.voxel_counts):
         raise RuntimeError(f"The stages hold {counts} voxels, not {spec.voxel_counts}.")
-    for index, (stage, target) in enumerate(zip(stages, spec.target_neighbors)):
+    reached = [mean_neighbors(stage) for stage in stages]
+    for index, (count, value, target) in enumerate(zip(counts, reached, spec.target_neighbors)):
         logger.info(
-            "stage %d: %d voxels, %.2f neighbors (target %.2f)",
-            index,
-            len(stage),
-            mean_neighbors(stage),
-            target,
+            "stage %d: %d voxels, %.2f neighbors (target %.2f)", index, count, value, target
         )
+        if value < target - _NEIGHBOR_TOLERANCE:
+            logger.warning(
+                "stage %d: %d voxels reach %.2f of %.2f neighbors, the inputs are sparser "
+                "than the target",
+                index,
+                count,
+                value,
+                target,
+            )
     write_export_inputs(
         model.build_export_specs(batch_inputs), Path(hydra.utils.to_absolute_path(cfg.out))
     )

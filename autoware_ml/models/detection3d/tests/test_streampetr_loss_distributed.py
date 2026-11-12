@@ -292,8 +292,10 @@ def _ddp_gradient_worker(
         _build_head().train(), ddp_layer, [_frames(box_counts)[rank]], rank_masks
     ).backward()
 
+    # The two sides sum the frames in different orders, so they differ by float32 rounding,
+    # whose size depends on the CPU. A wrong normalization is off by a factor of the counts.
     for sharded, whole in zip(layer.parameters(), whole_gradients):
-        torch.testing.assert_close(sharded.grad, whole, rtol=1e-5, atol=1e-7)
+        torch.testing.assert_close(sharded.grad, whole, rtol=1e-4, atol=1e-6)
 
 
 @unittest.skipUnless(GLOO_AVAILABLE, "gloo backend unavailable")

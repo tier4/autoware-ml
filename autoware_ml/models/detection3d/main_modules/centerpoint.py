@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from types import MappingProxyType
 from collections.abc import Callable, Sequence
-from typing import Any
 
 from jaxtyping import Float32
 import torch
@@ -37,6 +36,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
 from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
@@ -143,16 +143,18 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         self.pts_neck = pts_neck
         self.bbox_head = bbox_head
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Decode detections and pair them with ground truth for metrics."""
         if outputs.detection3d_head_outputs is None:
             raise ValueError(
                 "ModelOutputs must contain detection3d_head_outputs for CenterPoint build_eval_output pass."
             )
 
-        return detection3d_eval_output(
-            predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
-            batch_inputs=batch,
+        return EvalOutput(
+            detection3d=detection3d_eval_output(
+                predictions=self.bbox_head.decode_outputs(outputs.detection3d_head_outputs),
+                batch_inputs=batch,
+            )
         )
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:

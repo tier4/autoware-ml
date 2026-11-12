@@ -1,23 +1,36 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Shared eval-output builder for the 3D segmentation suites.
 
-Both segmentation suites consume one contract: ``seg3d_frames``, a list with one
-entry per frame carrying that frame's points (``coord``, predicted/target labels,
-per-class ``scores``) plus any per-frame metadata the configured filters need
-(``ego2global``, ``scene_token``) and, for the cross-task partial detection
-metric, the frame's detection GT boxes.
+Both segmentation suites consume one contract, a
+:class:`~autoware_ml.metrics.eval_output.Segmentation3DEvalOutput` with one frame per
+sample carrying that frame's points (coordinates, predicted and target labels, per-class
+scores), the per-frame metadata the configured filters need and, for the cross-task
+partial detection metric, the frame's detection ground truth boxes.
 
-Metadata is copied from the batch when the dataset supplies it. A filter or
-metric that needs a missing key fails loud in the suite with a message naming
-it, so absence is never silent.
+Metadata and boxes are copied from the batch when the dataset supplies them. A filter or
+metric that needs a missing part fails loud through the suite's requirements, so absence
+is never silent.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.metrics.eval_output import Segmentation3DEvalFrame, Segmentation3DEvalOutput
 
 
 def segmentation3d_frames_eval_output(
@@ -28,8 +41,8 @@ def segmentation3d_frames_eval_output(
     frame_ids: torch.Tensor,
     num_frames: int,
     batch_inputs: ModelBatchInputs,
-) -> dict[str, Any]:
-    """Split batch-concatenated per-point tensors into the ``seg3d_frames`` list.
+) -> Segmentation3DEvalOutput:
+    """Split batch-concatenated per-point tensors into one frame per sample.
 
     Args:
         coord: ``(N, 3+)`` point coordinates (base_link).
@@ -39,27 +52,29 @@ def segmentation3d_frames_eval_output(
         frame_ids: ``(N,)`` frame index of every point.
         num_frames: Number of frames in the batch.
         batch_inputs: Model inputs of the batch. The frame metadata (ego pose, scene token,
-            lanelet map path) and
-            the detection ground truth are copied into each frame entry when the batch carries
-            them.
+            lanelet map path) and the detection ground truth are attached to each frame when
+            the batch carries them.
 
     Returns:
-        ``{"seg3d_frames": [...]}`` with one entry per frame.
+        The frames of the batch.
     """
-    frame_meta: dict[str, list[Any]] = {}
     gt_batch = batch_inputs.multi_task_gt_batch
-    if gt_batch.frame_meta_batch is not None:
-        frame_meta["ego2global"] = list(gt_batch.frame_meta_batch.ego2globals)
-        frame_meta["scene_token"] = list(gt_batch.frame_meta_batch.scene_tokens)
-        frame_meta["lanelet_map_path"] = list(gt_batch.frame_meta_batch.lanelet_map_paths)
+    frame_meta_batch = gt_batch.frame_meta_batch
+    if frame_meta_batch is not None and frame_meta_batch.ego2globals.shape[0] != num_frames:
+        raise ValueError(
+            f"The frame metadata carries {frame_meta_batch.ego2globals.shape[0]} ego2global "
+            f"entries for {num_frames} frames, per-frame metadata must align one-to-one or "
+            "points get another frame's context."
+        )
+    gt_boxes = None
+    gt_box_labels = None
     if gt_batch.detection3d_gt_batch is not None:
-        frame_meta["gt_boxes"] = gt_batch.detection3d_gt_batch.valid_bboxes_3d()
-        frame_meta["gt_box_labels"] = gt_batch.detection3d_gt_batch.valid_labels_3d()
-    for key, values in frame_meta.items():
-        if len(values) != num_frames:
+        gt_boxes = gt_batch.detection3d_gt_batch.valid_bboxes_3d()
+        gt_box_labels = gt_batch.detection3d_gt_batch.valid_labels_3d()
+        if len(gt_boxes) != num_frames:
             raise ValueError(
-                f"{key} has {len(values)} entries for {num_frames} frames, per-frame metadata "
-                "must align one-to-one or points get another frame's context."
+                f"The detection ground truth holds {len(gt_boxes)} samples for {num_frames} "
+                "frames, per-frame boxes must align one-to-one."
             )
     for name, tensor in (
         ("coord", coord),
@@ -87,18 +102,20 @@ def segmentation3d_frames_eval_output(
     target_split = torch.split(target_labels, counts)
     scores_split = torch.split(scores, counts)
 
-    frames: list[dict[str, Any]] = []
-    for frame_index in range(num_frames):
-        frame: dict[str, Any] = {
-            "coord": coord_split[frame_index],
-            "pred": pred_split[frame_index],
-            "target": target_split[frame_index],
-            "scores": scores_split[frame_index],
-        }
-        for key, values in frame_meta.items():
-            frame[key] = values[frame_index]
-        frames.append(frame)
-    return {"seg3d_frames": frames}
+    return Segmentation3DEvalOutput(
+        frames=tuple(
+            Segmentation3DEvalFrame(
+                coord=coord_split[index],
+                pred=pred_split[index],
+                target=target_split[index],
+                scores=scores_split[index],
+                frame_meta=None if frame_meta_batch is None else frame_meta_batch.sample(index),
+                gt_boxes=None if gt_boxes is None else gt_boxes[index],
+                gt_box_labels=None if gt_box_labels is None else gt_box_labels[index],
+            )
+            for index in range(num_frames)
+        )
+    )
 
 
 def concat_frame_ids(offset: torch.Tensor, point_to_batch: torch.Tensor) -> torch.Tensor:

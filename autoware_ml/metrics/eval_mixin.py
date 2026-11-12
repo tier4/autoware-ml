@@ -1,10 +1,26 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Metric lifecycle for models.
 
 ``MetricEvalMixin`` is mixed into ``BaseModel`` and drives the validation and
 test metric lifecycle for a list of :class:`~autoware_ml.metrics.base.MetricSuite`
-objects. A model only implements ``build_eval_output``. The mixin resets each
-suite at epoch start, calls ``update`` per batch, and ``result`` at epoch end,
-logging under ``{split}/{prefix}/{key}``.
+objects. A model only implements ``build_eval_output``, returning the typed
+:class:`~autoware_ml.metrics.eval_output.EvalOutput`. The mixin checks every
+suite's requirements against the first batch, resets each suite at epoch start,
+calls ``update`` per batch, and ``result`` at epoch end, logging under
+``{split}/{prefix}/{key}``.
 
 Each suite is cloned per stage and registered as a submodule, so Lightning moves
 its state to the right device. torchmetrics owns the cross-GPU sync, which runs
@@ -20,6 +36,7 @@ import torch.nn as nn
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.base import EvalStage, MetricSuite
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.metrics.report import MetricReport
 
 
@@ -73,20 +90,20 @@ class MetricEvalMixin:
         clone.bind_stage(stage)
         return clone
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> dict[str, Any]:
-        """Map raw forward outputs and the batch to the flat dict metrics read.
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: Any) -> EvalOutput:
+        """Map raw forward outputs and the batch to the typed eval output the metrics read.
 
-        Override in a model that attaches metrics. The default produces nothing,
-        which is correct for a model with no metrics.
+        Override in a model that attaches metrics. The default produces an empty
+        output, which is correct for a model with no metrics.
 
         Args:
             batch: Model inputs as fed to the model.
             outputs: Raw forward outputs.
 
         Returns:
-            Flat dict the attached metric suites read.
+            The eval output the attached metric suites read.
         """
-        return {}
+        return EvalOutput()
 
     def _stage_metrics(self, stage: EvalStage) -> nn.ModuleList:
         return self._metrics_by_stage[stage.value]
@@ -144,18 +161,18 @@ class MetricEvalMixin:
             if isinstance(outputs, Mapping) and "model_outputs" in outputs
             else outputs
         )
-        eval_out = self.build_eval_output(batch, raw_outputs)
+        eval_output = self.build_eval_output(batch, raw_outputs)
         if batch_idx == 0:
-            self._check_required_keys(list(metrics), eval_out)
+            self._check_requirements(list(metrics), eval_output)
         for metric in metrics:
-            metric.update(eval_out)
+            metric.update(eval_output)
 
-    def _check_required_keys(self, metrics: list, eval_out: Mapping[str, Any]) -> None:
+    def _check_requirements(self, metrics: list[MetricSuite], eval_output: EvalOutput) -> None:
         for metric in metrics:
-            missing = [key for key in metric.required_keys() if key not in eval_out]
+            missing = metric.requirements().check_requirements(eval_output)
             if missing:
                 raise ValueError(
-                    f"Metric {type(metric).__name__!r} needs {missing}, not produced by "
+                    f"Metric {type(metric).__name__!r} needs {list(missing)}, not produced by "
                     f"{type(self).__name__}.build_eval_output."
                 )
 

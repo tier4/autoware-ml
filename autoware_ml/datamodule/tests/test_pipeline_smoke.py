@@ -184,9 +184,11 @@ class TestPipelineSmoke(unittest.TestCase):
             outputs = model(batch_inputs)
             eval_output = model.build_eval_output(batch_inputs, outputs)
 
-        frames = eval_output["seg3d_frames"]
+        self.assertIsNotNone(eval_output.segmentation3d)
+        frames = eval_output.segmentation3d.frames
         self.assertEqual(len(frames), 2)
         for frame in frames:
-            self.assertEqual(frame["coord"].shape[0], frame["pred"].shape[0])
-            self.assertEqual(frame["coord"].shape[0], frame["target"].shape[0])
-            self.assertEqual(frame["scene_token"], SCENE)
+            self.assertEqual(frame.coord.shape[0], frame.pred.shape[0])
+            self.assertEqual(frame.coord.shape[0], frame.target.shape[0])
+            self.assertIsNotNone(frame.frame_meta)
+            self.assertEqual(frame.frame_meta.scene_token, SCENE)

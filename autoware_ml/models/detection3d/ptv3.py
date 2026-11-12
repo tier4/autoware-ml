@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """PTv3-based lidar detection models.
 
 This module adapts the PTv3 encoder to dense BEV detection heads. The
@@ -23,6 +37,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
@@ -492,7 +507,7 @@ class PTv3Detection3DModel(PTv3BaseModel):
         self.partial_annotations = partial_annotations
         self.export_output_names = list(export_output_names)
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Decode detections and pair them with ground truth for metrics.
 
         Args:
@@ -500,9 +515,11 @@ class PTv3Detection3DModel(PTv3BaseModel):
             outputs: Raw head outputs returned by :meth:`forward`.
 
         Returns:
-            Flat eval output dict consumed by the detection metric.
+            The eval output consumed by the detection metric.
         """
-        return detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
+        return EvalOutput(
+            detection3d=detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
+        )
 
     def get_export_output_names(self) -> list[str]:
         """Return the ordered export output names."""

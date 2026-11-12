@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Interface of the data preprocessor modules."""
+
 from abc import ABC, abstractmethod
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs

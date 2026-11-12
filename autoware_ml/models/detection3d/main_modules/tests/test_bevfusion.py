@@ -488,13 +488,14 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
 
         eval_output = self.model.build_eval_output(self.batch_inputs, multi_task_outputs)
 
-        self.assertEqual(len(eval_output["gt_boxes"]), self.batch_size)
-        self.assertEqual(len(eval_output["gt_labels"]), self.batch_size)
+        self.assertIsNotNone(eval_output.detection3d)
+        frames = eval_output.detection3d.frames
+        self.assertEqual(len(frames), self.batch_size)
         gt_batch = self.batch_inputs.multi_task_gt_batch.detection3d_gt_batch
         assert gt_batch is not None
         for sample_index in range(self.batch_size):
             torch.testing.assert_close(
-                eval_output["gt_boxes"][sample_index], gt_batch.gt_bboxes_3d[sample_index, :1]
+                frames[sample_index].gt_boxes, gt_batch.gt_bboxes_3d[sample_index, :1]
             )
 
     def test_forward_requires_voxels_data(self) -> None:

@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Native StreamPETR-style camera 3D detector.
 
 This module contains the high-level StreamPETR detector wrapper and export ABI.
@@ -22,6 +36,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.common.multiview_image_encoder import MultiviewImageEncoder
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
@@ -402,10 +417,12 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             detection3d_predictions=self.bbox_head.predict(outputs.detection3d().streampetr_head())
         )
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Decode detections and pair them with ground truth for metrics."""
-        return detection3d_eval_output(
-            predictions=self.decode_outputs(batch, outputs), batch_inputs=batch
+        return EvalOutput(
+            detection3d=detection3d_eval_output(
+                predictions=self.decode_outputs(batch, outputs), batch_inputs=batch
+            )
         )
 
     def build_optimizer_groups(self) -> dict[str, list[nn.Parameter]]:

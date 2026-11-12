@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Splitter of dataset records into splits by scenario."""
+
 from __future__ import annotations
 
 from collections import defaultdict

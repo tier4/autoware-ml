@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Export-contract tests for combined PTv3 segmentation+detection export."""
 
 from __future__ import annotations
@@ -220,15 +234,14 @@ def test_ptv3_det3d_seg3d_eval_output_scatters_segmentation3d_to_original_points
 
     eval_out = PTv3Det3DSeg3DModel.build_eval_output(model, batch, outputs)
 
-    frames = eval_out["seg3d_frames"]
-    assert len(frames) == 1
-    assert frames[0]["pred"].tolist() == [0, 1, 1, 0]
-    assert torch.equal(frames[0]["target"], segment)
-    assert torch.equal(frames[0]["coord"], points[:, :3])
-    assert frames[0]["scores"].shape == (4, 2)
-    assert frames[0]["gt_boxes"].shape == (0, 9)
-    assert len(eval_out["predictions"]) == 1
-    assert len(eval_out["gt_boxes"]) == 1
+    assert eval_out.segmentation3d is not None and eval_out.detection3d is not None
+    (frame,) = eval_out.segmentation3d.frames
+    assert frame.pred.tolist() == [0, 1, 1, 0]
+    assert torch.equal(frame.target, segment)
+    assert torch.equal(frame.coord, points[:, :3])
+    assert frame.scores is not None and frame.scores.shape == (4, 2)
+    assert frame.gt_boxes is not None and frame.gt_boxes.shape == (0, 9)
+    assert len(eval_out.detection3d.frames) == 1
 
 
 def _save_detection3d_checkpoint(

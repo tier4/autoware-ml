@@ -328,7 +328,8 @@ class CenterHead(nn.Module):
             gt_valid_bboxes=gt_valid_bboxes,
             device=output_heatmaps.device,
         )
-        loss_heatmap = self.loss_heatmap(output_heatmaps, targets.heatmaps)
+        # Under autocast the heatmap logits are half precision; the loss takes float32.
+        loss_heatmap = self.loss_heatmap(output_heatmaps.float(), targets.heatmaps)
 
         bbox_predictions = [
             outputs.center_head_outputs.reg,

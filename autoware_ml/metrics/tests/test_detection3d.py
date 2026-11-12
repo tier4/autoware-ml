@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for 3D detection AP metrics."""
 
 from __future__ import annotations
@@ -19,6 +33,13 @@ from autoware_ml.metrics.detection3d.structures import RecallTarget
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
+from autoware_ml.metrics.eval_output import EvalOutput
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    prediction,
+)
 
 
 def _suite(recall_targets=None, thresholds=(0.5, 1.0, 2.0, 4.0), **kwargs):
@@ -43,15 +64,13 @@ def _prediction(
     centers: list[tuple[float, float]],
     scores: list[float],
     labels: list[int],
-) -> dict[str, torch.Tensor]:
+) -> Detection3DSamplePredictions:
     boxes = torch.zeros((len(centers), 7), dtype=torch.float32)
     if centers:
         boxes[:, :2] = torch.tensor(centers, dtype=torch.float32)
-    return {
-        "bboxes_3d": boxes,
-        "scores_3d": torch.tensor(scores, dtype=torch.float32),
-        "labels_3d": torch.tensor(labels, dtype=torch.long),
-    }
+    return prediction(
+        boxes, torch.tensor(scores, dtype=torch.float32), torch.tensor(labels, dtype=torch.long)
+    )
 
 
 def _boxes(centers: list[tuple[float, float]]) -> torch.Tensor:
@@ -65,12 +84,12 @@ def _detailed_prediction(
     boxes: list[tuple[float, float, float, float, float, float, float, float, float]],
     scores: list[float],
     labels: list[int],
-) -> dict[str, torch.Tensor]:
-    return {
-        "bboxes_3d": torch.tensor(boxes, dtype=torch.float32),
-        "scores_3d": torch.tensor(scores, dtype=torch.float32),
-        "labels_3d": torch.tensor(labels, dtype=torch.long),
-    }
+) -> Detection3DSamplePredictions:
+    return prediction(
+        torch.tensor(boxes, dtype=torch.float32),
+        torch.tensor(scores, dtype=torch.float32),
+        torch.tensor(labels, dtype=torch.long),
+    )
 
 
 def _detailed_boxes(
@@ -79,21 +98,34 @@ def _detailed_boxes(
     return torch.tensor(boxes, dtype=torch.float32)
 
 
+def _eval_output(
+    predictions: list[Detection3DSamplePredictions],
+    gt_boxes: list[torch.Tensor],
+    gt_labels: list[torch.Tensor],
+    gt_num_points: list[torch.Tensor] | None = None,
+) -> EvalOutput:
+    frames = [
+        detection_frame(
+            predictions=frame_predictions,
+            gt_boxes=boxes,
+            gt_labels=labels,
+            gt_num_points=None if gt_num_points is None else gt_num_points[index],
+        )
+        for index, (frame_predictions, boxes, labels) in enumerate(
+            zip(predictions, gt_boxes, gt_labels, strict=True)
+        )
+    ]
+    return detection_eval_output(frames)
+
+
 def _update(
     metric: Detection3DMetricSuite,
-    predictions: list[dict[str, torch.Tensor]],
+    predictions: list[Detection3DSamplePredictions],
     gt_boxes: list[torch.Tensor],
     gt_labels: list[torch.Tensor],
     gt_num_points: list[torch.Tensor] | None = None,
 ) -> None:
-    eval_out: dict[str, Any] = {
-        "predictions": predictions,
-        "gt_boxes": gt_boxes,
-        "gt_labels": gt_labels,
-    }
-    if gt_num_points is not None:
-        eval_out["gt_num_points"] = gt_num_points
-    metric.update(eval_out)
+    metric.update(_eval_output(predictions, gt_boxes, gt_labels, gt_num_points))
 
 
 class _DummyDetection3DModel(MetricEvalMixin):
@@ -107,12 +139,8 @@ class _DummyDetection3DModel(MetricEvalMixin):
     def device(self) -> torch.device:
         return torch.device("cpu")
 
-    def build_eval_output(self, batch: dict[str, Any], outputs: Any) -> dict[str, Any]:
-        return {
-            "predictions": outputs,
-            "gt_boxes": batch["gt_boxes"],
-            "gt_labels": batch["gt_labels"],
-        }
+    def build_eval_output(self, batch: dict[str, Any], outputs: Any) -> EvalOutput:
+        return _eval_output(outputs, batch["gt_boxes"], batch["gt_labels"])
 
     def log_dict(self, values: dict[str, float], **kwargs: object) -> None:
         del kwargs
@@ -348,14 +376,14 @@ def test_metric_eval_mixin_logs_val_map() -> None:
     assert model.logged_metrics[-1]["val/det3d/mAP"] == pytest.approx(1.0)
 
 
-def test_metric_eval_mixin_rejects_missing_required_keys() -> None:
+def test_metric_eval_mixin_rejects_a_missing_eval_output_part() -> None:
     class _BadModel(_DummyDetection3DModel):
-        def build_eval_output(self, batch: dict[str, Any], outputs: Any) -> dict[str, Any]:
-            return {"gt_boxes": batch["gt_boxes"]}  # missing predictions / gt_labels
+        def build_eval_output(self, batch: dict[str, Any], outputs: Any) -> EvalOutput:
+            return EvalOutput()  # no detection3d frames for a detection suite
 
     model = _BadModel(metrics=[_suite(thresholds=(0.5,))])
     model.on_validation_epoch_start()
-    with pytest.raises(ValueError, match="predictions"):
+    with pytest.raises(ValueError, match="detection3d frames"):
         model.on_validation_batch_end(
             {"model_outputs": [_prediction([(0.0, 0.0)], [0.9], [0])]},
             {"gt_boxes": [_boxes([(0.0, 0.0)])], "gt_labels": [torch.tensor([0])]},

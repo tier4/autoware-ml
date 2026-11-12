@@ -1,3 +1,19 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Dataloader configuration and the datamodule shared by every task."""
+
 import logging
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
@@ -141,21 +157,10 @@ class DataModule(L.LightningDataModule):
         }
 
     def setup(self, stage: str | None = None) -> None:
-        """Build the dataset of every split the stage needs.
-
-        Each database of a split is read and split once. Every source of the split binds a copy
-        of its dataset to the records of its database, and the bound datasets are concatenated
-        in declaration order.
+        """Build the dataset of every split the stage needs, see :meth:`setup_splits`.
 
         Args:
             stage: Lightning stage, one of None, fit, validate, test or predict.
-
-        Raises:
-            ValueError: If a split the stage needs is served by sources but holds no record.
-                Lightning runs on an empty split without failing: an empty validation split
-                skips validation, and the checkpoint callbacks save after validation only, so
-                a training run would end without a checkpoint, and a test on an empty split
-                returns nothing. The run stops here instead, naming the sources to fix.
         """
         stage_to_splits = {
             None: (SplitType.TRAIN, SplitType.VAL, SplitType.TEST, SplitType.PREDICT),
@@ -164,9 +169,27 @@ class DataModule(L.LightningDataModule):
             "test": (SplitType.TEST,),
             "predict": (SplitType.PREDICT,),
         }
+        self.setup_splits(stage_to_splits[stage])
 
+    def setup_splits(self, splits: Sequence[SplitType]) -> None:
+        """Build the dataset of every given split.
+
+        Each database of a split is read and split once. Every source of the split binds a copy
+        of its dataset to the records of its database, and the bound datasets are concatenated
+        in declaration order.
+
+        Args:
+            splits: Splits to build.
+
+        Raises:
+            ValueError: If a split is served by sources but holds no record. Lightning runs on
+                an empty split without failing: an empty validation split skips validation, and
+                the checkpoint callbacks save after validation only, so a training run would
+                end without a checkpoint, and a test on an empty split returns nothing. The run
+                stops here instead, naming the sources to fix.
+        """
         split_records: dict[str, Mapping[SplitType, Any]] = {}
-        for split in stage_to_splits[stage]:
+        for split in splits:
             sources = self.split_sources(split)
             if not sources:
                 logger.info(f"No dataset source serves split {split}, skipping it.")
@@ -198,7 +221,7 @@ class DataModule(L.LightningDataModule):
 
             if sum(record_counts.values()) == 0:
                 raise ValueError(
-                    f"Split {split.value} of stage {stage} holds no record: "
+                    f"Split {split.value} holds no record: "
                     + ", ".join(
                         f"source {name} serves {count} records of database "
                         f"{sources[name].database.version}"
