@@ -70,6 +70,18 @@ class TestSigmoidFocalLoss(unittest.TestCase):
 
         self.assertTrue(torch.isclose(normalized, unnormalized * 2.0))
 
+    def test_half_precision_logits_are_refused(self) -> None:
+        """
+        Input: the logits in bfloat16 and in float16.
+        Expected: the loss takes float32 only, so a head training under autocast casts its
+        logits where it calls the loss.
+        Check: the ValueError naming float32.
+        """
+        for dtype in (torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                with self.assertRaisesRegex(ValueError, "float32"):
+                    self.loss_fn(self.logits.to(dtype), self.targets)
+
     def test_zero_weighted_query_is_dropped(self) -> None:
         """A query whose weights are zero contributes nothing to the loss."""
         weights = torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=torch.float32)

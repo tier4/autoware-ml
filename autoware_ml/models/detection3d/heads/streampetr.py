@@ -907,7 +907,7 @@ class StreamPETRHead(nn.Module):
         )
         loss_cls = (
             self.loss_cls_weight
-            * self.loss_cls(cls_scores, target_labels_tensor, weights=label_weights)
+            * self.loss_cls(cls_scores.float(), target_labels_tensor, weights=label_weights)
             / total_pos
         )
 
@@ -966,7 +966,7 @@ class StreamPETRHead(nn.Module):
         loss_cls = (
             self.dn_weight
             * self.loss_cls_weight
-            * self.loss_cls(cls_scores, class_targets, weights=label_weights)
+            * self.loss_cls(cls_scores.float(), class_targets, weights=label_weights)
             / cls_avg_factor
         )
 
