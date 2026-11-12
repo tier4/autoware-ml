@@ -82,7 +82,7 @@ class QualityFocalLoss(nn.Module):
         class_ids = torch.arange(logits.size(1), device=logits.device)
         # A background label (num_classes or negative) matches no class, so its row is all 0.
         # The quality is selected, not multiplied in, so a background query's value is never read.
-        targets = torch.where(labels[:, None] == class_ids, quality_scores[:, None], 0.0)
+        targets = torch.where(labels.unsqueeze(1) == class_ids, quality_scores.unsqueeze(1), 0.0)
         loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none") * (
             targets - logits.sigmoid()
         ).abs().pow(self.beta)

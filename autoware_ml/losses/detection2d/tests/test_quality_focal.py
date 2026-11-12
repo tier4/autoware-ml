@@ -173,8 +173,8 @@ class TestQualityFocalLoss(unittest.TestCase):
     def test_the_quality_of_a_background_query_is_not_read(self) -> None:
         """Test that the quality of a background query is never read.
 
-        Input: the four queries with a NaN quality on both background queries, as the IoU of an
-        all-zero target box can be.
+        Input: the four queries with a NaN quality on both background queries, a value the loss
+        must not read: a head passes the IoU of every query, read at the positives only.
         Expected: a background query targets 0 on every class whatever its quality holds.
         Check: the loss and the gradient of every logit against those of the finite qualities.
         """
