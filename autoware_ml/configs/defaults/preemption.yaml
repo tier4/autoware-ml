@@ -18,11 +18,21 @@ callbacks:
     # a complete checkpoint.
     keep_last: 2
     save_on_train_epoch_end: true
-  # A relaunch with another number of GPUs, batch size or accumulation takes another
-  # number of optimizer steps; schedulers sized from the run length (OneCycleLR) are
-  # refit to it instead of keeping the horizon of the checkpoint.
+  # The next two act only on a relaunch with another number of GPUs, batch size or
+  # accumulation, allowed by `datamodule.allow_resume_layout_change`, and fail it
+  # otherwise. Schedulers sized from the run length (OneCycleLR) are refit to the
+  # optimizer steps the relaunch takes instead of keeping the checkpoint's horizon.
   scheduler_horizon:
     _target_: autoware_ml.resume.scheduler_horizon.SchedulerHorizon
+    allow_layout_change: ${datamodule.allow_resume_layout_change}
+  # The learning rates are tuned for the global batch of the first launch (GPUs x batch
+  # size x accumulation); a relaunch with another one multiplies the learning rate of
+  # every optimizer step by the square root of the ratio, the rule for AdamW. `linear`
+  # suits SGD, `none` keeps it.
+  batch_size_learning_rate_scaling:
+    _target_: autoware_ml.resume.learning_rate_scaling.BatchSizeLearningRateScaling
+    rule: sqrt
+    allow_layout_change: ${datamodule.allow_resume_layout_change}
   # The periodic callback owns `last.ckpt`; the epoch-end copy of the default
   # runtime would race it for the same file.
   model_checkpoint_last: null
@@ -34,3 +44,8 @@ trainer:
 # The training position is part of the checkpoint, so a relaunch continues the epoch.
 datamodule:
   resumable_train_sampler: true
+  # A relaunch must use the checkpoint's number of GPUs, batch size and gradient
+  # accumulation. Setting this lets it change them (the loader position, the schedulers
+  # and the learning rate are converted). Not recommended: another global batch changes
+  # the optimization, so the run is no longer the experiment it started as.
+  allow_resume_layout_change: false

@@ -30,7 +30,7 @@ import logging
 import lightning as L
 from lightning.pytorch.core.optimizer import _init_optimizers_and_lr_schedulers
 
-from autoware_ml.resume.data_loader import ResumableDataLoader
+from autoware_ml.resume.data_loader import LAYOUT_CHANGE_HINT, ResumableDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,18 @@ class SchedulerHorizon(L.Callback):
     interrupted epoch from the dataloader's resume position, and every later epoch. The
     schedule then ends on the run's last step, as an uninterrupted run in the new layout
     would. Include it through ``/defaults/preemption``.
+
+    A resume in another layout is refused unless ``allow_layout_change`` is set.
     """
+
+    def __init__(self, allow_layout_change: bool = False) -> None:
+        """Initialize the callback.
+
+        Args:
+            allow_layout_change: Refit a scheduler sized for another number of optimizer
+                steps instead of failing the resume.
+        """
+        self.allow_layout_change = allow_layout_change
 
     def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
         """Refit the schedulers after the checkpoint restored them.
@@ -71,6 +82,13 @@ class SchedulerHorizon(L.Callback):
         ]
         if not stale:
             return
+        if not self.allow_layout_change:
+            sizes = [trainer.lr_scheduler_configs[index].scheduler.total_steps for index in stale]
+            raise RuntimeError(
+                f"The checkpoint's schedulers were sized for {sizes} optimizer steps, this run "
+                f"takes {[fresh_configs[index].scheduler.total_steps for index in stale]}. "
+                f"{LAYOUT_CHANGE_HINT}"
+            )
         remaining = self._remaining_steps(trainer)
         if remaining is None:
             logger.warning(

@@ -52,6 +52,13 @@ from torch.utils.data.distributed import DistributedSampler
 
 logger = logging.getLogger(__name__)
 
+# How to get past a refused resume in another layout, for every component that checks it.
+LAYOUT_CHANGE_HINT = (
+    "Resume with the same number of GPUs, batch size and gradient accumulation, or set "
+    "datamodule.allow_resume_layout_change=true (not recommended: another global batch "
+    "changes the optimization, see docs/user-guide/preemption_resume.md)."
+)
+
 
 @dataclass(frozen=True)
 class LoaderPosition:
@@ -244,6 +251,7 @@ class ResumableDataLoader(DataLoader):
         *,
         sampler: ResumableDistributedSampler,
         batch_size: int,
+        allow_layout_change: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the loader.
@@ -252,6 +260,8 @@ class ResumableDataLoader(DataLoader):
             dataset: Dataset to load.
             sampler: The resumable sampler drawing the order.
             batch_size: Samples per batch.
+            allow_layout_change: Accept a saved position of another batch size or number of
+                ranks and convert it. Off by default: a resume then fails instead.
             **kwargs: Remaining :class:`~torch.utils.data.DataLoader` arguments.
 
         Raises:
@@ -267,6 +277,7 @@ class ResumableDataLoader(DataLoader):
         super().__init__(dataset, batch_size=batch_size, sampler=sampler, **kwargs)
         self._batches_yielded = 0
         self._resume_position: LoaderPosition | None = None
+        self.allow_layout_change = allow_layout_change
         # Called with the batch a resumed iterator starts at, on its first fetch. Lightning
         # counts the restored position in batches of the saved layout; after a resume on
         # another number of ranks or another batch size the trainer has to be told where the
@@ -305,7 +316,19 @@ class ResumableDataLoader(DataLoader):
 
         Args:
             position: Position saved by an earlier run.
+
+        Raises:
+            ValueError: Raised when the position was saved with another batch size or number
+                of ranks and the loader does not allow a layout change.
         """
+        batch_size = self.samples_per_batch
+        num_replicas = int(self.resumable_sampler.num_replicas)
+        if not self.allow_layout_change and not position.has_layout(batch_size, num_replicas):
+            raise ValueError(
+                f"The checkpoint was saved with batch_size={position.batch_size} on "
+                f"{position.num_replicas} ranks, this run uses batch_size={batch_size} on "
+                f"{num_replicas} ranks. {LAYOUT_CHANGE_HINT}"
+            )
         self._resume_position = position
         self.resumable_sampler.set_epoch(position.epoch)
 

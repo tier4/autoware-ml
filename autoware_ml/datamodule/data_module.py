@@ -90,6 +90,7 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
         resumable_train_sampler: bool = False,
+        allow_resume_layout_change: bool = False,
     ) -> None:
         """
         Initialize the datamodule.
@@ -106,6 +107,9 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
           resumable_train_sampler: Serve the training split through a sampler whose position
             is saved in the checkpoint, so a resumed run continues mid-epoch instead of
             restarting it (see ``autoware_ml/resume/data_loader.py``). Off by default.
+          allow_resume_layout_change: Let a resumed run use another number of GPUs, batch size
+            or gradient accumulation than the checkpoint. Not recommended: changing the global
+            batch changes the optimization. Off by default, such a resume fails.
         """
         super().__init__()
 
@@ -121,6 +125,7 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
         self.predict_dataloader_config = predict_dataloader
         self.train_frame_sampling = train_frame_sampling
         self.resumable_train_sampler = resumable_train_sampler
+        self.allow_resume_layout_change = allow_resume_layout_change
 
     def databases(self) -> Sequence[BaseDatabase]:
         """
@@ -305,6 +310,7 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
                 dataset, shuffle=shuffle, weights=weights, seed=seed
             ),
             collate_fn=dataset.collate_fn,
+            allow_layout_change=self.allow_resume_layout_change,
             **kwargs,
         )
         return self._attach_train_loader(loader)

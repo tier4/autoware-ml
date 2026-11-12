@@ -95,7 +95,11 @@ class _DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
         dataset = _IndexDataset()
         sampler = ResumableDistributedSampler(dataset, shuffle=True, seed=3)
         loader = ResumableDataLoader(
-            dataset, sampler=sampler, batch_size=self.batch_size, collate_fn=torch.tensor
+            dataset,
+            sampler=sampler,
+            batch_size=self.batch_size,
+            collate_fn=torch.tensor,
+            allow_layout_change=True,
         )
         return self._attach_train_loader(loader)
 
@@ -201,7 +205,7 @@ class TestResumeWithAnotherBatchSize(unittest.TestCase):
             _Module("step"),
             8,
             max_epochs=2,
-            callbacks=[SchedulerHorizon()],
+            callbacks=[SchedulerHorizon(allow_layout_change=True)],
             ckpt_path=self.checkpoint,
         )
 
@@ -232,7 +236,7 @@ class TestResumeWithAnotherBatchSize(unittest.TestCase):
             _Module("step"),
             2,
             max_epochs=2,
-            callbacks=[SchedulerHorizon()],
+            callbacks=[SchedulerHorizon(allow_layout_change=True)],
             ckpt_path=self.checkpoint,
         )
 
@@ -247,12 +251,28 @@ class TestResumeWithAnotherBatchSize(unittest.TestCase):
         Expected: the callback leaves the restored state alone; the run ends on step 20.
         """
         self._kill("step", batch_size=4, max_epochs=2, epoch=0, batch=4)
-        horizon = SchedulerHorizon()
+        horizon = SchedulerHorizon(allow_layout_change=False)
         trainer = _fit(
             _Module("step"), 4, max_epochs=2, callbacks=[horizon], ckpt_path=self.checkpoint
         )
         scheduler = trainer.lr_scheduler_configs[0].scheduler
         self.assertEqual((scheduler.total_steps, scheduler.last_epoch), (20, 20))
+
+    def test_refit_is_refused_by_default(self) -> None:
+        """
+        Input: OneCycleLR killed after step 5 and resumed with batch size 8 by a callback
+        that does not allow a layout change.
+        Expected: the resume fails before training, naming the option.
+        """
+        self._kill("step", batch_size=4, max_epochs=2, epoch=0, batch=4)
+        with self.assertRaisesRegex(RuntimeError, "allow_resume_layout_change"):
+            _fit(
+                _Module("step"),
+                8,
+                max_epochs=2,
+                callbacks=[SchedulerHorizon()],
+                ckpt_path=self.checkpoint,
+            )
 
 
 if __name__ == "__main__":

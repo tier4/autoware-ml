@@ -20,17 +20,25 @@ the batches it handed out, and the datamodule stores that count in the
 checkpoint. On resume the loader skips exactly the batches already trained, so
 the interrupted epoch finishes with the batches it still owed, in the order it
 would have used. This holds for uniform shuffling, sequential order and the
-repeat factor frame sampling, on one GPU or under DDP, as long as the batch size
-and the number of GPUs are unchanged (otherwise the position is converted to the
-nearest sample offset and a warning is logged).
+repeat factor frame sampling, on one GPU or under DDP, with the same batch size
+and number of GPUs (a resume with others is refused unless allowed, see
+[below](#resuming-with-another-number-of-gpus-or-batch-size)).
 
 Not restored: the running validation of an interrupted validation pass (it
 restarts).
 
 ### Resuming with another number of GPUs or batch size
 
-A relaunch may use another number of GPUs, batch size or gradient accumulation, for
-example when fewer GPUs are free. Three things keep the training consistent then:
+A relaunch is expected to use the checkpoint's number of GPUs, batch size and
+gradient accumulation. When one of them differs, the resume fails before training
+and names the option below. Relaunch with the same settings when you can, for
+example with more accumulation when fewer GPUs are free, so the global batch (GPUs
+times batch size times accumulation) stays the same.
+
+When the layout has to change, set `datamodule.allow_resume_layout_change=true` on
+the relaunch. This is not recommended: a run whose global batch changes halfway is
+no longer the experiment it started as, and its result is not comparable with a run
+that kept it. With the option on, four things keep the training consistent:
 
 - The dataloader converts the saved position to the new layout through the samples
   already trained, rounding down, so it repeats a few samples rather than skipping any.
@@ -39,17 +47,25 @@ example when fewer GPUs are free. Three things keep the training consistent then
   the correction the epoch would run out of batches before Lightning saw its last
   one, so the end-of-epoch validation and the epoch's scheduler step were skipped and
   an epoch-wise learning rate lagged one epoch for the rest of the run.
-- `SchedulerHorizon` (part of `/defaults/preemption`) refits schedulers sized from the
-  number of optimizer steps of the run (`OneCycleLR` and every scheduler whose
-  `total_steps` the framework fills). The checkpoint restores the horizon of the old
-  layout: with a larger global batch the schedule would never reach its end, with a
-  smaller one `OneCycleLR` raises once it steps past it. The callback rebuilds the
-  scheduler for the new layout and moves it to the step that leaves exactly the
-  optimizer steps the resumed run still takes, so it ends on the run's last step.
+- `SchedulerHorizon` refits schedulers sized from the number of optimizer steps of the
+  run (`OneCycleLR` and every scheduler whose `total_steps` the framework fills). The
+  checkpoint restores the horizon of the old layout: with a larger global batch the
+  schedule would never reach its end, with a smaller one `OneCycleLR` raises once it
+  steps past it. The callback rebuilds the scheduler for the new layout and moves it
+  to the step that leaves exactly the optimizer steps the resumed run still takes, so
+  it ends on the run's last step.
+- `BatchSizeLearningRateScaling` multiplies the learning rate of every optimizer step
+  by a factor of the ratio of the global batch to the one of the run's first launch:
+  its square root by default (`rule: sqrt`, the rule for AdamW), the ratio itself with
+  `rule: linear` (SGD), or 1 with `rule: none`. The factor is applied around the
+  optimizer step only, so the schedulers, the checkpoints and the logged learning rate
+  keep the tuned values, and the first launch's global batch is kept in the checkpoint,
+  so successive relaunches do not compound their factors.
 
-A schedule in steps is still traversed at the new rate from the resume on, and the
-optimizer's hyperparameters are not rescaled: changing the global batch changes the
-optimization, keeping it (fewer GPUs, more accumulation) does not.
+Changing only the per-GPU layout while keeping the global batch (fewer GPUs, more
+accumulation) needs the option as well, but then only the first two points act. A
+checkpoint written before `BatchSizeLearningRateScaling` existed has no tuned global
+batch; its first relaunch takes its own global batch as the tuned one.
 
 ## Checkpoint cadence
 
