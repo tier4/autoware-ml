@@ -6,6 +6,7 @@ detectors.
 
 from __future__ import annotations
 
+from jaxtyping import Float, Float32
 import torch
 import torch.nn as nn
 
@@ -30,14 +31,14 @@ class GaussianFocalLoss(nn.Module):
 
     def forward(
         self,
-        prediction: torch.Tensor,
-        target: torch.Tensor,
-        weights: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        prediction: Float[torch.Tensor, "*shape"],
+        target: Float[torch.Tensor, "*shape"],
+        weights: Float[torch.Tensor, "..."] | None = None,
+    ) -> Float32[torch.Tensor, ""]:
         """Compute Gaussian focal loss on dense heatmaps.
 
         Args:
-            prediction: Raw heatmap logits.
+            prediction: Raw heatmap logits of any float dtype; the loss is computed in float32.
             target: Gaussian heatmap targets.
             weights: Optional weights broadcastable to ``prediction``, for example one weight
                 per sample and class. A zero drops the cell from the loss and, if it is a peak,
@@ -46,7 +47,9 @@ class GaussianFocalLoss(nn.Module):
         Returns:
             Scalar heatmap loss value.
         """
-        prediction = prediction.sigmoid().clamp(min=1e-4, max=1 - 1e-4)
+        # In float32: half precision rounds the clamp bound 1 - 1e-4 to 1, so under autocast a
+        # confident logit would make log(1 - prediction) infinite and the gradients NaN.
+        prediction = prediction.float().sigmoid().clamp(min=1e-4, max=1 - 1e-4)
         pos_mask = target.eq(1).float()
         neg_mask = target.lt(1).float()
         if weights is not None:

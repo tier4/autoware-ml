@@ -88,6 +88,29 @@ class TestGaussianFocalLoss(unittest.TestCase):
         self.assertTrue(torch.equal(self.prediction, prediction))
         self.assertTrue(torch.equal(self.target, target))
 
+    def test_half_precision_logits_give_the_float32_loss(self) -> None:
+        """
+        Input: a confident logit of 7 on a negative cell and on a peak, in bfloat16 and
+        float16.
+        Expected: half precision rounds the sigmoid of 7 and the clamp bound 1 - 1e-4 to 1,
+        so log(1 - p) would be infinite on the negative cell and the gradient NaN on the peak;
+        the loss runs in float32 instead and gives the float32 value.
+        Check: the loss and the gradient are finite and the loss equals the float32 one.
+        """
+        prediction = torch.full((1, 1, 1, 2), 7.0)
+        target = torch.tensor([[[[0.5, 1.0]]]])
+        expected = self.loss_fn(prediction, target)
+
+        for dtype in (torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                logits = prediction.to(dtype).requires_grad_()
+                loss = self.loss_fn(logits, target)
+                loss.backward()
+
+                self.assertTrue(torch.isfinite(loss))
+                self.assertTrue(torch.isclose(loss, expected))
+                self.assertTrue(torch.isfinite(logits.grad).all())
+
 
 if __name__ == "__main__":
     unittest.main()
