@@ -1,16 +1,33 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for 3D detection AP metrics."""
 
 from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
 
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
+from autoware_ml.metrics.detection3d.matching import cost_center, match_by_cost
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.nds import Nds
+from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
 from autoware_ml.metrics.detection3d.structures import RecallTarget
 from autoware_ml.metrics.detection3d.tp_errors import TpErrors
@@ -515,12 +532,6 @@ def test_match_by_cost_equals_reference_global_greedy() -> None:
     # The vectorized per-frame matcher must reproduce the straightforward
     # single-pass global greedy exactly: frame-local claims make per-frame
     # score order equivalent to global score order.
-    import numpy as np
-    import torch
-
-    from autoware_ml.metrics.detection3d.matching import cost_center, match_by_cost
-    from autoware_ml.metrics.detection3d.structures import Detection3DSample
-
     rng = np.random.default_rng(11)
 
     def _random_sample() -> Detection3DSample:

@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the point-cache segmentation suite and its components.
 
 The suite and every point-level metric are exercised on hand-built frames, so the
@@ -9,12 +23,13 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.stats import rankdata
 import torch
 
 from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.segmentation3d.calibration import CalibrationError
 from autoware_ml.metrics.segmentation3d.confident_error import ConfidentErrorRate
-from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness
+from autoware_ml.metrics.segmentation3d.entropy_auroc import UncertaintyUsefulness, binned_auroc
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
 from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.partial_detection3d import PartialDetection3DScore
@@ -26,6 +41,7 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
     confidence,
     normalized_entropy,
 )
+from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
 from autoware_ml.metrics.report import MetricKey
 from autoware_ml.metrics.tests.eval_output_fixtures import (
     segmentation_eval_output,
@@ -419,8 +435,6 @@ def test_partial_detection3d_requires_the_shared_taxonomy_prefix() -> None:
 def test_tolerant_error_mask_equals_brute_force_reference() -> None:
     # The per-class nearest-neighbour formulation must reproduce the direct
     # definition: wrong, and no point predicted the true class within radius.
-    from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
-
     rng = np.random.default_rng(3)
     coord = rng.uniform(-20, 20, (2000, 3))
     target = rng.integers(0, 3, 2000)
@@ -446,11 +460,6 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
 def test_entropy_auroc_binned_matches_rankdata_reference() -> None:
     # The histogram closed form must agree with exact tie-aware ranking to well
     # under one bin width.
-    import numpy as np
-    from scipy.stats import rankdata
-
-    from autoware_ml.metrics.segmentation3d.entropy_auroc import binned_auroc
-
     rng = np.random.default_rng(5)
     entropy = rng.beta(2.0, 5.0, 50_000)
     wrong = rng.random(50_000) < 0.2

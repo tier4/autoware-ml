@@ -20,7 +20,7 @@ import socket
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Sequence
 
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra

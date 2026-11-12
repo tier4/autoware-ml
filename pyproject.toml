@@ -164,17 +164,29 @@ consider_namespace_packages = true
 [tool.ruff.lint]
 # Ignore F722 error to fix the error for JaxTyping in string typing, which is not used in our codebase.
 ignore = ["F722"]
+# Preview rules apply only when selected by name; CPY001 checks the license header.
+preview = true
+explicit-preview-rules = true
 extend-select = [
+    "CPY001",  # license header
     "PGH003",  # `# type: ignore[code]`, not a blanket ignore
+    "PLC0415",  # imports at the top of the file
     "S101",  # raise instead of assert
     "T201",  # log instead of print
     "TID251",  # banned APIs, listed below
+    "UP006",  # builtin generics: `list`, `set`
+    "UP035",  # abstract containers from `collections.abc`
     "UP045",  # `X | None` instead of `Optional[X]`
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests check with assert, the code raises (assert is removed under `python -O`).
 "**/tests/**" = ["S101"]
+# Package markers stay empty.
+"__init__.py" = ["CPY001"]
+
+[tool.ruff.lint.flake8-copyright]
+notice-rgx = '(?s)Copyright \d{4}(-\d{4})? TIER IV, Inc\..*Licensed under the Apache License, Version 2\.0'
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "warnings.warn".msg = "Raise an exception, or log through logging.getLogger(__name__)."

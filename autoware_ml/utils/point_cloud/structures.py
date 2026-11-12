@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Point-cloud container structures."""
 
 from __future__ import annotations
@@ -123,7 +137,8 @@ class Point(dict[str, torch.Tensor]):
                 "spconv is required for Point.sparsify() but is not installed."
             )
 
-        import spconv.pytorch as spconv
+        # TODO(JonnaMat): Import spconv at the top.
+        import spconv.pytorch as spconv  # noqa: PLC0415
 
         if "batch" not in self:
             self["batch"] = offset_to_batch(self["offset"], self["coord"])

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the shared segmentation eval-output builder."""
+"""Tests for the shared ``seg3d_frames`` eval-output builder."""
 
 import unittest
 
