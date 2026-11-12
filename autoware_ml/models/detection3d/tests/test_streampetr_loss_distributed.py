@@ -16,8 +16,8 @@
 
 They spawn gloo process groups on CPU so the collectives of ``reduce_mean_count`` run. The
 property under test: sharding a batch over the ranks gives the DDP-averaged loss and gradients
-of the whole batch on one process, and a rank without ground truth still joins the denoising
-collective.
+of the whole batch on one process, for the 3D head and the auxiliary 2D head, and a rank
+without ground truth still joins the denoising collective.
 
 Scope: the head's loss. The gradient test wraps one linear layer in DDP and feeds the head's
 loss fixed features, so it checks the loss normalization, not distributed training of the
@@ -26,8 +26,10 @@ model. ``reduce_mean_count`` itself is tested in ``utils/tests``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import unittest
 
+from jaxtyping import Float32, Int64
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
@@ -36,6 +38,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
 )
+from autoware_ml.models.detection3d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
@@ -298,6 +301,69 @@ def _ddp_gradient_worker(
         torch.testing.assert_close(sharded.grad, whole, rtol=1e-4, atol=1e-6)
 
 
+def _image_2d(
+    num_boxes: int, seed: int
+) -> tuple[
+    Float32[torch.Tensor, "1 1 channels height width"],
+    Float32[torch.Tensor, "num_boxes 4"],
+    Int64[torch.Tensor, " num_boxes"],
+]:
+    """Neck features of one 96 x 160 camera image with its 2D boxes and labels."""
+    generator = torch.Generator().manual_seed(seed)
+    features = torch.randn(1, 1, 32, 6, 10, generator=generator)
+    corners = torch.rand(num_boxes, 2, generator=generator) * torch.tensor([100.0, 50.0])
+    boxes = torch.cat([corners, corners + 30.0], dim=1)
+    return features, boxes, torch.arange(num_boxes) % _NUM_CLASSES
+
+
+def _head_2d_loss(
+    head: torch.nn.Module, box_counts: tuple[int, ...], ranks: Sequence[int]
+) -> Float32[torch.Tensor, ""]:
+    """Sum of the auxiliary 2D losses of one camera image per sample of the given ranks."""
+    images = [_image_2d(box_counts[rank], seed=90 + rank) for rank in ranks]
+    outputs = head(torch.cat([features for features, _, _ in images]), 96, 160)
+    module = head.module if isinstance(head, DistributedDataParallel) else head
+    losses = module.loss(
+        outputs,
+        gt_bboxes_2d=[[boxes] for _, boxes, _ in images],
+        gt_labels_2d=[[labels] for *_, labels in images],
+        centers_2d=[[boxes[:, :2] + 15.0] for _, boxes, _ in images],
+        padding_mask=torch.zeros(len(images), dtype=torch.bool),
+    )
+    return sum(losses.values())
+
+
+def _build_head_2d() -> FocalHead2D:
+    torch.manual_seed(0)
+    return FocalHead2D(class_names=_CLASS_NAMES, in_channels=32, embed_dims=32, stride=16)
+
+
+def _head_2d_whole_batch_gradients(
+    box_counts: tuple[int, ...],
+) -> list[Float32[torch.Tensor, "..."]]:
+    """Gradients of the 2D head over the whole batch on one process, without a process group."""
+    head = _build_head_2d()
+    _head_2d_loss(head, box_counts, range(len(box_counts))).backward()
+    return [parameter.grad for parameter in head.parameters()]
+
+
+def _head_2d_gradient_worker(
+    rank: int,
+    world_size: int,
+    box_counts: tuple[int, ...],
+    whole_gradients: list[Float32[torch.Tensor, "..."]],
+) -> None:
+    head = _build_head_2d()
+    # The wrapper must outlive the backward pass, which its hooks average over the ranks.
+    ddp_head = DistributedDataParallel(head)
+    _head_2d_loss(ddp_head, box_counts, [rank]).backward()
+
+    # The convolutions sum their gradients in another order on one process, which leaves about
+    # 1e-7 on the gradients near zero.
+    for sharded, whole in zip(head.parameters(), whole_gradients):
+        torch.testing.assert_close(sharded.grad, whole, rtol=1e-5, atol=1e-6)
+
+
 @unittest.skipUnless(GLOO_AVAILABLE, "gloo backend unavailable")
 class TestStreamPETRLossDistributed(unittest.TestCase):
     def test_sharded_loss_matches_single_batch_equivalent(self) -> None:
@@ -352,6 +418,21 @@ class TestStreamPETRLossDistributed(unittest.TestCase):
             annotated_class_masks,
             world_size=len(box_counts),
         )
+
+    def test_2d_head_ddp_gradients_match_the_whole_batch_on_one_process(self) -> None:
+        """Test that the auxiliary 2D head normalizes its losses like the 3D head.
+
+        With one positive in the step, or none, a floor of the averaged count on every rank, in
+        the head or in the losses, would halve the gradients of the step.
+        """
+        for box_counts in [(3, 5), (1, 0), (0, 0)]:
+            with self.subTest(box_counts=box_counts):
+                spawn_gloo_workers(
+                    _head_2d_gradient_worker,
+                    box_counts,
+                    _head_2d_whole_batch_gradients(box_counts),
+                    world_size=len(box_counts),
+                )
 
 
 if __name__ == "__main__":
