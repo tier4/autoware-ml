@@ -1417,10 +1417,13 @@ class TransFusionHead(nn.Module):
         # SigmoidFocalLoss works on flattened (N, num_classes) logits.
         # (batch_size, num_classes, num_proposals) -> (batch_size, num_proposals, num_classes)
         # -> (batch_size * num_proposals, num_classes)
+        # Under autocast the decoder logits are half precision; the loss takes float32, and so do
+        # the targets made from the logits below.
         layer_logits = (
             separate_head_outputs.heatmap[..., start:end]
             .permute(0, 2, 1)
             .reshape(-1, self.num_classes)
+            .float()
         )
         # (batch_size, num_proposals) -> (batch_size * num_proposals,)
         layer_labels = targets.labels[:, start:end].reshape(-1)
@@ -1431,12 +1434,8 @@ class TransFusionHead(nn.Module):
         cls_targets[pos_masks, layer_labels[pos_masks]] = 1.0
         # (batch_size, num_proposals, num_classes) -> (batch_size * num_proposals, num_classes)
         layer_label_weights = targets.label_weights[:, start:end].reshape(-1, self.num_classes)
-        # Under autocast the decoder logits are half precision; the loss takes float32.
         loss_cls = self.loss_cls(
-            layer_logits.float(),
-            cls_targets,
-            layer_label_weights,
-            avg_factor=max(targets.num_pos, 1),
+            layer_logits, cls_targets, layer_label_weights, avg_factor=max(targets.num_pos, 1)
         )
 
         # A head without velocity channels contributes no columns to the regression vector.

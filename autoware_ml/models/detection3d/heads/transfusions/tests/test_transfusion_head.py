@@ -1074,6 +1074,39 @@ class TestTransFusionHead(unittest.TestCase):
             self.assertTrue(torch.isfinite(torch.as_tensor(value)).all(), msg=key)
         self.assertAlmostEqual(float(losses["matched_ious"]), 0.0, places=6)
 
+    def test_loss_cls_of_half_precision_logits_equals_their_float32_loss(self) -> None:
+        """
+        Input: the classification logits in bfloat16 and in float16, as the decoder emits them
+        under autocast, handed to loss outside an autocast region.
+        Expected: the head casts the logits to float32 before it builds the targets from them, so
+        the classification loss is that of the same logits in float32.
+        Check: the classification loss of every layer against the float32 one.
+        """
+        outputs = self._build_head_outputs_on_gt(layer_center_shifts_metres=[0.5, 0.5])
+        branches = outputs.separate_head_outputs
+        for dtype in (torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                half_logits = branches.heatmap.detach().to(dtype)
+                losses = {}
+                for logits in (half_logits, half_logits.float()):
+                    logit_outputs = outputs.model_copy(
+                        update={
+                            "separate_head_outputs": branches.model_copy(update={"heatmap": logits})
+                        }
+                    )
+                    losses[logits.dtype] = self._compute_losses(
+                        transfusion_head_outputs=logit_outputs
+                    )
+
+                # The proposals are confident, so the loss is about 1e-5: compare it relatively.
+                for prefix in ("layer_0", "layer_-1"):
+                    torch.testing.assert_close(
+                        losses[dtype][f"{prefix}_loss_cls"],
+                        losses[torch.float32][f"{prefix}_loss_cls"],
+                        rtol=1e-6,
+                        atol=0.0,
+                    )
+
     def test_loss_heatmap_skips_unannotated_classes_of_a_sample(self) -> None:
         """
         Test that the dense heatmap of a class gets no gradient in a sample where it is marked

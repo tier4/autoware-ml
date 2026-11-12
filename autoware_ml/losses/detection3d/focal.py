@@ -32,19 +32,20 @@ class SigmoidFocalLoss(nn.Module):
 
     def forward(
         self,
-        logits: Float32[torch.Tensor, "num_queries num_classes"],
-        targets: Float32[torch.Tensor, "num_queries num_classes"],
-        weights: Float32[torch.Tensor, "num_queries num_classes"] | None = None,
+        logits: Float32[torch.Tensor, "*batch num_queries num_classes"],
+        targets: Float32[torch.Tensor, "*batch num_queries num_classes"],
+        weights: Float32[torch.Tensor, "*batch num_queries #num_classes"] | None = None,
         avg_factor: float | None = None,
     ) -> Float32[torch.Tensor, ""]:
         """Compute focal loss on one-hot classification targets.
 
         Args:
-            logits: Raw classification logits with shape ``(N, C)``, float32: the focusing
-                term ``(1 - p_t)^gamma`` of a confident query rounds to 0 in half precision,
-                so a head training under autocast casts its logits first.
-            targets: One-hot classification targets with shape ``(N, C)``.
-            weights: Optional per-query, per-class weights with shape ``(N, C)``.
+            logits: Raw classification logits with shape ``(..., N, C)``, float32: the
+                focusing term ``(1 - p_t)^gamma`` of a confident query rounds to 0 in half
+                precision, so a head training under autocast casts its logits first.
+            targets: One-hot classification targets with the shape of ``logits``.
+            weights: Optional per-query weights with the shape of ``logits``, one per class,
+                or with one column for all the classes.
             avg_factor: Optional normalizer of the summed loss, used as given. The caller
                 floors it: a positive count averaged over the DDP ranks can be below 1, and
                 flooring it again on every rank would change the gradient of the step.

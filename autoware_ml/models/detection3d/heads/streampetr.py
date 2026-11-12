@@ -954,10 +954,10 @@ class StreamPETRHead(nn.Module):
     ) -> tuple[Float[torch.Tensor, ""], Float[torch.Tensor, ""]]:
         """Compute denoising-query supervision for one decoder layer.
 
-        The average factors are the denoising target counts of the step, averaged over the
-        ranks and floored at 1 by :meth:`loss`. ``label_weights`` weight the classification
-        terms of every denoising query, one for all the classes or one per class; None weights
-        them all by one.
+        The average factors are the denoising target counts of the step, floored on their sum
+        over the ranks by :meth:`loss`, so they can be below 1; the losses divide by them as
+        given. ``label_weights`` weight the classification terms of every denoising query, one
+        for all the classes or one per class; None weights them all by one.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes

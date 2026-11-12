@@ -111,6 +111,29 @@ class TestSigmoidFocalLoss(unittest.TestCase):
 
         self.assertTrue(torch.isclose(weighted, unweighted * 0.5))
 
+    def test_batched_queries_with_one_weight_column_match_the_flat_loss(self) -> None:
+        """
+        Input: logits and targets of (batch_size, num_queries, num_classes) and weights with one
+        column for all the classes, as the StreamPETR head passes them.
+        Expected: the weight column broadcasts over the classes, so the loss is that of the
+        flattened queries with the column repeated for every class.
+        Check: the batched loss against the flat one.
+        """
+        logits = torch.linspace(-3.0, 3.0, 24).reshape(2, 3, 4)
+        targets = torch.zeros(2, 3, 4)
+        targets[0, 1, 2] = 1.0
+        targets[1, 0, 3] = 1.0
+        weights = torch.tensor([[[1.0], [0.0], [0.5]], [[1.0], [1.0], [0.0]]])
+
+        batched = self.loss_fn(logits, targets, weights=weights)
+        flat = self.loss_fn(
+            logits.reshape(-1, 4),
+            targets.reshape(-1, 4),
+            weights=weights.expand(-1, -1, 4).reshape(-1, 4),
+        )
+
+        self.assertTrue(torch.isclose(batched, flat))
+
 
 if __name__ == "__main__":
     unittest.main()
