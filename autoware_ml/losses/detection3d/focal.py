@@ -6,6 +6,7 @@ This module provides reusable focal-loss variants for sparse and query-based
 
 from __future__ import annotations
 
+from jaxtyping import Float
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -31,18 +32,20 @@ class SigmoidFocalLoss(nn.Module):
 
     def forward(
         self,
-        logits: torch.Tensor,
-        targets: torch.Tensor,
-        weights: torch.Tensor | None = None,
+        logits: Float[torch.Tensor, "num_queries num_classes"],
+        targets: Float[torch.Tensor, "num_queries num_classes"],
+        weights: Float[torch.Tensor, "num_queries num_classes"] | None = None,
         avg_factor: float | None = None,
-    ) -> torch.Tensor:
+    ) -> Float[torch.Tensor, ""]:
         """Compute focal loss on one-hot classification targets.
 
         Args:
             logits: Raw classification logits with shape ``(N, C)``.
             targets: One-hot classification targets with shape ``(N, C)``.
             weights: Optional per-query, per-class weights with shape ``(N, C)``.
-            avg_factor: Optional normalization factor.
+            avg_factor: Optional normalizer of the summed loss, used as given. The caller
+                floors it: a positive count averaged over the DDP ranks can be below 1, and
+                flooring it again on every rank would change the gradient of the step.
 
         Returns:
             Scalar focal loss value.
@@ -56,5 +59,5 @@ class SigmoidFocalLoss(nn.Module):
             loss = loss * weights
         loss = loss.sum()
         if avg_factor is not None:
-            loss = loss / max(avg_factor, 1.0)
+            loss = loss / avg_factor
         return loss

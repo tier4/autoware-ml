@@ -887,8 +887,8 @@ class StreamPETRHead(nn.Module):
         ``class_weights`` are the classification weights of the unmatched queries of every
         sample, one for all the classes or one per class (see :meth:`loss`). A matched query
         is vouched for by its box, so it keeps every classification term, as in TransFusion.
-        ``total_pos`` is the positive count of the step, floored at 1 by :meth:`loss`. The
-        divisions by it are explicit because the focal loss floors ``avg_factor`` per rank.
+        ``total_pos`` is the positive count of the step, floored on its sum over the ranks by
+        :meth:`loss`, so it can be below 1; the losses divide by it as given.
         """
         targets = self._get_targets(cls_scores, bbox_preds, gt_boxes, gt_labels)
 

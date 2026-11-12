@@ -61,13 +61,14 @@ class TestSigmoidFocalLoss(unittest.TestCase):
 
         self.assertTrue(torch.isclose(normalized, unnormalized / 4.0))
 
-    def test_avg_factor_is_clamped_to_one(self) -> None:
-        """A normalization factor below one does not inflate the loss."""
+    def test_avg_factor_below_one_divides_as_given(self) -> None:
+        """A normalization factor below one, a positive count averaged over the DDP ranks,
+        divides the sum as given instead of being floored to one."""
         unnormalized = self.loss_fn(self.logits, self.targets)
 
-        clamped = self.loss_fn(self.logits, self.targets, avg_factor=0.0)
+        normalized = self.loss_fn(self.logits, self.targets, avg_factor=0.5)
 
-        self.assertTrue(torch.isclose(clamped, unnormalized))
+        self.assertTrue(torch.isclose(normalized, unnormalized * 2.0))
 
     def test_zero_weighted_query_is_dropped(self) -> None:
         """A query whose weights are zero contributes nothing to the loss."""
