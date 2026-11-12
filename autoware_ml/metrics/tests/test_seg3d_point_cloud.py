@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the point-cache segmentation suite and its components.
 
 The suite and every point-level metric are exercised on hand-built frames, so the
@@ -29,6 +43,10 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
 )
 from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    segmentation_eval_output,
+    segmentation_frame,
+)
 
 CLASS_NAMES = ("road", "obstacle")
 # The partial detection score joins the taxonomies by a shared prefix: one
@@ -106,16 +124,16 @@ def test_suite_caches_frames_and_runs_components() -> None:
         class_names=CLASS_NAMES,
     )
     suite.update(
-        {
-            "seg3d_frames": [
-                {
-                    "coord": torch.tensor([[float(x), 0.0, 0.0] for x in range(10)]),
-                    "pred": torch.tensor(target),
-                    "target": torch.tensor(target),
-                    "scores": torch.full((10, 2), 0.5),
-                }
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    coord=torch.tensor([[float(x), 0.0, 0.0] for x in range(10)]),
+                    pred=torch.tensor(target),
+                    target=torch.tensor(target),
+                    scores=torch.full((10, 2), 0.5),
+                )
             ]
-        }
+        )
     )
     report = suite.result(EvalStage.TEST)
     assert MetricKey(name="error_rate") in report.metric_names()
@@ -129,14 +147,14 @@ def test_suite_frame_count_reads_the_cache_length() -> None:
         num_classes=2,
         class_names=CLASS_NAMES,
     )
-    frame = {
-        "coord": torch.tensor([[1.0, 0.0, 0.0]]),
-        "pred": torch.tensor([0]),
-        "target": torch.tensor([0]),
-        "scores": torch.full((1, 2), 0.5),
-    }
-    suite.update({"seg3d_frames": [frame, frame]})
-    suite.update({"seg3d_frames": [frame]})
+    frame = segmentation_frame(
+        coord=torch.tensor([[1.0, 0.0, 0.0]]),
+        pred=torch.tensor([0]),
+        target=torch.tensor([0]),
+        scores=torch.full((1, 2), 0.5),
+    )
+    suite.update(segmentation_eval_output([frame, frame]))
+    suite.update(segmentation_eval_output([frame]))
 
     report = suite.result(EvalStage.TEST)
 
@@ -160,17 +178,23 @@ def test_suite_demands_boxes_for_box_reading_components() -> None:
         num_classes=2,
         class_names=SEG3D_CLASS_NAMES,
     )
-    frame = {
-        "coord": torch.tensor([[0.0, 0.0, 0.0]]),
-        "pred": torch.tensor([0]),
-        "target": torch.tensor([0]),
-        "scores": torch.full((1, 2), 0.5),
-    }
+    without_boxes = segmentation_frame(
+        coord=torch.tensor([[0.0, 0.0, 0.0]]),
+        pred=torch.tensor([0]),
+        target=torch.tensor([0]),
+        scores=torch.full((1, 2), 0.5),
+    )
     with pytest.raises(ValueError, match="gt_boxes and gt_box_labels"):
-        suite.update({"seg3d_frames": [dict(frame)]})
-    frame["gt_boxes"] = torch.zeros((0, 7))
-    frame["gt_box_labels"] = torch.zeros((0,), dtype=torch.long)
-    suite.update({"seg3d_frames": [frame]})
+        suite.update(segmentation_eval_output([without_boxes]))
+    with_empty_boxes = segmentation_frame(
+        coord=torch.tensor([[0.0, 0.0, 0.0]]),
+        pred=torch.tensor([0]),
+        target=torch.tensor([0]),
+        scores=torch.full((1, 2), 0.5),
+        gt_boxes=torch.zeros((0, 7)),
+        gt_box_labels=torch.zeros((0,), dtype=torch.long),
+    )
+    suite.update(segmentation_eval_output([with_empty_boxes]))
 
 
 def test_calibration_error_zero_when_confidence_matches_accuracy() -> None:

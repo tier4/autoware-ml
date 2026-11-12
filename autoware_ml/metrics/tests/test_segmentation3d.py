@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for 3D semantic segmentation metrics."""
 
 from __future__ import annotations
@@ -12,6 +26,10 @@ from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.precision_recall_f1 import PrecisionRecallF1
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
 from autoware_ml.metrics.report import MetricKey
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    segmentation_eval_output,
+    segmentation_frame,
+)
 
 
 def _suite(**kwargs):
@@ -23,8 +41,8 @@ def _suite(**kwargs):
 
 
 def _eval_out(pred, target, coord):
-    """One-frame seg3d_frames payload (the contract both seg suites consume)."""
-    return {"seg3d_frames": [{"pred": pred, "target": target, "coord": coord}]}
+    """A one-frame eval output (the contract both seg suites consume)."""
+    return segmentation_eval_output([segmentation_frame(pred=pred, target=target, coord=coord)])
 
 
 def _coord(num_points: int) -> torch.Tensor:
@@ -152,12 +170,16 @@ def test_autoware_seg3d_frame_count_sums_frames_across_batches() -> None:
         ranges=(MetricRange("0-50m", 0.0, 50.0),),
     )
     metric.update(
-        {
-            "seg3d_frames": [
-                {"pred": torch.tensor([0, 1]), "target": torch.tensor([0, 1]), "coord": _coord(2)},
-                {"pred": torch.tensor([1]), "target": torch.tensor([0]), "coord": _coord(1)},
+        segmentation_eval_output(
+            [
+                segmentation_frame(
+                    pred=torch.tensor([0, 1]), target=torch.tensor([0, 1]), coord=_coord(2)
+                ),
+                segmentation_frame(
+                    pred=torch.tensor([1]), target=torch.tensor([0]), coord=_coord(1)
+                ),
             ]
-        }
+        )
     )
     # A frame whose points are all ignored adds nothing to the matrix but is still a frame.
     metric.update(_eval_out(torch.tensor([0]), torch.tensor([-1]), _coord(1)))

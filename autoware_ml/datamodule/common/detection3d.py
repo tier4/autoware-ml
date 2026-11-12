@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Dataset task reading the 3D boxes of a record."""
+
 import logging
 
 import numpy as np

@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for the native StreamPETR detector."""
 
 from __future__ import annotations
@@ -19,6 +33,7 @@ from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.metrics.base import EvalStage, MetricSuite
+from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.models.common.necks.lss_fpn import GeneralizedLSSFPN
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.streampetr import StreamPETRDetection3DModel, _ground_truth
@@ -75,11 +90,14 @@ class _ResetCountingSuite(MetricSuite[None]):
         super().reset()
         self.resets += 1
 
-    def update(self, eval_out: dict) -> None:
-        del eval_out
+    def update(self, eval_output: EvalOutput) -> None:
+        del eval_output
 
     def state_for(self, metric_range, metric_filter) -> None:
         del metric_range, metric_filter
+
+    def requirements(self) -> MetricRequirements:
+        return MetricRequirements()
 
 
 def _build_model(
@@ -387,9 +405,11 @@ def test_build_eval_output_pairs_predictions_with_ground_truth() -> None:
     with torch.no_grad():
         eval_out = model.build_eval_output(batch_inputs, model(batch_inputs))
 
-    assert len(eval_out["predictions"]) == 1
-    assert eval_out["gt_boxes"][0].shape == (1, 10)
-    assert eval_out["scene_token"] == ["db/scene_0/0"]
+    assert eval_out.detection3d is not None
+    (frame,) = eval_out.detection3d.frames
+    assert frame.gt_boxes.shape == (1, 10)
+    assert frame.frame_meta is not None
+    assert frame.frame_meta.scene_token == "db/scene_0/0"
 
 
 def test_stream_continuity_follows_the_scene_and_the_time_of_every_lane() -> None:
@@ -1262,9 +1282,15 @@ def test_a_padded_eval_batch_keeps_one_entry_per_sample() -> None:
         predictions = model.decode_outputs(batch_inputs, outputs)
 
     assert len(predictions.detection3d_predictions) == 3
-    assert len(eval_out["predictions"]) == len(eval_out["gt_boxes"]) == 3
-    assert eval_out["padding_mask"] == [False, True, False]
-    assert eval_out["scene_token"] == ["db/a/0", "db/b/0", "db/c/0"]
+    assert eval_out.detection3d is not None
+    frames = eval_out.detection3d.frames
+    assert len(frames) == 3
+    assert [frame.is_padding for frame in frames] == [False, True, False]
+    assert [frame.frame_meta.scene_token for frame in frames if frame.frame_meta] == [
+        "db/a/0",
+        "db/b/0",
+        "db/c/0",
+    ]
 
 
 def test_a_padding_slot_starts_a_new_stream_and_leaves_the_next_epoch_alone() -> None:

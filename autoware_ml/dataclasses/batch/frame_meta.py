@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Per-frame metadata carried next to the model inputs.
 
 The region and collision evaluation filters need two things the model inputs do not
@@ -110,6 +124,22 @@ class FrameMetaBatch(NamedTuple):
                 dtype=torch.float64,
             ),
             lanelet_map_paths=[frame_meta.lanelet_map_path for frame_meta in frame_meta_samples],
+        )
+
+    def sample(self, index: int) -> FrameMetaSample:
+        """Read the metadata of one frame of the batch back out.
+
+        Args:
+            index: Position of the frame in the batch.
+
+        Returns:
+            The frame's metadata, the inverse of :meth:`collate_gt_samples` for that frame.
+        """
+        return FrameMetaSample(
+            ego2global=self.ego2globals[index],
+            scene_token=self.scene_tokens[index],
+            timestamp=float(self.timestamps[index]),
+            lanelet_map_path=self.lanelet_map_paths[index],
         )
 
     def to_device(self, device: torch.device) -> FrameMetaBatch:

@@ -128,8 +128,10 @@ def stamp_onnx_meta(
         metainfo: Per-module inference parameters declared in the deploy config
             (``deploy.onnx.modules.<module>.metainfo``), each value stamped as a
             JSON document by :func:`meta_value_to_str`. ``None`` stamps no extra props.
-        tracker / run_id: The active experiment tracker and its deploy run,
-            omitted from the stamp when no tracker is enabled.
+        tracker: The active experiment tracker, omitted from the stamp when no tracker is
+            enabled.
+        run_id: The deploy run of the tracker, omitted from the stamp when no tracker is
+            enabled.
     """
     model = onnx.load(str(onnx_path))
     exported_with = f"{model.producer_name} {model.producer_version}".strip()

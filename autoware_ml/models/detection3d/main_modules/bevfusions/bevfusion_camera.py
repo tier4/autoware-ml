@@ -100,7 +100,7 @@ class BEVFusionCamera(nn.Module):
                 is built in. The pipeline composes the inverse of the lidar augmentation into
                 these, so their inverse maps the camera into the augmented lidar frame.
             geom_feats_precomputed: Optional precomputed BEV-pool metadata.
-            image_feature: Optional precomputed image feature tensor.
+            image_features: Optional precomputed image feature tensor.
             img_aug_matrix: Optional image augmentation matrices mapping the image plane of
                 ``camera_intrinsics`` onto the image the features were computed on, identity
                 when omitted.
