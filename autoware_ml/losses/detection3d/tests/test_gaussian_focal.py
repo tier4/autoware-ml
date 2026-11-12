@@ -101,6 +101,22 @@ class TestGaussianFocalLoss(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "float32"):
                     self.loss_fn(self.prediction.to(dtype), self.target)
 
+    def test_avg_factor_replaces_the_peak_count(self) -> None:
+        """
+        Input: the two-peak heatmap scored with an average factor of 4 and of 0.5.
+        Expected: a given average factor divides the summed loss instead of the peak count,
+        as given, also below 1.
+        Check: both losses against the summed loss (the default divides by the 2 peaks).
+        """
+        summed = self.loss_fn(self.prediction, self.target) * 2.0
+
+        self.assertTrue(
+            torch.isclose(self.loss_fn(self.prediction, self.target, avg_factor=4.0), summed / 4.0)
+        )
+        self.assertTrue(
+            torch.isclose(self.loss_fn(self.prediction, self.target, avg_factor=0.5), summed * 2.0)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
