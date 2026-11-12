@@ -36,17 +36,15 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 import numpy as np
 import torch.distributed
 import torchmetrics
 
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
-
-if TYPE_CHECKING:
-    from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 
 logger = logging.getLogger(__name__)
 

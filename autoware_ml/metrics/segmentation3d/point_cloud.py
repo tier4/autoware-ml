@@ -34,18 +34,16 @@ Test only and single process, the cache is CPU held. Validation uses the confusi
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 import torch
 
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.metrics.class_groups import fold_labels, fold_labels_tensor, resolve_class_groups
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
-
-if TYPE_CHECKING:
-    from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 
 
 def _reduce_scores(scores: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
