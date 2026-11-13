@@ -14,7 +14,7 @@
 
 """Deployment declared as graphs plus one function.
 
-A model declares the graphs it exports (:class:`GraphStage`) and writes its deployed inference
+A model declares the graphs it exports (:class:`DeployGraph`) and writes its deployed inference
 as one function, ``deployed_forward(multi_task_batch_inputs, graphs)``: the glue is plain code
 in that function, and each graph is called by name. ``multi_task_batch_inputs`` is the
 preprocessed batch ``forward()`` takes. The framework hands the function its graphs as callables
@@ -42,7 +42,7 @@ GraphTensor = Shaped[torch.Tensor, "*shape"]
 
 
 @dataclass(frozen=True)
-class GraphStage:
+class DeployGraph:
     """One exported ONNX / TensorRT graph.
 
     Attributes:
@@ -72,12 +72,12 @@ class GraphStage:
             repeated = sorted({name for name in names if names.count(name) > 1})
             if repeated:
                 raise ValueError(
-                    f"GraphStage {self.name!r} lists {repeated} more than once in its {kind}; "
+                    f"DeployGraph {self.name!r} lists {repeated} more than once in its {kind}; "
                     "each is one ONNX tensor name."
                 )
 
 
-def validate_graphs(graphs: Sequence[GraphStage]) -> tuple[GraphStage, ...]:
+def validate_graphs(graphs: Sequence[DeployGraph]) -> tuple[DeployGraph, ...]:
     """Check a model's graph declaration and return it as a tuple.
 
     Whether the deployed function calls each graph with its declared inputs is checked when
@@ -88,7 +88,7 @@ def validate_graphs(graphs: Sequence[GraphStage]) -> tuple[GraphStage, ...]:
     """
     graphs = tuple(graphs)
     if not graphs:
-        raise ValueError("A deployment needs at least one exportable GraphStage.")
+        raise ValueError("A deployment needs at least one exportable DeployGraph.")
     names = [graph.name for graph in graphs]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
@@ -96,7 +96,7 @@ def validate_graphs(graphs: Sequence[GraphStage]) -> tuple[GraphStage, ...]:
     return graphs
 
 
-def run_graph_stage(stage: GraphStage, args: Sequence[GraphTensor]) -> dict[str, GraphTensor]:
+def run_graph_stage(stage: DeployGraph, args: Sequence[GraphTensor]) -> dict[str, GraphTensor]:
     """Call a graph's module on its positional inputs and name its outputs.
 
     Raises:
@@ -123,7 +123,7 @@ class GraphCall:
             ``None`` until the graph is called. Export traces the graph on them.
     """
 
-    def __init__(self, stage: GraphStage, run: GraphRunner, device: torch.device) -> None:
+    def __init__(self, stage: DeployGraph, run: GraphRunner, device: torch.device) -> None:
         self.stage = stage
         self.inputs = stage.inputs
         self.outputs = stage.outputs
@@ -206,7 +206,7 @@ DeployedForward = Callable[[ModelBatchInputs, Graphs], Mapping[str, GraphTensor]
 
 
 @dataclass(frozen=True)
-class DeployedModel:
+class DeploymentDeclaration:
     """A model's deployment: the graphs it exports and the function that runs them.
 
     Attributes:
@@ -215,7 +215,7 @@ class DeployedModel:
             ``forward(multi_task_batch_inputs, graphs) -> model outputs``.
     """
 
-    graphs: tuple[GraphStage, ...]
+    graphs: tuple[DeployGraph, ...]
     forward: DeployedForward
 
     def __post_init__(self) -> None:
@@ -223,8 +223,8 @@ class DeployedModel:
 
 
 def call_deployed_forward(
-    deployment: DeployedModel,
-    runner_for: Callable[[GraphStage], GraphRunner],
+    deployment: DeploymentDeclaration,
+    runner_for: Callable[[DeployGraph], GraphRunner],
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
 ) -> tuple[dict[str, GraphTensor], dict[str, GraphCall]]:
@@ -278,7 +278,7 @@ class DeploymentRun(NamedTuple):
 
 
 def run_deployment_in_torch(
-    deployment: DeployedModel,
+    deployment: DeploymentDeclaration,
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
 ) -> DeploymentRun:
@@ -311,7 +311,7 @@ def run_deployment_in_torch(
     return DeploymentRun(outputs, {name: call.args for name, call in calls.items()})
 
 
-def export_spec_for_graph(stage: GraphStage, args: tuple[GraphTensor, ...]) -> ExportSpec:
+def export_spec_for_graph(stage: DeployGraph, args: tuple[GraphTensor, ...]) -> ExportSpec:
     """Build one graph's spec from the tensors it ran on.
 
     The trace inputs are ``args``, the tensors the deployed function passed the graph. The spec
@@ -333,7 +333,7 @@ def export_spec_for_graph(stage: GraphStage, args: tuple[GraphTensor, ...]) -> E
 
 
 def build_export_specs_from_deployment(
-    deployment: DeployedModel,
+    deployment: DeploymentDeclaration,
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
 ) -> dict[str, ExportSpec]:

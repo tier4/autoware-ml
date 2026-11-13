@@ -37,9 +37,9 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.deployment.stages import (
-    DeployedModel,
+    DeploymentDeclaration,
     Graphs,
-    GraphStage,
+    DeployGraph,
     build_export_specs_from_deployment,
 )
 from autoware_ml.metrics.base import MetricSuite
@@ -424,13 +424,13 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         raise NotImplementedError("Model must implement build_export_spec()")
 
-    def deploy_graphs(self) -> Sequence[GraphStage] | None:
+    def deploy_graphs(self) -> Sequence[DeployGraph] | None:
         """Declare the graphs the deployment exports, or return ``None`` for a model without them.
 
         When declared, :meth:`deployed_forward` runs them and :meth:`build_export_specs`
         derives from them. The contract:
 
-        * Every ``GraphStage.module`` is export-ready when returned: the live submodule
+        * Every ``DeployGraph.module`` is export-ready when returned: the live submodule
           where tracing it is fine, otherwise the copy its ``prepare_for_export()`` makes.
           The framework runs and traces the module and never alters it.
         * The method is pure and cheap enough to call again: callers declare the graphs again
@@ -462,19 +462,19 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             f"{type(self).__name__} declares deploy_graphs() but not deployed_forward()."
         )
 
-    def deployment_declaration(self) -> DeployedModel | None:
+    def deployment_declaration(self) -> DeploymentDeclaration | None:
         """Return the model's deployment, or ``None`` when it declares no graphs."""
         graphs = self.deploy_graphs()
         if graphs is None:
             return None
-        return DeployedModel(tuple(graphs), self.deployed_forward)
+        return DeploymentDeclaration(tuple(graphs), self.deployed_forward)
 
     def build_export_specs(
         self, multi_task_batch_inputs: ModelBatchInputs
     ) -> dict[str, ExportSpec]:
         """Build per-module deployment export specifications.
 
-        A model that declares :meth:`deploy_graphs` gets one spec per ``GraphStage``, keyed
+        A model that declares :meth:`deploy_graphs` gets one spec per ``DeployGraph``, keyed
         by graph name. Otherwise the default implementation wraps :meth:`build_export_spec`
         as a single ``end_to_end`` module. Models with separate exportable sub-graphs
         override this to return one spec per architectural component.
