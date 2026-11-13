@@ -26,9 +26,9 @@ from omegaconf import OmegaConf
 import torch
 from torch import nn
 
-from autoware_ml.deployment.stages import (
+from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
-    DeployGraph,
+    DeploymentGraph,
     build_export_specs_from_deployment,
 )
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
@@ -79,18 +79,18 @@ class _GraphModel(_ToyModel):
         del multi_task_batch_inputs
         return {"loss": outputs["plus"].sum()}
 
-    def deploy_graphs(self) -> Sequence[DeployGraph]:
+    def deployment_graphs(self) -> Sequence[DeploymentGraph]:
         return (
-            DeployGraph(
+            DeploymentGraph(
                 "encoder",
                 module=self.encoder,
                 inputs=("features",),
                 outputs=("encoded",),
             ),
-            DeployGraph("head", module=self.head, inputs=("bev",), outputs=("plus", "minus")),
+            DeploymentGraph("head", module=self.head, inputs=("bev",), outputs=("plus", "minus")),
         )
 
-    def deployed_forward(self, multi_task_batch_inputs, graphs):
+    def deployment_forward(self, multi_task_batch_inputs, graphs):
         features = multi_task_batch_inputs["points"].float()
         encoded = graphs["encoder"](features=features)["encoded"]
         return graphs["head"](bev=encoded.sum(dim=0, keepdim=True))
@@ -129,7 +129,7 @@ def _batch() -> dict[str, torch.Tensor]:
 def _identity_deployment(**axes) -> DeploymentDeclaration:
     """One identity graph ``g`` fed the batch's ``x``."""
     return DeploymentDeclaration(
-        (DeployGraph("g", module=nn.Identity(), inputs=("x",), outputs=("y",), **axes),),
+        (DeploymentGraph("g", module=nn.Identity(), inputs=("x",), outputs=("y",), **axes),),
         lambda multi_task_batch_inputs, graphs: graphs["g"](x=multi_task_batch_inputs["x"]),
     )
 
@@ -188,7 +188,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
                 return a - b
 
         deployment = DeploymentDeclaration(
-            (DeployGraph("sub", module=_Subtract(), inputs=("a", "b"), outputs=("diff",)),),
+            (DeploymentGraph("sub", module=_Subtract(), inputs=("a", "b"), outputs=("diff",)),),
             lambda multi_task_batch_inputs, graphs: graphs["sub"](
                 b=torch.tensor([1.0]), a=torch.tensor([10.0])
             ),
@@ -203,7 +203,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
 
         # The graphs must be read once: a generator is empty on a second pass.
         def graphs():
-            yield DeployGraph("g", module=nn.Identity(), inputs=("x",), outputs=("y",))
+            yield DeploymentGraph("g", module=nn.Identity(), inputs=("x",), outputs=("y",))
 
         deployment = DeploymentDeclaration(
             graphs(),
@@ -217,7 +217,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
     def test_a_misspelled_input_name_fails_at_export_naming_both_sides(self) -> None:
         """Test that a misspelled input name fails at export, naming the graph and the names."""
         deployment = DeploymentDeclaration(
-            (DeployGraph("g", module=nn.Identity(), inputs=("typo",), outputs=("y",)),),
+            (DeploymentGraph("g", module=nn.Identity(), inputs=("typo",), outputs=("y",)),),
             lambda multi_task_batch_inputs, graphs: graphs["g"](x=multi_task_batch_inputs["x"]),
         )
         with self.assertRaisesRegex(TypeError, r"'g' takes \['typo'\], got \['x'\]"):
@@ -236,8 +236,8 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
 
         deployment = DeploymentDeclaration(
             (
-                DeployGraph("g", module=nn.Identity(), inputs=("x",), outputs=("y",)),
-                DeployGraph("h", module=nn.Identity(), inputs=("z",), outputs=("w",)),
+                DeploymentGraph("g", module=nn.Identity(), inputs=("x",), outputs=("y",)),
+                DeploymentGraph("h", module=nn.Identity(), inputs=("z",), outputs=("w",)),
             ),
             forward,
         )
@@ -267,7 +267,7 @@ class TestExportEvalMode(unittest.TestCase):
         """Test that exporting a wrapper leaves the submodules it shares in eval mode."""
         shared = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2)).eval()
         deployment = DeploymentDeclaration(
-            (DeployGraph("wrapped", module=_Wrapper(shared), inputs=("x",), outputs=("y",)),),
+            (DeploymentGraph("wrapped", module=_Wrapper(shared), inputs=("x",), outputs=("y",)),),
             lambda multi_task_batch_inputs, graphs: graphs["wrapped"](
                 x=multi_task_batch_inputs["x"]
             ),
@@ -292,9 +292,9 @@ class TestModelsWithoutDeploymentGraphs(unittest.TestCase):
     """Unit tests for the export path of a model that declares no deployment graphs."""
 
     def test_models_without_graphs_keep_the_end_to_end_default(self) -> None:
-        """Test that a model without deploy_graphs() keeps the single end_to_end spec."""
+        """Test that a model without deployment_graphs() keeps the single end_to_end spec."""
         model = _PlainModel()
-        self.assertIsNone(model.deploy_graphs())
+        self.assertIsNone(model.deployment_graphs())
         self.assertIsNone(model.deployment_declaration())
         specs = model.build_export_specs({"x": torch.tensor([1.0])})
         self.assertEqual(list(specs), ["end_to_end"])

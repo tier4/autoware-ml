@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the deployment declaration in ``stages.py`` and ``types/backend.py``."""
+"""Unit tests for the deployment declaration and its PyTorch run in ``graphs.py``."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ import unittest
 import torch
 from torch import nn
 
-from autoware_ml.deployment.stages import (
+from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
-    DeployGraph,
+    DeploymentGraph,
     run_deployment_in_torch,
     validate_graphs,
 )
@@ -46,8 +46,8 @@ class _Subtract(nn.Module):
 
 def _toy_graphs(encoder: nn.Module | None = None, head: nn.Module | None = None):
     return (
-        DeployGraph("encoder", module=encoder or _Double(), inputs=("x",), outputs=("y",)),
-        DeployGraph(
+        DeploymentGraph("encoder", module=encoder or _Double(), inputs=("x",), outputs=("y",)),
+        DeploymentGraph(
             "head",
             module=head or _SplitHead(),
             inputs=("z",),
@@ -84,16 +84,16 @@ class TestGraphDeclaration(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"Duplicate graph names: \['encoder'\]"):
             validate_graphs((encoder, encoder))
 
-    def test_graph_stage_names_each_onnx_tensor_once(self) -> None:
+    def test_graph_names_each_onnx_tensor_once(self) -> None:
         """Test that a graph naming one ONNX tensor twice is rejected."""
-        with self.assertRaisesRegex(ValueError, r"lists \['x'\] more than once in its inputs"):
-            DeployGraph("g", module=_Subtract(), inputs=("x", "x"), outputs=("y",))
+        with self.assertRaisesRegex(ValueError, r"'g' lists \['x'\] more than once in its inputs"):
+            DeploymentGraph("g", module=_Subtract(), inputs=("x", "x"), outputs=("y",))
         with self.assertRaisesRegex(ValueError, r"lists \['y'\] more than once in its outputs"):
-            DeployGraph("g", module=_SplitHead(), inputs=("x",), outputs=("y", "y"))
+            DeploymentGraph("g", module=_SplitHead(), inputs=("x",), outputs=("y", "y"))
 
     def test_no_graph_rejected(self) -> None:
         """Test that a deployment without a graph is rejected."""
-        with self.assertRaisesRegex(ValueError, "at least one exportable DeployGraph"):
+        with self.assertRaisesRegex(ValueError, "at least one exportable DeploymentGraph"):
             DeploymentDeclaration((), _toy_forward)
 
     def test_deployed_model_checks_its_graphs(self) -> None:
@@ -120,8 +120,8 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_keyword_inputs_bind_in_the_declared_order(self) -> None:
         """Test that a graph's arguments follow its declared ``inputs``, not the call's order."""
         graphs = (
-            DeployGraph("ab", module=_Subtract(), inputs=("a", "b"), outputs=("a_minus_b",)),
-            DeployGraph("ba", module=_Subtract(), inputs=("b", "a"), outputs=("b_minus_a",)),
+            DeploymentGraph("ab", module=_Subtract(), inputs=("a", "b"), outputs=("a_minus_b",)),
+            DeploymentGraph("ba", module=_Subtract(), inputs=("b", "a"), outputs=("b_minus_a",)),
         )
 
         def forward(multi_task_batch_inputs, graphs):
@@ -133,9 +133,21 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         self.assertTrue(torch.equal(run.outputs["b_minus_a"], torch.tensor([-9.0])))
 
     def test_graph_output_arity_is_checked(self) -> None:
-        """Test that a graph returning fewer tensors than it declares is rejected."""
-        with self.assertRaisesRegex(ValueError, "zip"):
+        """Test that a graph returning fewer tensors than it declares is rejected, by name."""
+        with self.assertRaisesRegex(
+            ValueError, r"'head' returned 1 tensors; it declares 2 outputs \['plus', 'minus'\]"
+        ):
             _run(graphs=_toy_graphs(head=_Double()))
+
+    def test_graph_returning_a_mapping_is_rejected(self) -> None:
+        """Test that a graph returning its outputs as a mapping is rejected, by name."""
+
+        class _DictHead(nn.Module):
+            def forward(self, x):
+                return {"plus": x + 1, "minus": x - 1}
+
+        with self.assertRaisesRegex(TypeError, r"'head' returned a mapping"):
+            _run(graphs=_toy_graphs(head=_DictHead()))
 
     def test_graph_inputs_are_tensors(self) -> None:
         """Test that a graph input that is not a tensor is rejected."""
