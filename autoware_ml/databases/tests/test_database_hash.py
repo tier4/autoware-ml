@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 import yaml
 
+from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.databases.nuscenes import nuscenes_dataset
 from autoware_ml.databases.nuscenes.nuscenes_dataset import NuScenesDataset
 from autoware_ml.databases.scenarios import DatasetParams, ScenarioData
@@ -77,6 +78,74 @@ class TestScenarioDataHashRepr(unittest.TestCase):
         """Test that the flag, which the records carry per frame, changes the representation."""
         self.assertNotEqual(self._scenario(True).hash_repr, self._scenario(False).hash_repr)
         self.assertNotEqual(self._scenario(True).hash_repr, self._scenario(None).hash_repr)
+
+
+class TestBaseDatabaseWithoutSensorSettings(unittest.TestCase):
+    """A database without point clouds or boxes is built without the sensor settings."""
+
+    def setUp(self) -> None:
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp_dir.cleanup)
+
+    def _build_database(self, **kwargs: object) -> BaseDatabase:
+        return BaseDatabase(
+            version="Motion-test-v1.0.0",
+            root_path="/data/motion",
+            cache_path=str(Path(self._tmp_dir.name) / "cache"),
+            cache_file_prefix_name="database",
+            num_workers=1,
+            vocabulary=_build_vocabulary(("vehicle", "pedestrian")),
+            **kwargs,
+        )
+
+    def test_sensor_settings_default_to_absent(self) -> None:
+        """
+        Input: a BaseDatabase built with the vocabulary only, no box pipelines and no lidar
+        settings.
+        Expected: the sensor settings default to None, and the hash fields keep the field order
+        of every other database with the absent settings rendered as None, so the cache key
+        stays explicit and stable.
+        Check: the lidar_intensity_scale property, the hash field names in order, the renders
+        of box3d_pipelines and lidar_pointcloud_num_features, and the length of the hash.
+        """
+        database = self._build_database()
+
+        self.assertIsNone(database.lidar_intensity_scale)
+        fields = database.hash_fields
+        self.assertEqual(
+            list(fields),
+            [
+                "database",
+                "version",
+                "box3d_pipelines",
+                "lidar_pointcloud_num_features",
+                "scenarios",
+            ],
+        )
+        self.assertEqual(fields["box3d_pipelines"], "None")
+        self.assertEqual(fields["lidar_pointcloud_num_features"], "None")
+        self.assertEqual(len(database.database_hash), 64)
+
+    def test_explicit_sensor_settings_are_still_validated(self) -> None:
+        """
+        Input: a lidar_intensity_scale of 0.0, a lidar_pointcloud_num_features of 2, and then
+        the valid pair 255.0 and 5.
+        Expected: a lidar setting that is given keeps its range check, and a valid one is
+        stored and rendered in the hash fields as before.
+        Check: ValueError naming the setting for the two invalid values, the
+        lidar_intensity_scale property and the lidar_pointcloud_num_features hash field for
+        the valid pair.
+        """
+        with self.assertRaisesRegex(ValueError, "lidar_intensity_scale must be positive"):
+            self._build_database(lidar_intensity_scale=0.0)
+        with self.assertRaisesRegex(ValueError, "lidar_pointcloud_num_features must be at least 3"):
+            self._build_database(lidar_pointcloud_num_features=2)
+
+        database = self._build_database(
+            lidar_intensity_scale=255.0, lidar_pointcloud_num_features=5
+        )
+        self.assertEqual(database.lidar_intensity_scale, 255.0)
+        self.assertEqual(database.hash_fields["lidar_pointcloud_num_features"], "5")
 
 
 class TestT4DatabaseHash(unittest.TestCase):

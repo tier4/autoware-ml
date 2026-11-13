@@ -43,12 +43,15 @@ class BaseDatabase:
         cache_file_prefix_name: str,
         num_workers: int,
         vocabulary: LabelVocabulary,
-        box3d_pipelines: Sequence[Box3DPipeline],
-        lidar_intensity_scale: float,
-        lidar_pointcloud_num_features: int,
+        box3d_pipelines: Sequence[Box3DPipeline] | None = None,
+        lidar_intensity_scale: float | None = None,
+        lidar_pointcloud_num_features: int | None = None,
     ) -> None:
         """
         Initialize BaseDatabase.
+
+        The box pipelines and the lidar settings describe sensor annotations. A database without
+        point clouds, such as a motion forecasting database, leaves them at their defaults.
 
         Args:
           version: Version of the database.
@@ -57,18 +60,20 @@ class BaseDatabase:
           cache_file_prefix_name: Prefix name of the cache file, it will be <cache_file_prefix_name>_<database_hash>.parquet
           num_workers: Number of workers to use for processing the database.
           vocabulary: Vocabulary of the raw box labels of the recordings.
-          box3d_pipelines: List of box 3D pipelines to process the box 3D annotations.
+          box3d_pipelines: List of box 3D pipelines to process the box 3D annotations. None
+            for a database without boxes.
           lidar_intensity_scale: Intensity value of the strongest return in the stored point
-            clouds. Loaded intensity is divided by it, so every model reads it in [0, 1].
+            clouds. Loaded intensity is divided by it, so every model reads it in [0, 1]. None
+            for a database without point clouds.
           lidar_pointcloud_num_features: Number of float32 values per point in the stored point
-            clouds. The first three are x, y and z.
+            clouds. The first three are x, y and z. None for a database without point clouds.
         """
 
-        if lidar_intensity_scale <= 0.0:
+        if lidar_intensity_scale is not None and lidar_intensity_scale <= 0.0:
             raise ValueError(
                 f"lidar_intensity_scale must be positive, got {lidar_intensity_scale}."
             )
-        if lidar_pointcloud_num_features < 3:
+        if lidar_pointcloud_num_features is not None and lidar_pointcloud_num_features < 3:
             raise ValueError(
                 "lidar_pointcloud_num_features must be at least 3, got "
                 f"{lidar_pointcloud_num_features}."
@@ -90,10 +95,22 @@ class BaseDatabase:
             f"root path: {self._root_path}, "
             f"cache path: {self._cache_path}, "
             f"cache file prefix name: {self._cache_file_prefix_name}, "
-            f"box3d pipelines: [{', '.join([str(pipeline) for pipeline in self._box3d_pipelines])}]"
+            f"box3d pipelines: {self._box3d_pipelines_repr()}"
         )
 
         self._scenarios: MappingProxyType[str, Scenarios] = {}
+
+    def _box3d_pipelines_repr(self) -> str:
+        """
+        Render the box 3D pipelines for the log line and the hash fields.
+
+        Returns:
+          str: ``None`` for a database without boxes, else the pipelines in brackets.
+        """
+
+        if self._box3d_pipelines is None:
+            return "None"
+        return "[" + ", ".join(map(str, self._box3d_pipelines)) + "]"
 
     def __str__(self) -> str:
         """
@@ -197,7 +214,7 @@ class BaseDatabase:
         return {
             "database": type(self).__name__,
             "version": self._version,
-            "box3d_pipelines": "[" + ", ".join(map(str, self._box3d_pipelines)) + "]",
+            "box3d_pipelines": self._box3d_pipelines_repr(),
             "lidar_pointcloud_num_features": str(self._lidar_pointcloud_num_features),
             "scenarios": "("
             + ", ".join(
@@ -234,12 +251,13 @@ class BaseDatabase:
         return self._vocabulary
 
     @property
-    def lidar_intensity_scale(self) -> float:
+    def lidar_intensity_scale(self) -> float | None:
         """
         Get the intensity value of the strongest return in the stored point clouds.
 
         Returns:
-          float: Full scale intensity of the database.
+          float | None: Full scale intensity of the database, None for a database without
+            point clouds.
         """
 
         return self._lidar_intensity_scale

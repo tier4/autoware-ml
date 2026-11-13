@@ -150,12 +150,13 @@ class DatabaseInterface(Protocol):
 
     @property
     @abstractmethod
-    def lidar_intensity_scale(self) -> float:
+    def lidar_intensity_scale(self) -> float | None:
         """
         Get the intensity value of the strongest return in the stored point clouds.
 
         Returns:
-          float: Full scale intensity of the database.
+          float | None: Full scale intensity of the database, None for a database without
+            point clouds.
         """
 
         raise NotImplementedError("Database must define lidar_intensity_scale!")

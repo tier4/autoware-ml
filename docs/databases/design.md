@@ -118,9 +118,9 @@ class BaseDatabase:
         cache_file_prefix_name: str,
         num_workers: int,
         vocabulary: LabelVocabulary,
-        box3d_pipelines: Sequence[Box3DPipeline],
-        lidar_intensity_scale: float,
-        lidar_pointcloud_num_features: int,
+        box3d_pipelines: Sequence[Box3DPipeline] | None = None,
+        lidar_intensity_scale: float | None = None,
+        lidar_pointcloud_num_features: int | None = None,
     ) -> None:
         ...
 
@@ -130,7 +130,7 @@ class BaseDatabase:
         raise NotImplementedError("Subclasses must implement process_scenario_records method!")
 ```
 
-To add a new dataset family, subclass `BaseDatabase` and implement `process_scenario_records()`. See [T4Dataset](t4dataset.md) for a concrete example.
+To add a new dataset family, subclass `BaseDatabase` and implement `process_scenario_records()`. See [T4Dataset](t4dataset.md) for a concrete example. A database without point clouds or boxes leaves `box3d_pipelines` and the lidar settings at their default `None`; they then render as `None` in its hash fields.
 
 ### Scenarios
 
