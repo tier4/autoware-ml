@@ -22,8 +22,8 @@ import torch
 from torch import nn
 
 from autoware_ml.deployment.stages import (
-    DeployedModel,
-    GraphStage,
+    DeploymentDeclaration,
+    DeployGraph,
     run_deployment_in_torch,
     validate_graphs,
 )
@@ -46,8 +46,8 @@ class _Subtract(nn.Module):
 
 def _toy_graphs(encoder: nn.Module | None = None, head: nn.Module | None = None):
     return (
-        GraphStage("encoder", module=encoder or _Double(), inputs=("x",), outputs=("y",)),
-        GraphStage(
+        DeployGraph("encoder", module=encoder or _Double(), inputs=("x",), outputs=("y",)),
+        DeployGraph(
             "head",
             module=head or _SplitHead(),
             inputs=("z",),
@@ -63,7 +63,7 @@ def _toy_forward(multi_task_batch_inputs, graphs):
 
 def _run(forward=_toy_forward, graphs=None, x=None):
     return run_deployment_in_torch(
-        DeployedModel(_toy_graphs() if graphs is None else graphs, forward),
+        DeploymentDeclaration(_toy_graphs() if graphs is None else graphs, forward),
         {"x": torch.tensor([1.0]) if x is None else x},
         torch.device("cpu"),
     )
@@ -87,22 +87,22 @@ class TestGraphDeclaration(unittest.TestCase):
     def test_graph_stage_names_each_onnx_tensor_once(self) -> None:
         """Test that a graph naming one ONNX tensor twice is rejected."""
         with self.assertRaisesRegex(ValueError, r"lists \['x'\] more than once in its inputs"):
-            GraphStage("g", module=_Subtract(), inputs=("x", "x"), outputs=("y",))
+            DeployGraph("g", module=_Subtract(), inputs=("x", "x"), outputs=("y",))
         with self.assertRaisesRegex(ValueError, r"lists \['y'\] more than once in its outputs"):
-            GraphStage("g", module=_SplitHead(), inputs=("x",), outputs=("y", "y"))
+            DeployGraph("g", module=_SplitHead(), inputs=("x",), outputs=("y", "y"))
 
     def test_no_graph_rejected(self) -> None:
         """Test that a deployment without a graph is rejected."""
-        with self.assertRaisesRegex(ValueError, "at least one exportable GraphStage"):
-            DeployedModel((), _toy_forward)
+        with self.assertRaisesRegex(ValueError, "at least one exportable DeployGraph"):
+            DeploymentDeclaration((), _toy_forward)
 
     def test_deployed_model_checks_its_graphs(self) -> None:
         """Test that the deployment checks and keeps its graphs as a tuple."""
-        deployment = DeployedModel(list(_toy_graphs()), _toy_forward)
+        deployment = DeploymentDeclaration(list(_toy_graphs()), _toy_forward)
         self.assertIsInstance(deployment.graphs, tuple)
         encoder, _ = _toy_graphs()
         with self.assertRaisesRegex(ValueError, "Duplicate graph names"):
-            DeployedModel((encoder, encoder), _toy_forward)
+            DeploymentDeclaration((encoder, encoder), _toy_forward)
 
 
 class TestRunDeploymentInTorch(unittest.TestCase):
@@ -120,8 +120,8 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_keyword_inputs_bind_in_the_declared_order(self) -> None:
         """Test that a graph's arguments follow its declared ``inputs``, not the call's order."""
         graphs = (
-            GraphStage("ab", module=_Subtract(), inputs=("a", "b"), outputs=("a_minus_b",)),
-            GraphStage("ba", module=_Subtract(), inputs=("b", "a"), outputs=("b_minus_a",)),
+            DeployGraph("ab", module=_Subtract(), inputs=("a", "b"), outputs=("a_minus_b",)),
+            DeployGraph("ba", module=_Subtract(), inputs=("b", "a"), outputs=("b_minus_a",)),
         )
 
         def forward(multi_task_batch_inputs, graphs):
