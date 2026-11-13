@@ -59,6 +59,7 @@ class IterWarmupEpochCosineLR(LRScheduler):
                 f"total_steps ({total_steps}) must cover at least one step per epoch "
                 f"({max_epochs} epochs)."
             )
+        self.total_steps = total_steps
         self.max_epochs = max_epochs
         self.steps_per_epoch = total_steps // max_epochs
         self.warmup_iters = warmup_iters

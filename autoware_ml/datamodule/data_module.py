@@ -31,6 +31,11 @@ from autoware_ml.datamodule.samplers import (
 )
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
+from autoware_ml.resume.data_loader import (
+    ResumableDataLoader,
+    ResumableDistributedSampler,
+    ResumableTrainLoaderMixin,
+)
 from autoware_ml.types.dataset import SplitType
 
 logger = logging.getLogger(__name__)
@@ -81,7 +86,7 @@ class DataLoaderConfig:
         }
 
 
-class DataModule(L.LightningDataModule):
+class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
     """LightningDataModule shared by every task and database.
 
     Every dataset source names a database and the dataset of each split it serves. A split is
@@ -100,6 +105,8 @@ class DataModule(L.LightningDataModule):
         test_dataloader: DataLoaderConfig | None,
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
+        resumable_train_sampler: bool = False,
+        allow_resume_layout_change: bool = False,
     ) -> None:
         """
         Initialize the datamodule.
@@ -113,6 +120,12 @@ class DataModule(L.LightningDataModule):
           predict_dataloader: Dataloader settings of the predict split.
           train_frame_sampling: Repeat factor sampling of the training split, None when its
             samples are drawn uniformly.
+          resumable_train_sampler: Serve the training split through a sampler whose position
+            is saved in the checkpoint, so a resumed run continues mid-epoch instead of
+            restarting it (see ``autoware_ml/resume/data_loader.py``). Off by default.
+          allow_resume_layout_change: Let a resumed run use another number of GPUs, batch size
+            or gradient accumulation than the checkpoint. Not recommended: changing the global
+            batch changes the optimization. Off by default, such a resume fails.
         """
         super().__init__()
 
@@ -127,6 +140,8 @@ class DataModule(L.LightningDataModule):
         self.test_dataloader_config = test_dataloader
         self.predict_dataloader_config = predict_dataloader
         self.train_frame_sampling = train_frame_sampling
+        self.resumable_train_sampler = resumable_train_sampler
+        self.allow_resume_layout_change = allow_resume_layout_change
 
     def databases(self) -> Sequence[BaseDatabase]:
         """
@@ -266,6 +281,8 @@ class DataModule(L.LightningDataModule):
         if config is None:
             raise ValueError(f"Split {split} has no dataloader settings.")
 
+        if split == SplitType.TRAIN and self.resumable_train_sampler:
+            return self._build_resumable_train_dataloader(dataset, config)
         kwargs = config.to_dataloader_kwargs()
         if split == SplitType.TRAIN and self.train_frame_sampling is not None:
             if config.shuffle:
@@ -281,6 +298,45 @@ class DataModule(L.LightningDataModule):
                 drop_last=config.drop_last,
             )
         return DataLoader(dataset=dataset, collate_fn=dataset.collate_fn, **kwargs)
+
+    def _build_resumable_train_dataloader(
+        self, dataset: ConcatDataset, config: DataLoaderConfig
+    ) -> ResumableDataLoader:
+        """
+        Build the training dataloader around the resumable sampler.
+
+        The sampler partitions the epoch across ranks itself and draws the same order the
+        default loader would (shuffled, or weighted when frame sampling is on), and its
+        position goes into the checkpoint through :meth:`state_dict`.
+
+        Args:
+          dataset: Concatenated training sources.
+          config: Dataloader settings of the training split.
+
+        Returns:
+          ResumableDataLoader: Dataloader over the training sources.
+        """
+        kwargs = config.to_dataloader_kwargs()
+        shuffle = bool(kwargs.pop("shuffle"))
+        weights, seed = None, None
+        if self.train_frame_sampling is not None:
+            if shuffle:
+                raise ValueError(
+                    "The training dataloader cannot shuffle when frame sampling is on, the "
+                    "weighted sampler draws the order. Set shuffle to false."
+                )
+            weights = compute_frame_sampling_weights(dataset, self.train_frame_sampling)
+            seed = self.train_frame_sampling.seed
+        loader = ResumableDataLoader(
+            dataset=dataset,
+            sampler=ResumableDistributedSampler(
+                dataset, shuffle=shuffle, weights=weights, seed=seed
+            ),
+            collate_fn=dataset.collate_fn,
+            allow_layout_change=self.allow_resume_layout_change,
+            **kwargs,
+        )
+        return self._attach_train_loader(loader)
 
     def train_dataloader(self) -> DataLoader:
         """Create the dataloader of the training split."""

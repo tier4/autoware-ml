@@ -50,15 +50,31 @@ class DatasetParams(BaseModel):
     Parameters for a dataset, for example, sampling steps
     when preprocessing it.
 
+    The last two fields are dataset options: settings that change which records are built
+    from the dataset and what they hold. Only an option that differs from its default enters
+    the cache hash (see :meth:`_options_hash_repr`), so a dataset that keeps the defaults keeps
+    its record table.
+
     Attributes:
       dataset_name: Name of the dataset.
       sample_steps: Number of steps to sample.
+      require_semantic_mask: Keep only the samples whose lidar frame has a semantic
+        segmentation mask. For a dataset that is labelled at a lower rate than it was
+        recorded, such as one labelled frame in ten, so the records hold the labelled samples
+        only.
+      category_aliases: Rename raw mask categories before the vocabulary resolves them, raw
+        name to the name to resolve instead. For a dataset whose category names mean
+        something else than the same names elsewhere, for example an older annotation
+        specification whose ``sidewalk`` still contains the curbs. The records carry the
+        renamed categories.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
     sample_steps: int = Field(ge=1)
+    require_semantic_mask: bool = False
+    category_aliases: dict[str, str] = Field(default_factory=dict)
 
     def __str__(self) -> str:
         """String representation of the database version."""
@@ -75,16 +91,39 @@ class DatasetParams(BaseModel):
         """
 
         return (
-            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps})"
+            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps}"
+            f"{self._options_hash_repr()})"
         )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
+        return (
+            self.dataset_name == other.dataset_name
+            and self.sample_steps == other.sample_steps
+            and self._options_hash_repr() == other._options_hash_repr()
+        )
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
         return hash(str(self))
+
+    def _options_hash_repr(self) -> str:
+        """
+        Part of :attr:`hash_repr` for the dataset options that differ from their defaults.
+
+        An option at its default is left out, so adding an option does not change the hash of
+        the datasets that do not use it.
+
+        Returns:
+          str: The options as ``, name=value`` items, empty when all are at their default.
+        """
+
+        options = []
+        if self.require_semantic_mask:
+            options.append(f", require_semantic_mask={self.require_semantic_mask}")
+        if self.category_aliases:
+            options.append(f", category_aliases={sorted(self.category_aliases.items())}")
+        return "".join(options)
 
 
 class ScenarioData(BaseModel):
