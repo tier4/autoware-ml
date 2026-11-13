@@ -153,8 +153,8 @@ the names a stage graph declares (see
 hand-written spec lists; the export log prints them. A spec names every one of
 its inputs and at least one output, or it is refused when built. `deploy.onnx`
 carries no `input_names` or `output_names`; an entry fails the deploy before its
-MLflow run is created or the model loads. The keys of
-`deploy.tensorrt.input_shapes` are these names. A model that lets a config
+MLflow run is created or the model loads. The keys of each module's
+`deploy.tensorrt.modules.<module>.input_shapes` are these names. A model that lets a config
 choose its names exposes them as a model parameter, as PTv3's
 `export_output_names`.
 
@@ -164,7 +164,7 @@ input and output names) and both exporters derive their arguments from that
 declaration. `deploy.onnx` carries no `dynamic_axes` or `dynamic_shapes`; an
 entry fails the deploy like a configured name does. The spec refuses an axis of
 a tensor it does not name. The deployment settings that do vary, the TensorRT
-shape ranges, stay in `deploy.tensorrt.input_shapes`.
+shape ranges, stay in `deploy.tensorrt.modules.<module>.input_shapes`.
 
 **precision**: `fp32` exports the model unchanged. `fp16` halves the weights and
 internal tensors but keeps graph inputs and outputs fp32, so consumers keep their
@@ -186,15 +186,22 @@ deploy:
   tensorrt:
     enabled: true
     workspace_size: 8589934592  # 8 GiB
-    input_shapes:
-      input:
-        min_shape: [1, 3, 224, 224]
-        opt_shape: [1, 3, 256, 256]   # Optimized for this
-        max_shape: [1, 3, 512, 512]
+    modules:
+      end_to_end:                     # one entry per exported module, keyed like deploy.onnx.modules
+        input_shapes:
+          input:
+            min_shape: [1, 3, 224, 224]
+            opt_shape: [1, 3, 256, 256]   # Optimized for this
+            max_shape: [1, 3, 512, 512]
 ```
 
 !!! tip
     TensorRT optimizes most aggressively for `opt_shape`. Set this to your typical inference resolution.
+
+Every dynamic input of a module needs its min / opt / max shapes; a static input
+needs none. An entry that names no input of the module, a dynamic input without
+an entry, or a table left at the old `deploy.tensorrt.input_shapes` stops the
+build with an error naming the key.
 
 Engines are always built strongly typed: the builder uses exactly the precisions
 the ONNX carries and never picks its own. Choose the engine's numerics with
@@ -236,6 +243,6 @@ Override deployment settings from CLI:
 autoware-ml deploy \
     --config-name <task>/<model>/<config> \
     --weights mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artifacts/checkpoints/best.ckpt \
-    deploy.tensorrt.input_shapes.input.opt_shape=[1,3,256,256] \
+    deploy.tensorrt.modules.end_to_end.input_shapes.input.opt_shape=[1,3,256,256] \
     deploy.tensorrt.workspace_size=8589934592
 ```

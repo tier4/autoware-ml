@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
 import re
 
 import onnx
@@ -328,3 +328,178 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
         inputs.multi_task_gt_batch.point_cloud_gt_batch.points,
         batch.point_cloud_gt_batch.points,
     )
+
+
+class _FakeInput:
+    """One input of a parsed TensorRT network: its name and shape, ``-1`` for a dynamic axis."""
+
+    def __init__(self, name: str, shape: tuple[int, ...]) -> None:
+        self.name = name
+        self.shape = shape
+
+
+class _FakeNetwork:
+    """A parsed TensorRT network, as ``create_optimization_profile`` reads it: its inputs."""
+
+    def __init__(self, inputs: list[_FakeInput]) -> None:
+        self._inputs = inputs
+
+    @property
+    def num_inputs(self) -> int:
+        return len(self._inputs)
+
+    def get_input(self, index: int) -> _FakeInput:
+        return self._inputs[index]
+
+
+class _FakeProfile:
+    """A TensorRT optimization profile that records the shapes set on it."""
+
+    def __init__(self) -> None:
+        self.shapes: dict[str, tuple[list[int], list[int], list[int]]] = {}
+
+    def set_shape(self, name: str, min: list[int], opt: list[int], max: list[int]) -> None:
+        self.shapes[name] = (min, opt, max)
+
+
+class _FakeBuilder:
+    """A TensorRT builder that hands out ``_FakeProfile`` and refuses to build an engine."""
+
+    def create_optimization_profile(self) -> _FakeProfile:
+        return _FakeProfile()
+
+    def build_serialized_network(self, network: _FakeNetwork, config: None) -> None:
+        del network, config
+        pytest.fail("the engine was built")
+
+
+def _tensorrt_cfg(module_name: str, input_shapes: dict[str, dict[str, list]]) -> DictConfig:
+    """The ``deploy.tensorrt`` section with one module's ``input_shapes``."""
+    return OmegaConf.create({"modules": {module_name: {"input_shapes": input_shapes}}})
+
+
+def test_create_optimization_profile_refuses_the_dynamic_inputs_without_an_entry() -> None:
+    """Test that a dynamic input without an entry is refused, static inputs are not.
+
+    Input: a network with two dynamic inputs without an entry, one with, one static;
+        then a static-only network whose module has no entry at all.
+    Expected: ValueError naming ``['coors', 'mask']`` in network order and the config key;
+        no profile for the static-only network.
+    Check: the error message and the ``None`` return.
+    """
+    network = _FakeNetwork(
+        [
+            _FakeInput("voxels", (-1, 32, 5)),
+            _FakeInput("coors", (-1, 3)),
+            _FakeInput("canvas", (1, 64, 180, 180)),
+            _FakeInput("mask", (-1,)),
+        ]
+    )
+    tensorrt_cfg = _tensorrt_cfg(
+        "lidar",
+        {"voxels": {"min_shape": [1, 32, 5], "opt_shape": [8, 32, 5], "max_shape": [9, 32, 5]}},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"\['coors', 'mask'\] of the 'lidar' graph have no deploy\.tensorrt\.modules\.lidar\.input_shapes",
+    ):
+        deploy.create_optimization_profile(_FakeBuilder(), tensorrt_cfg, network, "lidar")
+    static = _FakeNetwork([_FakeInput("x", (1, 2))])
+    assert (
+        deploy.create_optimization_profile(_FakeBuilder(), OmegaConf.create({}), static, "lidar")
+        is None
+    )
+
+
+def test_create_optimization_profile_refuses_an_entry_of_no_input_and_the_old_table() -> None:
+    """Test that a misspelled entry and a table at the old place are refused by key.
+
+    Input: a module entry ``spatial_featues`` for a network whose input is ``spatial_features``;
+        then a ``deploy.tensorrt.input_shapes`` table at the top level.
+    Expected: ValueError naming the unknown entry and the graph's inputs; ValueError naming
+        the new key for the old table.
+    Check: the two error messages.
+    """
+    shapes = {"min_shape": [1, 32, 8, 8], "opt_shape": [1, 32, 8, 8], "max_shape": [1, 32, 8, 8]}
+    network = _FakeNetwork([_FakeInput("spatial_features", (-1, 32, -1, -1))])
+    with pytest.raises(ValueError, match=r"names \['spatial_featues'\], which are not inputs"):
+        deploy.create_optimization_profile(
+            _FakeBuilder(), _tensorrt_cfg("head", {"spatial_featues": shapes}), network, "head"
+        )
+    with pytest.raises(ValueError, match="deploy.tensorrt.modules.head.input_shapes"):
+        deploy.create_optimization_profile(
+            _FakeBuilder(),
+            OmegaConf.create({"input_shapes": {"spatial_features": shapes}}),
+            network,
+            "head",
+        )
+
+
+def test_build_tensorrt_engine_names_the_missing_profile_before_building(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Test that a dynamic input without an entry stops the build before the builder runs.
+
+    Input: a parsed network with one dynamic input and a ``deploy.tensorrt`` without entries.
+    Expected: ValueError naming the input; the builder is never asked to build.
+    Check: the error message, and the fake builder fails the test if it is called.
+    """
+    builder = _FakeBuilder()
+    network = _FakeNetwork([_FakeInput("voxels", (-1, 32, 5))])
+    monkeypatch.setattr(
+        deploy, "create_tensorrt_builder_config", lambda cfg: (builder, network, None, None)
+    )
+    monkeypatch.setattr(deploy, "parse_onnx_file", lambda parser, path: None)
+
+    with pytest.raises(ValueError, match=r"dynamic inputs \['voxels'\] of the 'lidar' graph"):
+        deploy.build_tensorrt_engine(
+            tmp_path / "model.onnx",
+            OmegaConf.create({"tensorrt": {}}),
+            tmp_path / "model.engine",
+            "lidar",
+        )
+
+
+def test_create_optimization_profile_applies_the_module_entries_resolved() -> None:
+    """Test that a module's entries build its profile, resolved, and an incomplete one fails.
+
+    Input: a config with a ``${max_voxels}`` reference in one module's entry; the same
+        config for a second module that has no entry; an entry missing its max shape.
+    Expected: a profile with the entry's shapes as integers; ``None`` for the module without
+        an entry (its input is static); ValueError for the incomplete entry.
+    Check: the recorded shapes, their types, the return value and the error message.
+    """
+    builder = _FakeBuilder()
+    cfg = OmegaConf.create(
+        {
+            "max_voxels": 96000,
+            "tensorrt": {
+                "modules": {
+                    "encoder": {
+                        "input_shapes": {
+                            "input_features": {
+                                "min_shape": [1, 32, 11],
+                                "opt_shape": [20000, 32, 11],
+                                "max_shape": ["${max_voxels}", 32, 11],
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    )
+    profile = deploy.create_optimization_profile(
+        builder, cfg.tensorrt, _FakeNetwork([_FakeInput("input_features", (-1, 32, 11))]), "encoder"
+    )
+    assert profile.shapes == {"input_features": ([1, 32, 11], [20000, 32, 11], [96000, 32, 11])}
+    assert all(isinstance(dim, int) for dim in profile.shapes["input_features"][2])
+    head = _FakeNetwork([_FakeInput("spatial_features", (1, 32, 8, 8))])
+    assert deploy.create_optimization_profile(builder, cfg.tensorrt, head, "head") is None
+    with pytest.raises(ValueError, match=r"modules\.head\.input_shapes\.x is incomplete"):
+        deploy.create_optimization_profile(
+            builder,
+            _tensorrt_cfg("head", {"x": {"min_shape": [1]}}),
+            _FakeNetwork([_FakeInput("x", (-1,))]),
+            "head",
+        )

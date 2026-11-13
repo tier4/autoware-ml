@@ -20,8 +20,10 @@ datamodule:
 # Image sizes of the T4 cameras, the TensorRT profile of the export.
 deploy:
   tensorrt:
-    input_shapes:
-      input:
-        min_shape: [1, 5, 1080, 1920]
-        opt_shape: [1, 5, 1860, 2880]
-        max_shape: [1, 5, 2160, 3840]
+    modules:
+      end_to_end:
+        input_shapes:
+          input:
+            min_shape: [1, 5, 1080, 1920]
+            opt_shape: [1, 5, 1860, 2880]
+            max_shape: [1, 5, 2160, 3840]
