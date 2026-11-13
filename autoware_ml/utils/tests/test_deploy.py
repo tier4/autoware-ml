@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 from omegaconf import OmegaConf
 import re
@@ -331,14 +330,59 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
     )
 
 
-def _network(**shapes: tuple[int, ...]) -> SimpleNamespace:
-    """A stand-in for a parsed TensorRT network with the given input shapes, -1 for dynamic."""
-    inputs = [SimpleNamespace(name=name, shape=shape) for name, shape in shapes.items()]
-    return SimpleNamespace(num_inputs=len(inputs), get_input=lambda index: inputs[index])
+class _FakeInput:
+    """One input of a parsed TensorRT network: its name and shape, ``-1`` for a dynamic axis."""
+
+    def __init__(self, name: str, shape: tuple[int, ...]) -> None:
+        self.name = name
+        self.shape = shape
+
+
+class _FakeNetwork:
+    """A parsed TensorRT network, as ``create_optimization_profile`` reads it: its inputs."""
+
+    def __init__(self, inputs: list[_FakeInput]) -> None:
+        self._inputs = inputs
+
+    @property
+    def num_inputs(self) -> int:
+        return len(self._inputs)
+
+    def get_input(self, index: int) -> _FakeInput:
+        return self._inputs[index]
+
+
+class _FakeProfile:
+    """A TensorRT optimization profile that records the shapes set on it."""
+
+    def __init__(self) -> None:
+        self.shapes: dict[str, tuple[list[int], list[int], list[int]]] = {}
+
+    def set_shape(self, name: str, min: list[int], opt: list[int], max: list[int]) -> None:
+        self.shapes[name] = (min, opt, max)
+
+
+class _FakeBuilder:
+    """A TensorRT builder that hands out ``_FakeProfile`` and refuses to build an engine."""
+
+    def create_optimization_profile(self) -> _FakeProfile:
+        return _FakeProfile()
+
+    def build_serialized_network(self, network: _FakeNetwork, config: None) -> None:
+        del network, config
+        pytest.fail("the engine was built")
 
 
 def test_dynamic_inputs_without_profile_names_only_the_unconfigured_dynamic_inputs() -> None:
-    network = _network(voxels=(-1, 32, 5), coors=(-1, 3), canvas=(1, 64, 180, 180), mask=(-1,))
+    """Test that the dynamic inputs without an entry are named in network order, static ones not."""
+    network = _FakeNetwork(
+        [
+            _FakeInput("voxels", (-1, 32, 5)),
+            _FakeInput("coors", (-1, 3)),
+            _FakeInput("canvas", (1, 64, 180, 180)),
+            _FakeInput("mask", (-1,)),
+        ]
+    )
     tensorrt_cfg = OmegaConf.create(
         {
             "input_shapes": {
@@ -352,17 +396,16 @@ def test_dynamic_inputs_without_profile_names_only_the_unconfigured_dynamic_inpu
     )
 
     assert deploy.dynamic_inputs_without_profile(network, tensorrt_cfg) == ["coors", "mask"]
-    assert deploy.dynamic_inputs_without_profile(_network(x=(1, 2)), OmegaConf.create({})) == []
+    static = _FakeNetwork([_FakeInput("x", (1, 2))])
+    assert deploy.dynamic_inputs_without_profile(static, OmegaConf.create({})) == []
 
 
 def test_build_tensorrt_engine_names_the_missing_profile_before_building(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    builder = SimpleNamespace(
-        create_optimization_profile=lambda: None,
-        build_serialized_network=lambda network, config: pytest.fail("the engine was built"),
-    )
-    network = _network(voxels=(-1, 32, 5))
+    """Test that a dynamic input without an entry stops the build before the builder runs."""
+    builder = _FakeBuilder()
+    network = _FakeNetwork([_FakeInput("voxels", (-1, 32, 5))])
     monkeypatch.setattr(
         deploy, "create_tensorrt_builder_config", lambda cfg: (builder, network, None, None)
     )
@@ -374,17 +417,9 @@ def test_build_tensorrt_engine_names_the_missing_profile_before_building(
         )
 
 
-class _FakeProfile:
-    def __init__(self) -> None:
-        self.shapes: dict[str, tuple[list[int], list[int], list[int]]] = {}
-
-    def set_shape(self, name: str, min: list[int], opt: list[int], max: list[int]) -> None:
-        self.shapes[name] = (min, opt, max)
-
-
 def test_create_optimization_profile_applies_the_entries_of_the_network_inputs() -> None:
-    """One table for every graph of a model: each network takes its own entries, resolved."""
-    builder = SimpleNamespace(create_optimization_profile=_FakeProfile)
+    """Test that one table serves every graph: a network takes its own entries, resolved."""
+    builder = _FakeBuilder()
     cfg = OmegaConf.create(
         {
             "max_voxels": 96000,
@@ -405,18 +440,16 @@ def test_create_optimization_profile_applies_the_entries_of_the_network_inputs()
         }
     )
     profile = deploy.create_optimization_profile(
-        builder, cfg.tensorrt, _network(input_features=(-1, 32, 11))
+        builder, cfg.tensorrt, _FakeNetwork([_FakeInput("input_features", (-1, 32, 11))])
     )
     assert profile.shapes == {"input_features": ([1, 32, 11], [20000, 32, 11], [96000, 32, 11])}
     assert all(isinstance(dim, int) for dim in profile.shapes["input_features"][2])
     # A network whose inputs have no entry gets no profile at all.
-    assert (
-        deploy.create_optimization_profile(builder, cfg.tensorrt, _network(other=(1, 32, 8, 8)))
-        is None
-    )
+    other = _FakeNetwork([_FakeInput("other", (1, 32, 8, 8))])
+    assert deploy.create_optimization_profile(builder, cfg.tensorrt, other) is None
     with pytest.raises(ValueError, match="incomplete"):
         deploy.create_optimization_profile(
             builder,
             OmegaConf.create({"input_shapes": {"x": {"min_shape": [1]}}}),
-            _network(x=(-1,)),
+            _FakeNetwork([_FakeInput("x", (-1,))]),
         )
