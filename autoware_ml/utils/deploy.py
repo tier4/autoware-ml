@@ -418,74 +418,63 @@ def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig, network:
 
     The table is keyed by ONNX input name and may cover every exported graph of the model;
     only the entries of this network's inputs apply, the others are skipped with a warning.
-    A static input needs no entry; a dynamic input without one is refused by
-    :func:`dynamic_inputs_without_profile` before the build.
+    A static input needs no entry. A dynamic input without one is refused here, naming the
+    config key: TensorRT would refuse the build later with a message that does not.
 
     Returns:
         The profile, or ``None`` when no entry applies to the network.
 
     Raises:
-        ValueError: When an entry lacks one of its three shapes.
+        ValueError: When a dynamic input of the network has no entry, or an entry lacks one
+            of its three shapes.
     """
-    if "input_shapes" not in tensorrt_cfg:
-        return None
-    input_shapes = OmegaConf.to_container(tensorrt_cfg.input_shapes, resolve=True)
-    network_inputs = [network.get_input(index).name for index in range(network.num_inputs)]
-    skipped = sorted(set(input_shapes) - set(network_inputs))
+    input_shapes = (
+        OmegaConf.to_container(tensorrt_cfg.input_shapes, resolve=True)
+        if "input_shapes" in tensorrt_cfg
+        else {}
+    )
+    inputs = [network.get_input(index) for index in range(network.num_inputs)]
+    skipped = sorted(set(input_shapes) - {tensor.name for tensor in inputs})
     if skipped:
         logger.warning(
             "deploy.tensorrt.input_shapes entries that are not inputs of this network are "
             "skipped: %s (its inputs are %s).",
             skipped,
-            network_inputs,
+            [tensor.name for tensor in inputs],
         )
 
     profile = None
-    for input_name in network_inputs:
-        shapes = input_shapes.get(input_name)
+    missing = []
+    for tensor in inputs:
+        shapes = input_shapes.get(tensor.name)
         if shapes is None:
+            if -1 in tuple(tensor.shape):
+                missing.append(tensor.name)
             continue
         min_shape = shapes.get("min_shape")
         opt_shape = shapes.get("opt_shape")
         max_shape = shapes.get("max_shape")
         if not (min_shape and opt_shape and max_shape):
             raise ValueError(
-                f"TensorRT optimization profile for input '{input_name}' is incomplete. "
+                f"TensorRT optimization profile for input '{tensor.name}' is incomplete. "
                 "All of min_shape, opt_shape, and max_shape must be specified."
             )
         if profile is None:
             profile = builder.create_optimization_profile()
-        profile.set_shape(input_name, min=min_shape, opt=opt_shape, max=max_shape)
+        profile.set_shape(tensor.name, min=min_shape, opt=opt_shape, max=max_shape)
         logger.info(
             "Optimization profile for '%s': min=%s, opt=%s, max=%s",
-            input_name,
+            tensor.name,
             min_shape,
             opt_shape,
             max_shape,
         )
+    if missing:
+        raise ValueError(
+            f"The dynamic inputs {missing} have no deploy.tensorrt.input_shapes entry; "
+            "TensorRT needs a min / opt / max shape for each."
+        )
     return profile
-
-
-def dynamic_inputs_without_profile(network: Any, tensorrt_cfg: DictConfig) -> list[str]:
-    """Return the network's dynamic inputs that ``deploy.tensorrt.input_shapes`` has no entry for.
-
-    TensorRT needs a min / opt / max shape for every input with a dynamic dimension; without
-    one it fails inside the build with a message that does not name the config.
-
-    Args:
-        network: Parsed TensorRT network.
-        tensorrt_cfg: The ``deploy.tensorrt`` section.
-
-    Returns:
-        The input names, in the network's input order.
-    """
-    configured = set(tensorrt_cfg.get("input_shapes") or {})
-    inputs = [network.get_input(index) for index in range(network.num_inputs)]
-    return [
-        tensor.name
-        for tensor in inputs
-        if -1 in tuple(tensor.shape) and tensor.name not in configured
-    ]
 
 
 def build_tensorrt_engine(
@@ -508,13 +497,6 @@ def build_tensorrt_engine(
     profile = create_optimization_profile(builder, tensorrt_cfg, network)
     if profile is not None:
         config.add_optimization_profile(profile)
-
-    missing = dynamic_inputs_without_profile(network, tensorrt_cfg)
-    if missing:
-        raise ValueError(
-            f"{onnx_path.name} has dynamic inputs {missing} without a "
-            "deploy.tensorrt.input_shapes entry; TensorRT needs a min / opt / max shape for each."
-        )
 
     logger.info("Building TensorRT engine (this may take a while)...")
     serialized_engine = builder.build_serialized_network(network, config)

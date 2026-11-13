@@ -373,8 +373,15 @@ class _FakeBuilder:
         pytest.fail("the engine was built")
 
 
-def test_dynamic_inputs_without_profile_names_only_the_unconfigured_dynamic_inputs() -> None:
-    """Test that the dynamic inputs without an entry are named in network order, static ones not."""
+def test_create_optimization_profile_refuses_the_dynamic_inputs_without_an_entry() -> None:
+    """Test that a dynamic input without an entry is refused, static inputs are not.
+
+    Input: a network with two dynamic inputs without an entry, one with, one static;
+        then a static-only network and an empty table.
+    Expected: ValueError naming ``['coors', 'mask']`` in network order; no profile for the
+        static-only network.
+    Check: the error message and the ``None`` return.
+    """
     network = _FakeNetwork(
         [
             _FakeInput("voxels", (-1, 32, 5)),
@@ -395,15 +402,21 @@ def test_dynamic_inputs_without_profile_names_only_the_unconfigured_dynamic_inpu
         }
     )
 
-    assert deploy.dynamic_inputs_without_profile(network, tensorrt_cfg) == ["coors", "mask"]
+    with pytest.raises(ValueError, match=r"dynamic inputs \['coors', 'mask'\] have no"):
+        deploy.create_optimization_profile(_FakeBuilder(), tensorrt_cfg, network)
     static = _FakeNetwork([_FakeInput("x", (1, 2))])
-    assert deploy.dynamic_inputs_without_profile(static, OmegaConf.create({})) == []
+    assert deploy.create_optimization_profile(_FakeBuilder(), OmegaConf.create({}), static) is None
 
 
 def test_build_tensorrt_engine_names_the_missing_profile_before_building(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Test that a dynamic input without an entry stops the build before the builder runs."""
+    """Test that a dynamic input without an entry stops the build before the builder runs.
+
+    Input: a parsed network with one dynamic input and a ``deploy.tensorrt`` without a table.
+    Expected: ValueError naming the input; the builder is never asked to build.
+    Check: the error message, and the fake builder fails the test if it is called.
+    """
     builder = _FakeBuilder()
     network = _FakeNetwork([_FakeInput("voxels", (-1, 32, 5))])
     monkeypatch.setattr(
@@ -411,14 +424,22 @@ def test_build_tensorrt_engine_names_the_missing_profile_before_building(
     )
     monkeypatch.setattr(deploy, "parse_onnx_file", lambda parser, path: None)
 
-    with pytest.raises(ValueError, match=r"model\.onnx has dynamic inputs \['voxels'\]"):
+    with pytest.raises(ValueError, match=r"dynamic inputs \['voxels'\] have no"):
         deploy.build_tensorrt_engine(
             tmp_path / "model.onnx", OmegaConf.create({"tensorrt": {}}), tmp_path / "model.engine"
         )
 
 
 def test_create_optimization_profile_applies_the_entries_of_the_network_inputs() -> None:
-    """Test that one table serves every graph: a network takes its own entries, resolved."""
+    """Test that one table serves every graph: a network takes its own entries, resolved.
+
+    Input: a table with the entries of two graphs, one with a ``${max_voxels}`` reference;
+        a network with one of the two inputs; a network with a static input the table lacks;
+        an entry missing its max shape.
+    Expected: a profile with the network's entry only, resolved to integers; ``None`` for the
+        static-only network; ValueError for the incomplete entry.
+    Check: the recorded shapes, their types, the return value and the error message.
+    """
     builder = _FakeBuilder()
     cfg = OmegaConf.create(
         {
