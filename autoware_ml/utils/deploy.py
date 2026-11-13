@@ -51,7 +51,7 @@ class ExportSpec:
         module: Module instance exported to ONNX.
         args: Example positional inputs supplied during export.
         input_names: ONNX input names, one per entry of ``args`` in order; the keys of
-            ``deploy.tensorrt.input_shapes`` and the names the runtime binds.
+            ``deploy.tensorrt.modules.<module>.input_shapes`` and the names the runtime binds.
         output_names: Names of the exported output tensors, in order.
         dynamic_axes: The axes that vary between runs, ``{tensor: {dim: name}}``, keyed by
             the input and output names. The model declares them here, not in its config.
@@ -413,34 +413,43 @@ def parse_onnx_file(parser: Any, onnx_path: Path) -> None:
     logger.info("Successfully parsed ONNX file")
 
 
-def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig, network: Any) -> Any | None:
-    """Create the optimization profile of ``network`` from ``deploy.tensorrt.input_shapes``.
+def create_optimization_profile(
+    builder: Any, tensorrt_cfg: DictConfig, network: Any, module_name: str
+) -> Any | None:
+    """Create the optimization profile of ``network`` from its module's ``input_shapes``.
 
-    The table is keyed by ONNX input name and may cover every exported graph of the model;
-    only the entries of this network's inputs apply, the others are skipped with a warning.
-    A static input needs no entry. A dynamic input without one is refused here, naming the
-    config key: TensorRT would refuse the build later with a message that does not.
+    The shapes live under ``deploy.tensorrt.modules.<module_name>.input_shapes``, keyed by
+    the module's ONNX input names, next to the module's ``deploy.onnx.modules`` entry. A
+    static input needs no entry. A dynamic input without one, or an entry that names no input
+    of the network (a misspelled key), is refused here, naming the config key: TensorRT would
+    refuse the build later with a message that does not, or silently build without the entry.
 
     Returns:
-        The profile, or ``None`` when no entry applies to the network.
+        The profile, or ``None`` when the module has no entry.
 
     Raises:
-        ValueError: When a dynamic input of the network has no entry, or an entry lacks one
-            of its three shapes.
+        ValueError: When the table is at the old place (``deploy.tensorrt.input_shapes``), an
+            entry names no input of the network, a dynamic input has no entry, or an entry
+            lacks one of its three shapes.
     """
+    key = f"deploy.tensorrt.modules.{module_name}.input_shapes"
+    if "input_shapes" in tensorrt_cfg:
+        raise ValueError(
+            "deploy.tensorrt.input_shapes is not read: the shapes of each exported module live "
+            f"under deploy.tensorrt.modules.<module>.input_shapes. Move the entries to {key}."
+        )
+    module_cfg = (tensorrt_cfg.get("modules") or {}).get(module_name) or {}
     input_shapes = (
-        OmegaConf.to_container(tensorrt_cfg.input_shapes, resolve=True)
-        if "input_shapes" in tensorrt_cfg
+        OmegaConf.to_container(module_cfg.input_shapes, resolve=True)
+        if "input_shapes" in module_cfg
         else {}
     )
     inputs = [network.get_input(index) for index in range(network.num_inputs)]
-    skipped = sorted(set(input_shapes) - {tensor.name for tensor in inputs})
-    if skipped:
-        logger.warning(
-            "deploy.tensorrt.input_shapes entries that are not inputs of this network are "
-            "skipped: %s (its inputs are %s).",
-            skipped,
-            [tensor.name for tensor in inputs],
+    unknown = sorted(set(input_shapes) - {tensor.name for tensor in inputs})
+    if unknown:
+        raise ValueError(
+            f"{key} names {unknown}, which are not inputs of the {module_name!r} graph "
+            f"{[tensor.name for tensor in inputs]}."
         )
 
     profile = None
@@ -456,8 +465,8 @@ def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig, network:
         max_shape = shapes.get("max_shape")
         if not (min_shape and opt_shape and max_shape):
             raise ValueError(
-                f"TensorRT optimization profile for input '{tensor.name}' is incomplete. "
-                "All of min_shape, opt_shape, and max_shape must be specified."
+                f"{key}.{tensor.name} is incomplete. All of min_shape, opt_shape, and "
+                "max_shape must be specified."
             )
         if profile is None:
             profile = builder.create_optimization_profile()
@@ -471,7 +480,7 @@ def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig, network:
         )
     if missing:
         raise ValueError(
-            f"The dynamic inputs {missing} have no deploy.tensorrt.input_shapes entry; "
+            f"The dynamic inputs {missing} of the {module_name!r} graph have no {key} entry; "
             "TensorRT needs a min / opt / max shape for each."
         )
     return profile
@@ -481,12 +490,20 @@ def build_tensorrt_engine(
     onnx_path: Path,
     deploy_cfg: DictConfig,
     output_path: Path,
+    module_name: str,
 ) -> None:
     """Build a TensorRT engine from an ONNX model.
 
+    Args:
+        onnx_path: The module's ONNX file.
+        deploy_cfg: The ``deploy`` section; the module's shapes are read from
+            ``deploy.tensorrt.modules.<module_name>.input_shapes``.
+        output_path: Where the ``.engine`` file goes.
+        module_name: The exported module, as the export specs name it.
+
     Raises:
-        ValueError: When a dynamic input of the graph has no ``deploy.tensorrt.input_shapes``
-            entry.
+        ValueError: When the module's ``input_shapes`` entry is wrong or missing for a dynamic
+            input (see :func:`create_optimization_profile`).
         RuntimeError: When the build fails.
     """
     logger.info("Building TensorRT engine...")
@@ -494,7 +511,7 @@ def build_tensorrt_engine(
     builder, network, parser, config = create_tensorrt_builder_config(tensorrt_cfg)
     parse_onnx_file(parser, onnx_path)
 
-    profile = create_optimization_profile(builder, tensorrt_cfg, network)
+    profile = create_optimization_profile(builder, tensorrt_cfg, network, module_name)
     if profile is not None:
         config.add_optimization_profile(profile)
 
