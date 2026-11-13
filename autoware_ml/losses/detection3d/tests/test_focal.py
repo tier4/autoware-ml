@@ -61,13 +61,26 @@ class TestSigmoidFocalLoss(unittest.TestCase):
 
         self.assertTrue(torch.isclose(normalized, unnormalized / 4.0))
 
-    def test_avg_factor_is_clamped_to_one(self) -> None:
-        """A normalization factor below one does not inflate the loss."""
+    def test_avg_factor_below_one_divides_as_given(self) -> None:
+        """A normalization factor below one, a positive count averaged over the DDP ranks,
+        divides the sum as given instead of being floored to one."""
         unnormalized = self.loss_fn(self.logits, self.targets)
 
-        clamped = self.loss_fn(self.logits, self.targets, avg_factor=0.0)
+        normalized = self.loss_fn(self.logits, self.targets, avg_factor=0.5)
 
-        self.assertTrue(torch.isclose(clamped, unnormalized))
+        self.assertTrue(torch.isclose(normalized, unnormalized * 2.0))
+
+    def test_half_precision_logits_are_refused(self) -> None:
+        """
+        Input: the logits in bfloat16 and in float16.
+        Expected: the loss takes float32 only, so a head training under autocast casts its
+        logits where it calls the loss.
+        Check: the ValueError naming float32.
+        """
+        for dtype in (torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                with self.assertRaisesRegex(ValueError, "float32"):
+                    self.loss_fn(self.logits.to(dtype), self.targets)
 
     def test_zero_weighted_query_is_dropped(self) -> None:
         """A query whose weights are zero contributes nothing to the loss."""
@@ -97,6 +110,29 @@ class TestSigmoidFocalLoss(unittest.TestCase):
         unweighted = self.loss_fn(self.logits, self.targets)
 
         self.assertTrue(torch.isclose(weighted, unweighted * 0.5))
+
+    def test_batched_queries_with_one_weight_column_match_the_flat_loss(self) -> None:
+        """
+        Input: logits and targets of (batch_size, num_queries, num_classes) and weights with one
+        column for all the classes, as the StreamPETR head passes them.
+        Expected: the weight column broadcasts over the classes, so the loss is that of the
+        flattened queries with the column repeated for every class.
+        Check: the batched loss against the flat one.
+        """
+        logits = torch.linspace(-3.0, 3.0, 24).reshape(2, 3, 4)
+        targets = torch.zeros(2, 3, 4)
+        targets[0, 1, 2] = 1.0
+        targets[1, 0, 3] = 1.0
+        weights = torch.tensor([[[1.0], [0.0], [0.5]], [[1.0], [1.0], [0.0]]])
+
+        batched = self.loss_fn(logits, targets, weights=weights)
+        flat = self.loss_fn(
+            logits.reshape(-1, 4),
+            targets.reshape(-1, 4),
+            weights=weights.expand(-1, -1, 4).reshape(-1, 4),
+        )
+
+        self.assertTrue(torch.isclose(batched, flat))
 
 
 if __name__ == "__main__":

@@ -923,8 +923,8 @@ class StreamPETRHead(nn.Module):
         ``class_weights`` are the classification weights of the unmatched queries of every
         sample, one for all the classes or one per class (see :meth:`loss`). A matched query
         is vouched for by its box, so it keeps every classification term, as in TransFusion.
-        ``total_pos`` is the positive count of the step, floored at 1 by :meth:`loss`. The
-        divisions by it are explicit because the focal loss floors ``avg_factor`` per rank.
+        ``total_pos`` is the positive count of the step, floored on its sum over the ranks by
+        :meth:`loss`, so it can be below 1; the losses divide by it as given.
         """
         targets = self._get_targets(cls_scores, bbox_preds, gt_boxes, gt_labels)
 
@@ -943,7 +943,7 @@ class StreamPETRHead(nn.Module):
         )
         loss_cls = (
             self.loss_cls_weight
-            * self.loss_cls(cls_scores, target_labels_tensor, weights=label_weights)
+            * self.loss_cls(cls_scores.float(), target_labels_tensor, weights=label_weights)
             / total_pos
         )
 
@@ -990,10 +990,10 @@ class StreamPETRHead(nn.Module):
     ) -> tuple[Float[torch.Tensor, ""], Float[torch.Tensor, ""]]:
         """Compute denoising-query supervision for one decoder layer.
 
-        The average factors are the denoising target counts of the step, averaged over the
-        ranks and floored at 1 by :meth:`loss`. ``label_weights`` weight the classification
-        terms of every denoising query, one for all the classes or one per class; None weights
-        them all by one.
+        The average factors are the denoising target counts of the step, floored on their sum
+        over the ranks by :meth:`loss`, so they can be below 1; the losses divide by them as
+        given. ``label_weights`` weight the classification terms of every denoising query, one
+        for all the classes or one per class; None weights them all by one.
         """
         class_targets = cls_scores.new_zeros((known_labels.shape[0], self.num_classes))
         foreground = known_labels < self.num_classes
@@ -1002,7 +1002,7 @@ class StreamPETRHead(nn.Module):
         loss_cls = (
             self.dn_weight
             * self.loss_cls_weight
-            * self.loss_cls(cls_scores, class_targets, weights=label_weights)
+            * self.loss_cls(cls_scores.float(), class_targets, weights=label_weights)
             / cls_avg_factor
         )
 

@@ -1418,10 +1418,13 @@ class TransFusionHead(nn.Module):
         # SigmoidFocalLoss works on flattened (N, num_classes) logits.
         # (batch_size, num_classes, num_proposals) -> (batch_size, num_proposals, num_classes)
         # -> (batch_size * num_proposals, num_classes)
+        # Under autocast the decoder logits are half precision; the loss takes float32, and so do
+        # the targets made from the logits below.
         layer_logits = (
             separate_head_outputs.heatmap[..., start:end]
             .permute(0, 2, 1)
             .reshape(-1, self.num_classes)
+            .float()
         )
         # (batch_size, num_proposals) -> (batch_size * num_proposals,)
         layer_labels = targets.labels[:, start:end].reshape(-1)
