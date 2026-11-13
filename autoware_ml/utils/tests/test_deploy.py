@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from omegaconf import OmegaConf
 import re
@@ -328,3 +329,46 @@ def test_get_predict_batch_keeps_the_typed_batch_through_the_device_transfer(
         inputs.multi_task_gt_batch.point_cloud_gt_batch.points,
         batch.point_cloud_gt_batch.points,
     )
+
+
+def _network(**shapes: tuple[int, ...]) -> SimpleNamespace:
+    """A stand-in for a parsed TensorRT network with the given input shapes, -1 for dynamic."""
+    inputs = [SimpleNamespace(name=name, shape=shape) for name, shape in shapes.items()]
+    return SimpleNamespace(num_inputs=len(inputs), get_input=lambda index: inputs[index])
+
+
+def test_dynamic_inputs_without_profile_names_only_the_unconfigured_dynamic_inputs() -> None:
+    network = _network(voxels=(-1, 32, 5), coors=(-1, 3), canvas=(1, 64, 180, 180), mask=(-1,))
+    tensorrt_cfg = OmegaConf.create(
+        {
+            "input_shapes": {
+                "voxels": {
+                    "min_shape": [1, 32, 5],
+                    "opt_shape": [8, 32, 5],
+                    "max_shape": [9, 32, 5],
+                }
+            }
+        }
+    )
+
+    assert deploy.dynamic_inputs_without_profile(network, tensorrt_cfg) == ["coors", "mask"]
+    assert deploy.dynamic_inputs_without_profile(_network(x=(1, 2)), OmegaConf.create({})) == []
+
+
+def test_build_tensorrt_engine_names_the_missing_profile_before_building(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    builder = SimpleNamespace(
+        create_optimization_profile=lambda: None,
+        build_serialized_network=lambda network, config: pytest.fail("the engine was built"),
+    )
+    network = _network(voxels=(-1, 32, 5))
+    monkeypatch.setattr(
+        deploy, "create_tensorrt_builder_config", lambda cfg: (builder, network, None, None)
+    )
+    monkeypatch.setattr(deploy, "parse_onnx_file", lambda parser, path: None)
+
+    with pytest.raises(ValueError, match=r"model\.onnx has dynamic inputs \['voxels'\]"):
+        deploy.build_tensorrt_engine(
+            tmp_path / "model.onnx", OmegaConf.create({"tensorrt": {}}), tmp_path / "model.engine"
+        )

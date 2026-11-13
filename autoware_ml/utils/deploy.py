@@ -440,12 +440,40 @@ def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig) -> Any |
     return profile
 
 
+def dynamic_inputs_without_profile(network: Any, tensorrt_cfg: DictConfig) -> list[str]:
+    """Return the network's dynamic inputs that ``deploy.tensorrt.input_shapes`` has no entry for.
+
+    TensorRT needs a min / opt / max shape for every input with a dynamic dimension; without
+    one it fails inside the build with a message that does not name the config.
+
+    Args:
+        network: Parsed TensorRT network.
+        tensorrt_cfg: The ``deploy.tensorrt`` section.
+
+    Returns:
+        The input names, in the network's input order.
+    """
+    configured = set(tensorrt_cfg.get("input_shapes") or {})
+    inputs = [network.get_input(index) for index in range(network.num_inputs)]
+    return [
+        tensor.name
+        for tensor in inputs
+        if -1 in tuple(tensor.shape) and tensor.name not in configured
+    ]
+
+
 def build_tensorrt_engine(
     onnx_path: Path,
     deploy_cfg: DictConfig,
     output_path: Path,
 ) -> None:
-    """Build a TensorRT engine from an ONNX model."""
+    """Build a TensorRT engine from an ONNX model.
+
+    Raises:
+        ValueError: When a dynamic input of the graph has no ``deploy.tensorrt.input_shapes``
+            entry.
+        RuntimeError: When the build fails.
+    """
     logger.info("Building TensorRT engine...")
     tensorrt_cfg = deploy_cfg.tensorrt
     builder, network, parser, config = create_tensorrt_builder_config(tensorrt_cfg)
@@ -454,6 +482,13 @@ def build_tensorrt_engine(
     profile = create_optimization_profile(builder, tensorrt_cfg)
     if profile is not None:
         config.add_optimization_profile(profile)
+
+    missing = dynamic_inputs_without_profile(network, tensorrt_cfg)
+    if missing:
+        raise ValueError(
+            f"{onnx_path.name} has dynamic inputs {missing} without a "
+            "deploy.tensorrt.input_shapes entry; TensorRT needs a min / opt / max shape for each."
+        )
 
     logger.info("Building TensorRT engine (this may take a while)...")
     serialized_engine = builder.build_serialized_network(network, config)
