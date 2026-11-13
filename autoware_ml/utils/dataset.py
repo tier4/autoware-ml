@@ -1,3 +1,19 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Conversion of a quaternion and translation to a transformation matrix."""
+
 import numpy as np
 from jaxtyping import Float32, Float64
 from pyquaternion import Quaternion
@@ -12,7 +28,7 @@ def convert_quaternion_to_matrix(
     Convert a translation and quaternion to a 4x4 transformation matrix.
 
     Args:
-        rotation: Quaternion to represent the rotation.
+        rotation_quaternion: Quaternion to represent the rotation.
         translation: Translation to represent the translation, or None.
         convert_to_float32: Whether to convert the result to float32.
     Returns:

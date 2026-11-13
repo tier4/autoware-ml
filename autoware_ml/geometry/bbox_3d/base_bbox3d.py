@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 This code provides the base class for 3D bounding boxes in different coordinate systems.
 It defines the interface and common properties for 3D bounding boxes, which can be extended by
@@ -592,6 +606,7 @@ class BaseBBoxes3D(ABC):
                 representation of the 3D bounding boxes.
             bbox_labels (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 labels of the 3D bounding boxes.
+            bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
             bbox_num_lidar_points (npt.NDArray[np.int32], (num_bboxes,)): A NumPy array representation of the
                 number of lidar points in each 3D bounding box.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of

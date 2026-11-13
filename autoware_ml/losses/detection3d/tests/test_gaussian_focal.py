@@ -88,6 +88,19 @@ class TestGaussianFocalLoss(unittest.TestCase):
         self.assertTrue(torch.equal(self.prediction, prediction))
         self.assertTrue(torch.equal(self.target, target))
 
+    def test_half_precision_logits_are_refused(self) -> None:
+        """
+        Input: the heatmap logits in bfloat16 and in float16.
+        Expected: half precision rounds the sigmoid of a confident logit and the clamp bound
+        1 - 1e-4 to 1, which makes the loss infinite, so the loss takes float32 only and the
+        head casts its logits first.
+        Check: the ValueError naming float32.
+        """
+        for dtype in (torch.bfloat16, torch.float16):
+            with self.subTest(dtype=dtype):
+                with self.assertRaisesRegex(ValueError, "float32"):
+                    self.loss_fn(self.prediction.to(dtype), self.target)
+
 
 if __name__ == "__main__":
     unittest.main()

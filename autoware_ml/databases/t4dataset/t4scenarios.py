@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""T4 scenarios read from the scenario yaml file of each dataset."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -132,7 +134,7 @@ class T4Scenarios(Scenarios):
 
         Args:
           db_scenarios: Dictionary of split type to a list of scenario IDs.
-          dataset_param: Dataset parameters.
+          dataset_params: Dataset parameters.
 
         Returns:
           MappingProxyType[SplitType, Sequence[ScenarioData]]: Dictionary of SplitType to

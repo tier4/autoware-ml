@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""TransFusion decoder layer refining proposals with self- and cross-attention."""
+
 from jaxtyping import Float32
 import torch.nn as nn
 import torch

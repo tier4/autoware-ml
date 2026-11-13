@@ -20,6 +20,11 @@ import torch
 
 from autoware_ml.metrics.detection3d.box_counts import BoxCounts
 from autoware_ml.metrics.detection3d.suite import Detection3DMetricSuite
+from autoware_ml.metrics.tests.eval_output_fixtures import (
+    detection_eval_output,
+    detection_frame,
+    empty_prediction,
+)
 
 
 class TestSuiteGroundTruthLabels(unittest.TestCase):
@@ -39,17 +44,15 @@ class TestSuiteGroundTruthLabels(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "outside the 2 classes"):
             suite.update(
-                {
-                    "predictions": [
-                        {
-                            "bboxes_3d": torch.zeros((0, 9)),
-                            "scores_3d": torch.zeros(0),
-                            "labels_3d": torch.zeros(0, dtype=torch.long),
-                        }
-                    ],
-                    "gt_boxes": [boxes],
-                    "gt_labels": [torch.tensor([0, -1])],
-                }
+                detection_eval_output(
+                    [
+                        detection_frame(
+                            predictions=empty_prediction(),
+                            gt_boxes=boxes,
+                            gt_labels=torch.tensor([0, -1]),
+                        )
+                    ]
+                )
             )
 
 

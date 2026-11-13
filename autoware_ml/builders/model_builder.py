@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Builders of the model, its data preprocessor and its weight paths."""
+
 from collections.abc import Sequence
 import logging
 from pathlib import Path

@@ -1,3 +1,17 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for PTv3 encoder components."""
 
 from __future__ import annotations
@@ -626,12 +640,11 @@ def test_point_loss_and_eval_output_work_at_the_point_level() -> None:
     assert set(metrics) == {"loss", "loss_ce", "loss_lovasz"}
     assert metrics["loss"] > 0
 
-    eval_out = segmentation3d_eval_output(voxel_logits, batch)
-    (frame,) = eval_out["seg3d_frames"]
-    assert torch.equal(frame["pred"], torch.tensor([0, 1]))
-    assert torch.equal(frame["target"], torch.tensor([0, 1]))
-    assert torch.equal(frame["coord"], points[:2, :3])
-    assert frame["scores"].shape == (2, 3)
+    (frame,) = segmentation3d_eval_output(voxel_logits, batch).frames
+    assert torch.equal(frame.pred, torch.tensor([0, 1]))
+    assert torch.equal(frame.target, torch.tensor([0, 1]))
+    assert torch.equal(frame.coord, points[:2, :3])
+    assert frame.scores is not None and frame.scores.shape == (2, 3)
 
 
 def test_voxel_supervision_takes_the_majority_of_the_voxel_outside_training() -> None:
@@ -779,9 +792,9 @@ def test_points_outside_the_voxel_grid_are_excluded_from_loss_and_eval() -> None
     expected = segmentation3d_point_loss(head, voxel_logits, reference)
     assert torch.allclose(metrics["loss"], expected["loss"])
 
-    (frame,) = segmentation3d_eval_output(voxel_logits, batch)["seg3d_frames"]
-    assert torch.equal(frame["pred"], torch.tensor([0, 1]))
-    assert torch.equal(frame["target"], torch.tensor([0, 1]))
+    (frame,) = segmentation3d_eval_output(voxel_logits, batch).frames
+    assert torch.equal(frame.pred, torch.tensor([0, 1]))
+    assert torch.equal(frame.target, torch.tensor([0, 1]))
 
 
 def test_predict_outputs_reconstructs_current_frame_point_predictions() -> None:

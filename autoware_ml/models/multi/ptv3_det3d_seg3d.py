@@ -43,6 +43,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, build_det3d_head_export_spec
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
@@ -291,7 +292,7 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         metrics.update({f"det3d_{name}": value for name, value in det3d_metrics.items()})
         return metrics
 
-    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> dict[str, Any]:
+    def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Produce the detection and the current frame segmentation eval data.
 
         Frames without detection supervision contribute empty predictions and
@@ -315,11 +316,12 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
             )
             for prediction, flagged in zip(predictions, det3d_mask.tolist())
         ]
-        eval_out = detection3d_eval_output(
-            ModelPredictions(detection3d_predictions=predictions), batch
+        return EvalOutput(
+            detection3d=detection3d_eval_output(
+                ModelPredictions(detection3d_predictions=predictions), batch
+            ),
+            segmentation3d=segmentation3d_eval_output(outputs.segmentation3d().logits, batch),
         )
-        eval_out.update(segmentation3d_eval_output(outputs.segmentation3d().logits, batch))
-        return eval_out
 
     def decode_outputs(
         self, multi_task_batch_inputs: ModelBatchInputs, outputs: ModelOutputs

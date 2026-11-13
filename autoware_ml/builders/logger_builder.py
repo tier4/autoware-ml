@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Builder of the trainer logger from the Hydra configuration."""
+
 import logging
 from typing import Any
 from types import MappingProxyType
@@ -48,6 +50,8 @@ def build_trainer_logger(
         stage: The stage of the run, e.g., "train" or "test".
         config_name: The name of the user configuration (yaml file).
         logger_enabled: Whether the logger is enabled.
+        extra_metadata: Extra entries merged into the run metadata written to the artifact
+            directory.
 
     Returns:
         An MLFlowRunContext object containing the run ID, experiment name, and user config name.

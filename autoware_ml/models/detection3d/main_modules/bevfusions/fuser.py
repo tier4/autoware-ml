@@ -60,7 +60,7 @@ class ConvFuser(nn.Module):
         """Fuse BEV feature maps from multiple branches.
 
         Args:
-            inputs: Sequence of BEV feature tensors with matching spatial shapes.
+            bev_features: Sequence of BEV feature tensors with matching spatial shapes.
 
         Returns:
             Fused BEV feature map.

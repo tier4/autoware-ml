@@ -24,7 +24,6 @@ encoder guarantees the detection branch is untouched.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 import torch
 import torch.nn as nn
@@ -35,6 +34,7 @@ from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.segmentation3d.predictions import Segmentation3DPredictions
 from autoware_ml.losses.segmentation3d.lovasz import LovaszLoss
+from autoware_ml.metrics.eval_output import Segmentation3DEvalOutput
 from autoware_ml.metrics.segmentation3d.eval_output import segmentation3d_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -556,13 +556,13 @@ def segmentation3d_point_loss(
 
 def segmentation3d_eval_output(
     seg3d_logits: torch.Tensor, batch_inputs: ModelBatchInputs
-) -> dict[str, Any]:
+) -> Segmentation3DEvalOutput:
     """Gather the voxel predictions of the current frame points, per frame.
 
-    Produces the ``seg3d_frames`` entries both segmentation suites read: one entry
-    per frame with the coordinates, predicted and target labels and per class
-    softmax scores of the current frame points inside the voxel grid. Sweep points
-    only shape the voxel features. They are found by their time lag and left out.
+    Produces the segmentation frames both segmentation suites read: one frame per
+    sample with the coordinates, predicted and target labels and per class softmax
+    scores of the current frame points inside the voxel grid. Sweep points only
+    shape the voxel features. They are found by their time lag and left out.
 
     Args:
         seg3d_logits: Voxel-level segmentation logits.
@@ -571,7 +571,7 @@ def segmentation3d_eval_output(
             it.
 
     Returns:
-        ``{"seg3d_frames": [...]}`` keyed for the segmentation suites.
+        The segmentation frames of the batch.
     """
     point_batch, voxels_data, label_batch = voxelized_points(batch_inputs)
     points = point_batch.points

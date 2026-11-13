@@ -69,9 +69,10 @@ def train(
 
     Args:
         trainer: Lightning trainer
+        cfg: Hydra configuration
         model: Multi-task base model
         datamodule: Multi-task data module
-        run_context: MLflow run context
+        checkpoint_dir: Directory the checkpoints are saved to
         resume_checkpoint_path: Path to resume checkpoint, if any
     """
 

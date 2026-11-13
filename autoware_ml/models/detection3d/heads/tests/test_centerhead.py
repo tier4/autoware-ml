@@ -351,6 +351,40 @@ class TestCenterHead(unittest.TestCase):
             )
         )
 
+    def test_loss_takes_half_precision_heatmap_logits(self) -> None:
+        """
+        Input: the loss of a confident heatmap (logits of +-20) whose maps are bfloat16, as a
+        head training under bf16 autocast hands them over.
+        Expected: the heatmap loss runs in float32 (GaussianFocalLoss takes float32 only, the
+        head casts), so the loss is finite and equals the float32 one.
+        Check: the heatmap loss against the float32 heatmap loss, and finite.
+        """
+        heatmap = torch.full((1, 2, 4, 4), -20.0, device=self.device)
+        heatmap[0, 0, 3, 2] = 20.0
+        zeros = lambda channels: torch.zeros((1, channels, 4, 4), device=self.device)  # noqa: E731
+        losses = {}
+        for dtype in (torch.float32, torch.bfloat16):
+            outputs = Detection3DHeadOutputs(
+                center_head_outputs=CenterHeadOutputs(
+                    heatmap=heatmap.to(dtype),
+                    reg=zeros(2),
+                    height=zeros(1),
+                    dim=zeros(3),
+                    rot=zeros(2),
+                    vel=zeros(2),
+                ),
+                transfusion_head_outputs=None,
+            )
+            losses[dtype] = self.center_head.loss(
+                outputs=outputs,
+                gt_bboxes_3d=self.gt_bboxes_3d,
+                gt_labels_3d=self.gt_labels_3d,
+                gt_valid_bboxes=self.gt_valid_bboxes,
+            )["loss_heatmap"]
+
+        self.assertTrue(torch.isfinite(losses[torch.bfloat16]))
+        torch.testing.assert_close(losses[torch.bfloat16], losses[torch.float32])
+
     def _build_zero_center_head_outputs_for_loss(
         self, batch_size: int = 1, use_velocity: bool = True
     ) -> Detection3DHeadOutputs:
