@@ -114,6 +114,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize CenterPoint.
@@ -129,6 +130,8 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
             metrics: Detection metrics accumulated during validation and test.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`, such as the
+                distillation.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
@@ -136,6 +139,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             scheduler=scheduler,
             metrics=metrics,
             log_dict_configs=log_dict_configs,
+            **kwargs,
         )
         self.pts_voxel_encoder = pts_voxel_encoder
         self.pts_middle_encoder = pts_middle_encoder

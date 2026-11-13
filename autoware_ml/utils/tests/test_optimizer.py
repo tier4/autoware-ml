@@ -147,3 +147,49 @@ def test_build_lightning_optimizer_config_keeps_scheduler_metadata() -> None:
     assert optimizers["lr_scheduler"]["interval"] == "step"
     assert optimizers["lr_scheduler"]["frequency"] == 2
     assert optimizers["lr_scheduler"]["monitor"] == "val/loss"
+
+
+def test_build_optimizer_param_groups_rejects_a_trainable_parameter_in_no_group() -> None:
+    class _ForgetfulModule(_ToyModule):
+        def build_optimizer_groups(self) -> dict[str, list[nn.Parameter]]:
+            return {"default": list(self.stem.parameters())}
+
+    with pytest.raises(ValueError, match="in no optimizer group: block.weight, block.bias"):
+        build_optimizer_param_groups(_ForgetfulModule())
+
+
+def test_build_optimizer_param_groups_adds_an_extra_group_for_uncovered_parameters() -> None:
+    class _ModuleWithAdapter(_ToyModule):
+        def __init__(self) -> None:
+            super().__init__()
+            self.adapter = nn.Linear(4, 4)
+
+    model = _ModuleWithAdapter()
+
+    param_groups = build_optimizer_param_groups(
+        model, {"adapter": {"lr": 1e-5}}, extra_groups={"adapter": list(model.adapter.parameters())}
+    )
+
+    assert len(param_groups) == 3
+    assert param_groups[2]["lr"] == 1e-5
+    assert len(param_groups[2]["params"]) == 2
+
+
+def test_build_optimizer_param_groups_drops_an_extra_group_the_model_already_covers() -> None:
+    model = _ToyModule()
+
+    param_groups = build_optimizer_param_groups(
+        model, extra_groups={"block_again": list(model.block.parameters())}
+    )
+
+    assert len(param_groups) == 2
+
+
+def test_build_optimizer_param_groups_rejects_an_extra_group_named_like_a_model_group() -> None:
+    model = _ToyModule()
+    model.adapter = nn.Linear(4, 4)
+
+    with pytest.raises(ValueError, match="defined by the model and added as an extra group"):
+        build_optimizer_param_groups(
+            model, extra_groups={"block": list(model.adapter.parameters())}
+        )

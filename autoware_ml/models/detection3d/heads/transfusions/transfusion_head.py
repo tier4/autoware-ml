@@ -606,22 +606,19 @@ class TransFusionHead(nn.Module):
     def _select_top_proposals(
         self,
         flatten_dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height*width"],
-        flatten_bev_features: Float32[torch.Tensor, "batch_size channels height*width"],
         batch_size: int,
     ) -> tuple[
-        Float32[torch.Tensor, "batch_size num_classes height*width"],
-        Int32[torch.Tensor, "batch_size num_proposals"],
-        Int32[torch.Tensor, "batch_size num_proposals"],
+        Int64[torch.Tensor, "batch_size num_proposals"],
+        Int64[torch.Tensor, "batch_size num_proposals"],
     ]:
-        """Select top proposals from the dense heatmap.
+        """Select the top proposals from the suppressed dense heatmap.
 
         Args:
-            flatten_dense_heatmaps: Flattened dense BEV heatmap tensor.
-            flatten_bev_features: Flattened BEV feature tensor.
+            flatten_dense_heatmaps: Flattened, suppressed dense BEV heatmap tensor.
             batch_size: Batch size.
 
         Returns:
-            query_feat: Selected query features.
+            The class and the flattened BEV position of every proposal.
         """
         proposal_count = min(
             self.num_proposals, flatten_dense_heatmaps.shape[1] * flatten_dense_heatmaps.shape[2]
@@ -635,16 +632,31 @@ class TransFusionHead(nn.Module):
         )
         top_classes = top_indices // flatten_dense_heatmaps.shape[-1]
         top_positions = top_indices % flatten_dense_heatmaps.shape[-1]
+        return top_classes, top_positions
 
-        # (batch_size, channels, num_proposals)
+    def _build_query_features(
+        self,
+        flatten_bev_features: Float32[torch.Tensor, "batch_size channels height*width"],
+        top_classes: Int64[torch.Tensor, "batch_size num_proposals"],
+        top_positions: Int64[torch.Tensor, "batch_size num_proposals"],
+    ) -> Float32[torch.Tensor, "batch_size channels num_proposals"]:
+        """Gather the BEV features of the proposals and add their class encoding.
+
+        Args:
+            flatten_bev_features: Flattened BEV feature tensor.
+            top_classes: Class of every proposal.
+            top_positions: Flattened BEV position of every proposal.
+
+        Returns:
+            The initial query features.
+        """
         query_feat = flatten_bev_features.gather(
             2, top_positions[:, None, :].expand(-1, flatten_bev_features.shape[1], -1)
         )
         class_one_hot = (
             F.one_hot(top_classes, num_classes=self.num_classes).permute(0, 2, 1).float()
         )
-        query_feat = query_feat + self.class_encoding(class_one_hot)
-        return query_feat, top_classes, top_positions
+        return query_feat + self.class_encoding(class_one_hot)
 
     def _decoder_layer_forward(
         self,
@@ -725,6 +737,7 @@ class TransFusionHead(nn.Module):
             dense_heatmap=dense_heatmaps,
             query_heatmap_score=query_heatmap_scores,
             query_labels=top_classes,
+            query_positions=top_positions,
             separate_head_outputs=separate_head_outputs,
         )
 
@@ -739,10 +752,57 @@ class TransFusionHead(nn.Module):
         Returns:
             TransFusionHeadOutputs: Dataclass containing all outputs.
         """
-        batch_size, _, height, width = bev_features.shape
-        bev_features = self.shared_block(bev_features)
-        bev_pos = self._create_2d_grid(width, height, bev_features.device).repeat(batch_size, 1, 1)
+        bev_features, dense_heatmaps, flatten_dense_heatmaps = self._encode_bev(bev_features)
+        top_classes, top_positions = self._select_top_proposals(
+            flatten_dense_heatmaps, bev_features.shape[0]
+        )
+        return self._run_proposals(
+            bev_features, dense_heatmaps, flatten_dense_heatmaps, top_classes, top_positions
+        )
 
+    def forward_at_proposals(
+        self,
+        bev_features: Float32[torch.Tensor, "batch_size channels height width"],
+        top_positions: Int64[torch.Tensor, "batch_size num_proposals"],
+        top_classes: Int64[torch.Tensor, "batch_size num_proposals"],
+    ) -> TransFusionHeadOutputs:
+        """Run the head at given proposals instead of the top of its own heatmap.
+
+        A distillation pairs the per-query outputs of two heads this way: run at the proposals
+        the teacher picked, the student's queries line up with the teacher's index for index.
+
+        Args:
+            bev_features: BEV feature tensor.
+            top_positions: Flattened BEV position of every proposal, as ``query_positions`` of
+                the outputs reports them.
+            top_classes: Class of every proposal, as ``query_labels`` reports them.
+
+        Returns:
+            TransFusionHeadOutputs: The outputs at the given proposals.
+        """
+        bev_features, dense_heatmaps, flatten_dense_heatmaps = self._encode_bev(bev_features)
+        return self._run_proposals(
+            bev_features, dense_heatmaps, flatten_dense_heatmaps, top_classes, top_positions
+        )
+
+    def _encode_bev(
+        self, bev_features: Float32[torch.Tensor, "batch_size channels height width"]
+    ) -> tuple[
+        Float32[torch.Tensor, "batch_size channels height width"],
+        Float32[torch.Tensor, "batch_size num_classes height width"],
+        Float32[torch.Tensor, "batch_size num_classes height*width"],
+    ]:
+        """Run the shared block and the dense heatmap head.
+
+        Args:
+            bev_features: BEV feature tensor.
+
+        Returns:
+            The shared features, the dense heatmap logits and the flattened, suppressed heatmap
+            probabilities the proposals are picked from.
+        """
+        batch_size = bev_features.shape[0]
+        bev_features = self.shared_block(bev_features)
         # Do not use autocast for the dense heatmap head since the precision can affect
         # the selected proposals. Under mixed precision the BEV features arrive as fp16 while
         # the head keeps fp32 weights, so they are cast explicitly now that autocast no longer
@@ -755,12 +815,33 @@ class TransFusionHead(nn.Module):
         flatten_dense_heatmaps = suppressed_dense_heatmaps.view(
             batch_size, suppressed_dense_heatmaps.shape[1], -1
         )
+        return bev_features, dense_heatmaps, flatten_dense_heatmaps
 
+    def _run_proposals(
+        self,
+        bev_features: Float32[torch.Tensor, "batch_size channels height width"],
+        dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height width"],
+        flatten_dense_heatmaps: Float32[torch.Tensor, "batch_size num_classes height*width"],
+        top_classes: Int64[torch.Tensor, "batch_size num_proposals"],
+        top_positions: Int64[torch.Tensor, "batch_size num_proposals"],
+    ) -> TransFusionHeadOutputs:
+        """Decode the given proposals on the shared features into the head outputs.
+
+        Args:
+            bev_features: Shared BEV features.
+            dense_heatmaps: Dense heatmap logits.
+            flatten_dense_heatmaps: Flattened, suppressed heatmap probabilities.
+            top_classes: Class of every proposal.
+            top_positions: Flattened BEV position of every proposal.
+
+        Returns:
+            TransFusionHeadOutputs: Dataclass containing all outputs.
+        """
+        batch_size, _, height, width = bev_features.shape
+        bev_pos = self._create_2d_grid(width, height, bev_features.device).repeat(batch_size, 1, 1)
         # (batch_size, channels, height, width) -> (batch_size, channels, height * width)
         flatten_bev_features = bev_features.flatten(2)
-        query_feat, top_classes, top_positions = self._select_top_proposals(
-            flatten_dense_heatmaps, flatten_bev_features, batch_size
-        )
+        query_feat = self._build_query_features(flatten_bev_features, top_classes, top_positions)
         query_pos = bev_pos.gather(1, top_positions[..., None].expand(-1, -1, bev_pos.shape[-1]))
         decoder_layer_predictions = self._decoder_layer_forward(
             query_feats=query_feat,

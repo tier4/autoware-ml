@@ -1,0 +1,58 @@
+# @package _global_
+# Distill a PTv3 det3d+seg3d teacher into the det3d+seg3d student of the experiment: the
+# segmentation logits, the dense detection heatmap and the per-query detection outputs at the
+# teacher's proposals. An
+# experiment composes it through its defaults list, before _self_:
+#   - /distillation: ptv3_det3d_seg3d
+# and names the teacher checkpoint when it runs, see
+# tasks/multi/litept/nuscenes/distill_ptv3_voxel005_b16_100e_nuscenes_51m.yaml:
+#   autoware-ml train --config-name <experiment> \
+#       teacher_weights=[<run>/artifacts/checkpoints/best.ckpt]
+# The teacher is rebuilt from the config/resolved.yaml of that run, so the student may differ
+# from it in anything the terms below do not compare. The student checkpoints keep their plain
+# student keys: test and deploy use the experiment config without this group.
+# Checkpoint(s) of the teacher, given on the command line. Unset, the run fails at fit setup.
+teacher_weights: null
+
+model:
+  distillation:
+    _target_: autoware_ml.distillation.distillation.Distillation
+    # Train only, so val/loss stays the ground-truth loss the checkpoint callbacks monitor.
+    stages: [train]
+    teacher:
+      _target_: autoware_ml.distillation.teacher.Teacher
+      weights: ${teacher_weights}
+      autocast_dtype: bfloat16
+      # Both read the student's voxels, so the per-voxel logits align index for index.
+      share_student_inputs: true
+    terms:
+      - _target_: autoware_ml.distillation.term.DistillationTerm
+        name: seg3d_logits
+        student: segmentation3d_head_outputs.logits
+        teacher: segmentation3d_head_outputs.logits
+        weight: 1.0
+        loss:
+          _target_: autoware_ml.losses.distillation.soft_target.SoftTargetKLDivLoss
+          temperature: 2.0
+      # The dense heatmap is the detection output both models share. The per-query outputs are
+      # not comparable: each model picks its own top-k proposals.
+      - _target_: autoware_ml.distillation.term.DistillationTerm
+        name: det3d_heatmap
+        student: detection3d_head_outputs.transfusion_head_outputs.dense_heatmap
+        teacher: detection3d_head_outputs.transfusion_head_outputs.dense_heatmap
+        weight: 1.0
+        loss:
+          _target_: autoware_ml.losses.distillation.sigmoid_soft_target.SigmoidSoftTargetLoss
+          focal_gamma: 2.0
+      # The student head run once more at the teacher's proposals, so the per-query class
+      # logits and box regressions pair up. Logged as distill/det3d_queries/{cls,reg}.
+      - _target_: autoware_ml.distillation.shared_queries.TransFusionSharedQueriesTerm
+        name: det3d_queries
+        student_features: module:bev_neck
+        head: bbox_head
+        weight: 1.0
+        classification_weight: 1.0
+        regression_weight: 0.25
+      # A feature term on the BEV neck output is possible with
+      # autoware_ml.losses.distillation.feature.FeatureMSELoss on `module:bev_neck`, but the
+      # canvas is mostly empty cells with constant features, which dilute it. Left out.

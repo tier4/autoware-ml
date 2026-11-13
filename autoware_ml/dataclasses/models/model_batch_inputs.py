@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.dataclasses.models.distillation import DistillationTargets
 from autoware_ml.dataclasses.geometry.range_view import RangeViewData
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 
@@ -46,6 +47,10 @@ class ModelBatchInputs(BaseModel):
 
     # Point cloud projected into range images
     range_view_data: InstanceOf[RangeViewData] | None
+
+    # Outputs of a frozen teacher for this batch. The distillation of the model sets them on
+    # the stages it runs at, see ModuleBaseModel.on_after_batch_transfer; None otherwise.
+    distillation_targets: InstanceOf[DistillationTargets] | None = None
 
     # TODO(Kok Seang): Add input features for 2D detection/segmentation model.
 
