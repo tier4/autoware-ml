@@ -372,3 +372,51 @@ def test_build_tensorrt_engine_names_the_missing_profile_before_building(
         deploy.build_tensorrt_engine(
             tmp_path / "model.onnx", OmegaConf.create({"tensorrt": {}}), tmp_path / "model.engine"
         )
+
+
+class _FakeProfile:
+    def __init__(self) -> None:
+        self.shapes: dict[str, tuple[list[int], list[int], list[int]]] = {}
+
+    def set_shape(self, name: str, min: list[int], opt: list[int], max: list[int]) -> None:
+        self.shapes[name] = (min, opt, max)
+
+
+def test_create_optimization_profile_applies_the_entries_of_the_network_inputs() -> None:
+    """One table for every graph of a model: each network takes its own entries, resolved."""
+    builder = SimpleNamespace(create_optimization_profile=_FakeProfile)
+    cfg = OmegaConf.create(
+        {
+            "max_voxels": 96000,
+            "tensorrt": {
+                "input_shapes": {
+                    "input_features": {
+                        "min_shape": [1, 32, 11],
+                        "opt_shape": [20000, 32, 11],
+                        "max_shape": ["${max_voxels}", 32, 11],
+                    },
+                    "spatial_features": {
+                        "min_shape": [1, 32, 8, 8],
+                        "opt_shape": [1, 32, 8, 8],
+                        "max_shape": [1, 32, 8, 8],
+                    },
+                }
+            },
+        }
+    )
+    profile = deploy.create_optimization_profile(
+        builder, cfg.tensorrt, _network(input_features=(-1, 32, 11))
+    )
+    assert profile.shapes == {"input_features": ([1, 32, 11], [20000, 32, 11], [96000, 32, 11])}
+    assert all(isinstance(dim, int) for dim in profile.shapes["input_features"][2])
+    # A network whose inputs have no entry gets no profile at all.
+    assert (
+        deploy.create_optimization_profile(builder, cfg.tensorrt, _network(other=(1, 32, 8, 8)))
+        is None
+    )
+    with pytest.raises(ValueError, match="incomplete"):
+        deploy.create_optimization_profile(
+            builder,
+            OmegaConf.create({"input_shapes": {"x": {"min_shape": [1]}}}),
+            _network(x=(-1,)),
+        )

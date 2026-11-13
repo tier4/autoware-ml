@@ -413,13 +413,38 @@ def parse_onnx_file(parser: Any, onnx_path: Path) -> None:
     logger.info("Successfully parsed ONNX file")
 
 
-def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig) -> Any | None:
-    """Create a TensorRT optimization profile from config."""
+def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig, network: Any) -> Any | None:
+    """Create the optimization profile of ``network`` from ``deploy.tensorrt.input_shapes``.
+
+    The table is keyed by ONNX input name and may cover every exported graph of the model;
+    only the entries of this network's inputs apply, the others are skipped with a warning.
+    A static input needs no entry; a dynamic input without one is refused by
+    :func:`dynamic_inputs_without_profile` before the build.
+
+    Returns:
+        The profile, or ``None`` when no entry applies to the network.
+
+    Raises:
+        ValueError: When an entry lacks one of its three shapes.
+    """
     if "input_shapes" not in tensorrt_cfg:
         return None
+    input_shapes = OmegaConf.to_container(tensorrt_cfg.input_shapes, resolve=True)
+    network_inputs = [network.get_input(index).name for index in range(network.num_inputs)]
+    skipped = sorted(set(input_shapes) - set(network_inputs))
+    if skipped:
+        logger.warning(
+            "deploy.tensorrt.input_shapes entries that are not inputs of this network are "
+            "skipped: %s (its inputs are %s).",
+            skipped,
+            network_inputs,
+        )
 
-    profile = builder.create_optimization_profile()
-    for input_name, shapes in tensorrt_cfg.input_shapes.items():
+    profile = None
+    for input_name in network_inputs:
+        shapes = input_shapes.get(input_name)
+        if shapes is None:
+            continue
         min_shape = shapes.get("min_shape")
         opt_shape = shapes.get("opt_shape")
         max_shape = shapes.get("max_shape")
@@ -428,7 +453,8 @@ def create_optimization_profile(builder: Any, tensorrt_cfg: DictConfig) -> Any |
                 f"TensorRT optimization profile for input '{input_name}' is incomplete. "
                 "All of min_shape, opt_shape, and max_shape must be specified."
             )
-
+        if profile is None:
+            profile = builder.create_optimization_profile()
         profile.set_shape(input_name, min=min_shape, opt=opt_shape, max=max_shape)
         logger.info(
             "Optimization profile for '%s': min=%s, opt=%s, max=%s",
@@ -479,7 +505,7 @@ def build_tensorrt_engine(
     builder, network, parser, config = create_tensorrt_builder_config(tensorrt_cfg)
     parse_onnx_file(parser, onnx_path)
 
-    profile = create_optimization_profile(builder, tensorrt_cfg)
+    profile = create_optimization_profile(builder, tensorrt_cfg, network)
     if profile is not None:
         config.add_optimization_profile(profile)
 
