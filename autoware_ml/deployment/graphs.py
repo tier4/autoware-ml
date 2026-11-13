@@ -14,13 +14,18 @@
 
 """Deployment declared as graphs plus one function.
 
-A model declares the graphs it exports (:class:`DeployGraph`) and writes its deployed inference
-as one function, ``deployed_forward(multi_task_batch_inputs, graphs)``: the glue is plain code
-in that function, and each graph is called by name. ``multi_task_batch_inputs`` is the
-preprocessed batch ``forward()`` takes. The framework hands the function its graphs as callables
-(:class:`GraphCall`), so one function serves export and every later run, and the model outputs
-are what the function returns. :func:`build_export_specs_from_deployment` derives the export
-specs from one PyTorch run of that function.
+A model declares the graphs it exports (:class:`DeploymentGraph`) and writes its deployed
+inference as one function, ``deployment_forward(multi_task_batch_inputs, graphs)``: the glue is
+plain code in that function, and each graph is called by name. ``multi_task_batch_inputs`` is
+the preprocessed batch ``forward()`` takes. The framework hands the function its graphs as
+callables (:class:`GraphCall`), so one function serves export and every later run, and the
+model outputs are what the function returns. :func:`build_export_specs_from_deployment`
+derives the export specs from one PyTorch run of that function.
+
+The vocabulary, by lifetime: ``Deployment*`` / ``deployment_*`` is what the model declares
+(:class:`DeploymentGraph`, :class:`DeploymentDeclaration`, ``deployment_graphs()``,
+``deployment_forward()``); ``GraphCall`` and :class:`DeploymentRun` belong to one run of it;
+:class:`~autoware_ml.utils.deploy.ExportSpec` is the export artifact derived from both.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ GraphTensor = Shaped[torch.Tensor, "*shape"]
 
 
 @dataclass(frozen=True)
-class DeployGraph:
+class DeploymentGraph:
     """One exported ONNX / TensorRT graph.
 
     Attributes:
@@ -56,7 +61,8 @@ class DeployGraph:
             its tensors under these names.
         onnx_dynamic_axes: Axes dynamic by construction, ``{tensor: {dim: name}}``. They
             become the spec's ``dynamic_axes``, the one declaration both ONNX exporters
-            derive from.
+            derive from. One name is one size: an output whose axis differs from an
+            input's gets another name.
     """
 
     name: str
@@ -72,12 +78,12 @@ class DeployGraph:
             repeated = sorted({name for name in names if names.count(name) > 1})
             if repeated:
                 raise ValueError(
-                    f"DeployGraph {self.name!r} lists {repeated} more than once in its {kind}; "
-                    "each is one ONNX tensor name."
+                    f"DeploymentGraph {self.name!r} lists {repeated} more than once in its "
+                    f"{kind}; each is one ONNX tensor name."
                 )
 
 
-def validate_graphs(graphs: Sequence[DeployGraph]) -> tuple[DeployGraph, ...]:
+def validate_graphs(graphs: Sequence[DeploymentGraph]) -> tuple[DeploymentGraph, ...]:
     """Check a model's graph declaration and return it as a tuple.
 
     Whether the deployed function calls each graph with its declared inputs is checked when
@@ -88,7 +94,7 @@ def validate_graphs(graphs: Sequence[DeployGraph]) -> tuple[DeployGraph, ...]:
     """
     graphs = tuple(graphs)
     if not graphs:
-        raise ValueError("A deployment needs at least one exportable DeployGraph.")
+        raise ValueError("A deployment needs at least one exportable DeploymentGraph.")
     names = [graph.name for graph in graphs]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
@@ -96,16 +102,30 @@ def validate_graphs(graphs: Sequence[DeployGraph]) -> tuple[DeployGraph, ...]:
     return graphs
 
 
-def run_graph_stage(stage: DeployGraph, args: Sequence[GraphTensor]) -> dict[str, GraphTensor]:
+def run_graph(graph: DeploymentGraph, args: Sequence[GraphTensor]) -> dict[str, GraphTensor]:
     """Call a graph's module on its positional inputs and name its outputs.
 
     Raises:
+        TypeError: When the module returns a mapping; a graph returns its tensors
+            positionally, in the order of its declared ``outputs``.
         ValueError: When the module returns another number of tensors than ``outputs``.
     """
-    raw = stage.module(*args)
+    raw = graph.module(*args)
     if isinstance(raw, torch.Tensor):
         raw = (raw,)
-    return dict(zip(stage.outputs, raw, strict=True))
+    if isinstance(raw, Mapping):
+        # zip() would iterate the keys and name the outputs after them.
+        raise TypeError(
+            f"Graph {graph.name!r} returned a mapping; a graph returns its tensors "
+            f"positionally, in the order of its outputs {list(graph.outputs)}."
+        )
+    raw = tuple(raw)
+    if len(raw) != len(graph.outputs):
+        raise ValueError(
+            f"Graph {graph.name!r} returned {len(raw)} tensors; it declares "
+            f"{len(graph.outputs)} outputs {list(graph.outputs)}."
+        )
+    return dict(zip(graph.outputs, raw, strict=True))
 
 
 #: Runs one graph on its positional inputs and returns its outputs by name.
@@ -116,17 +136,17 @@ class GraphCall:
     """One declared graph as the deployed function calls it: tensors in and out by name.
 
     Attributes:
-        stage: The graph's declaration.
+        graph: The graph's declaration.
         inputs: The graph's input names, in declaration order.
         outputs: The graph's output names, in declaration order.
         args: The positional inputs of the call, in declaration order, on the run device;
             ``None`` until the graph is called. Export traces the graph on them.
     """
 
-    def __init__(self, stage: DeployGraph, run: GraphRunner, device: torch.device) -> None:
-        self.stage = stage
-        self.inputs = stage.inputs
-        self.outputs = stage.outputs
+    def __init__(self, graph: DeploymentGraph, run: GraphRunner, device: torch.device) -> None:
+        self.graph = graph
+        self.inputs = graph.inputs
+        self.outputs = graph.outputs
         self.args: tuple[GraphTensor, ...] | None = None
         self._run = run
         self._device = device
@@ -140,7 +160,7 @@ class GraphCall:
             TypeError: When the keyword names are not the declared inputs, or a value is not
                 a tensor.
         """
-        name = self.stage.name
+        name = self.graph.name
         if self.args is not None:
             raise RuntimeError(f"Graph {name!r} was called twice in one run.")
         if set(tensors) != set(self.inputs):
@@ -201,8 +221,8 @@ class Graphs(Mapping[str, GraphCall]):
         return len(self._calls)
 
 
-#: ``deployed_forward(multi_task_batch_inputs, graphs) -> {output name: tensor}``.
-DeployedForward = Callable[[ModelBatchInputs, Graphs], Mapping[str, GraphTensor]]
+#: ``deployment_forward(multi_task_batch_inputs, graphs) -> {output name: tensor}``.
+DeploymentForward = Callable[[ModelBatchInputs, Graphs], Mapping[str, GraphTensor]]
 
 
 @dataclass(frozen=True)
@@ -215,20 +235,24 @@ class DeploymentDeclaration:
             ``forward(multi_task_batch_inputs, graphs) -> model outputs``.
     """
 
-    graphs: tuple[DeployGraph, ...]
-    forward: DeployedForward
+    graphs: tuple[DeploymentGraph, ...]
+    forward: DeploymentForward
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "graphs", validate_graphs(self.graphs))
 
 
-def call_deployed_forward(
+def run_deployment(
     deployment: DeploymentDeclaration,
-    runner_for: Callable[[DeployGraph], GraphRunner],
+    runner_for: Callable[[DeploymentGraph], GraphRunner],
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
 ) -> tuple[dict[str, GraphTensor], dict[str, GraphCall]]:
     """Run the deployed function once, each graph on ``runner_for(graph)``; check what it did.
+
+    ``runner_for`` is the backend seam: :func:`run_deployment_in_torch` runs each graph's
+    module, and a backend runner hands the graph's positional inputs to its ONNX Runtime
+    session or TensorRT engine instead. The function does not know which.
 
     Args:
         deployment: The model's graphs and deployed function.
@@ -244,21 +268,23 @@ def call_deployed_forward(
             tensors.
         RuntimeError: When the function did not call a declared graph.
     """
-    calls = {stage.name: GraphCall(stage, runner_for(stage), device) for stage in deployment.graphs}
+    calls = {graph.name: GraphCall(graph, runner_for(graph), device) for graph in deployment.graphs}
     with torch.no_grad():
         outputs = deployment.forward(multi_task_batch_inputs, Graphs(calls, device))
     if not isinstance(outputs, Mapping) or not outputs:
         raise TypeError(
-            "deployed_forward returns the model outputs as a non-empty mapping of name -> "
+            "deployment_forward returns the model outputs as a non-empty mapping of name -> "
             f"tensor, got {type(outputs).__name__}."
         )
     others = sorted(name for name, value in outputs.items() if not torch.is_tensor(value))
     if others:
-        raise TypeError(f"deployed_forward returned model outputs that are not tensors: {others}.")
+        raise TypeError(
+            f"deployment_forward returned model outputs that are not tensors: {others}."
+        )
     uncalled = [name for name, call in calls.items() if call.args is None]
     if uncalled:
         raise RuntimeError(
-            f"deployed_forward did not call the declared graphs {uncalled}; every declared "
+            f"deployment_forward did not call the declared graphs {uncalled}; every declared "
             "graph is exported, so each has to run."
         )
     return dict(outputs), calls
@@ -289,15 +315,15 @@ def run_deployment_in_torch(
     switches them to eval first.
 
     Raises:
-        TypeError: When a graph gets a non-tensor input, or the function returns something
-            other than a mapping of tensors.
+        TypeError: When a graph gets a non-tensor input or returns a mapping, or the function
+            returns something other than a mapping of tensors.
         ValueError: When a graph returns another number of tensors than it declares, or the
             function modifies a graph input in place.
         RuntimeError: When the function skips a declared graph or calls one twice.
     """
-    outputs, calls = call_deployed_forward(
+    outputs, calls = run_deployment(
         deployment,
-        lambda stage: partial(run_graph_stage, stage),
+        lambda graph: partial(run_graph, graph),
         multi_task_batch_inputs,
         device,
     )
@@ -305,13 +331,13 @@ def run_deployment_in_torch(
     modified = {name: names for name, names in modified.items() if names}
     if modified:
         raise ValueError(
-            f"deployed_forward modified graph inputs in place after the graphs ran: {modified}; "
-            "export traces each graph on the tensors it ran on."
+            f"deployment_forward modified graph inputs in place after the graphs ran: "
+            f"{modified}; export traces each graph on the tensors it ran on."
         )
     return DeploymentRun(outputs, {name: call.args for name, call in calls.items()})
 
 
-def export_spec_for_graph(stage: DeployGraph, args: tuple[GraphTensor, ...]) -> ExportSpec:
+def export_spec_for_graph(graph: DeploymentGraph, args: tuple[GraphTensor, ...]) -> ExportSpec:
     """Build one graph's spec from the tensors it ran on.
 
     The trace inputs are ``args``, the tensors the deployed function passed the graph. The spec
@@ -319,15 +345,15 @@ def export_spec_for_graph(stage: DeployGraph, args: tuple[GraphTensor, ...]) -> 
     ``onnx_dynamic_axes``, or ``None`` when the graph declares none.
     """
     dynamic_axes = (
-        {name: dict(axes) for name, axes in stage.onnx_dynamic_axes.items()}
-        if stage.onnx_dynamic_axes
+        {name: dict(axes) for name, axes in graph.onnx_dynamic_axes.items()}
+        if graph.onnx_dynamic_axes
         else None
     )
     return ExportSpec(
-        module=stage.module,
+        module=graph.module,
         args=args,
-        input_names=list(stage.inputs),
-        output_names=list(stage.outputs),
+        input_names=list(graph.inputs),
+        output_names=list(graph.outputs),
         dynamic_axes=dynamic_axes,
     )
 
@@ -349,10 +375,10 @@ def build_export_specs_from_deployment(
         multi_task_batch_inputs: One preprocessed example batch.
         device: Device of the tracing run.
     """
-    for stage in deployment.graphs:
-        stage.module.eval()
+    for graph in deployment.graphs:
+        graph.module.eval()
     run = run_deployment_in_torch(deployment, multi_task_batch_inputs, device)
     return {
-        stage.name: export_spec_for_graph(stage, run.graph_inputs[stage.name])
-        for stage in deployment.graphs
+        graph.name: export_spec_for_graph(graph, run.graph_inputs[graph.name])
+        for graph in deployment.graphs
     }

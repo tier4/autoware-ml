@@ -210,18 +210,18 @@ This keeps export-time behavior close to the model implementation and avoids
 ad hoc post-processing for most cases.
 
 A model whose deployment splits into several exported graphs with PyTorch glue
-between them can declare that split instead, with two methods: `deploy_graphs()`
-returns its `DeployGraph`s (one exported module each, named after the graph, with
+between them can declare that split instead, with two methods: `deployment_graphs()`
+returns its `DeploymentGraph`s (one exported module each, named after the graph, with
 the tensor names it takes and returns), and
-`deployed_forward(multi_task_batch_inputs, graphs)` runs the deployed inference on
+`deployment_forward(multi_task_batch_inputs, graphs)` runs the deployed inference on
 the preprocessed batch `forward()` takes, the glue in plain code and each graph called as
 `graphs[name](input_name=tensor)`. `build_export_specs()` then runs that function
 once on the example batch in eval mode and returns one export spec per
-`DeployGraph`, traced on the tensors the function passed it. Every declared graph
+`DeploymentGraph`, traced on the tensors the function passed it. Every declared graph
 is called exactly once, and a graph's inputs must not be modified in place after
 the call, since export traces the graph on them; the run rejects a function that
-breaks either rule. The model outputs are what `deployed_forward()` returns. Each
-`DeployGraph` module is export-ready as declared, the live submodule or the copy
+breaks either rule. The model outputs are what `deployment_forward()` returns. Each
+`DeploymentGraph` module is export-ready as declared, the live submodule or the copy
 its `prepare_for_export()` makes; the framework never alters it, and it declares
 the graphs again after replacing a module rather than reusing an earlier
 declaration.
