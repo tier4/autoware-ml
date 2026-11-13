@@ -24,6 +24,11 @@ import torch
 from autoware_ml.dataclasses.batch.detection2d import Detection2DGTSample
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
+from autoware_ml.dataclasses.batch.motion import (
+    AgentTracksSample,
+    MotionGTBatch,
+    MotionGTSample,
+)
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.dataclasses.batch.segmentation3d import (
     Segmentation3DGTBatch,
@@ -462,6 +467,83 @@ class TestModelGTBatchSegmentation3DCollation(unittest.TestCase):
 
         self.assertEqual(moved.gt_semantic_masks.device.type, "cpu")
         self.assertEqual(moved.batch_indices.device.type, "cpu")
+
+
+class TestModelGTBatchMotionCollation(unittest.TestCase):
+    """Collation of the scenarios of the motion task into the batch."""
+
+    def _build_sample(self, num_agents: int | None) -> ModelGTSample:
+        """Build a sample holding the agent tracks of a scenario, or no scenario."""
+        motion_gt_sample = (
+            None
+            if num_agents is None
+            else MotionGTSample(
+                agents=AgentTracksSample(
+                    positions=torch.zeros(num_agents, 3, 3),
+                    headings=torch.zeros(num_agents, 3),
+                    velocities=torch.zeros(num_agents, 3, 2),
+                    valid=torch.ones(num_agents, 3, dtype=torch.bool),
+                    agent_types=torch.zeros(num_agents, dtype=torch.int64),
+                    agent_roles=torch.zeros(num_agents, dtype=torch.int64),
+                    track_ids=[str(index) for index in range(num_agents)],
+                    current_step_index=1,
+                    step_seconds=0.1,
+                    ignore_index=-1,
+                )
+            )
+        )
+        return ModelGTSample(
+            lidar_point_cloud_samples=None,
+            image_samples=None,
+            point_cloud_data=None,
+            camera_image_data=None,
+            detection3d_gt_bboxes_3d=None,
+            segmentation3d_gt_sample=None,
+            motion_gt_sample=motion_gt_sample,
+        )
+
+    def _collate(self, samples: Sequence[ModelGTSample]) -> MotionGTBatch | None:
+        batch = ModelGTBatch.collate_gt_samples(
+            gt_samples=samples, max_num_3d_gt_bboxes=None, max_num_2d_gt_bboxes=None
+        )
+        return batch.motion_gt_batch
+
+    def test_sample_defaults_to_no_scenario(self) -> None:
+        sample = self._build_sample(None)
+
+        self.assertIsNone(sample.motion_source_sample)
+        self.assertIsNone(sample.motion_gt_sample)
+
+    def test_collate_pads_the_scenarios_in_batch_order(self) -> None:
+        batch = self._collate([self._build_sample(1), self._build_sample(2)])
+
+        assert batch is not None
+        self.assertEqual(batch.batch_size, 2)
+        self.assertEqual(batch.agent_mask.tolist(), [[True, False], [True, True]])
+        self.assertEqual(batch.track_ids, [["0"], ["0", "1"]])
+
+    def test_collate_without_any_scenario_leaves_it_none(self) -> None:
+        self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
+
+    def test_collate_rejects_a_partial_batch(self) -> None:
+        with self.assertRaises(ValueError):
+            self._collate([self._build_sample(1), self._build_sample(None)])
+        with self.assertRaises(ValueError):
+            self._collate([self._build_sample(None), self._build_sample(1)])
+
+    def test_to_device_moves_the_scenarios_and_keeps_none(self) -> None:
+        batch = ModelGTBatch.collate_gt_samples(
+            gt_samples=[self._build_sample(1)], max_num_3d_gt_bboxes=None, max_num_2d_gt_bboxes=None
+        )
+        moved = batch.to_device(torch.device("cpu"))
+        self.assertEqual(moved.motion_gt_batch.agent_positions.device.type, "cpu")
+
+        empty = ModelGTBatch.collate_gt_samples(
+            gt_samples=[self._build_sample(None)],
+            max_num_3d_gt_bboxes=None,
+            max_num_2d_gt_bboxes=None,
+        )
+        self.assertIsNone(empty.to_device(torch.device("cpu")).motion_gt_batch)
 
 
 class TestModelGTBatchPaddingMask(unittest.TestCase):
