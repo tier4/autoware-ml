@@ -14,15 +14,23 @@
 
 """Unit tests for CenterPoint detection model."""
 
+from pathlib import Path
+import tempfile
 import unittest
 
+from omegaconf import OmegaConf
+import onnx
+from jaxtyping import Float32
 import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.deployment.graphs import DeploymentGraph
+from autoware_ml.deployment.tests.deployment_fixtures import assert_deployment_reproduces_forward
 from autoware_ml.models.detection3d.main_modules.centerpoint import (
     CenterPointDetection3DModel,
     _CenterPointBackboneNeckHeadExportWrapper,
@@ -37,6 +45,7 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
+from autoware_ml.utils.deploy import export_to_onnx
 
 
 class TestCenterPointDetection3DModel(unittest.TestCase):
@@ -195,6 +204,18 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             range_view_data=None,
         )
 
+    @staticmethod
+    def _head_tensors(
+        outputs: ModelOutputs,
+    ) -> dict[str, Float32[torch.Tensor, "batch_size channels height width"]]:
+        """Return forward()'s head maps under the names the deployed graph gives them."""
+        head_outputs = outputs.detection3d().center_head()
+        return {
+            name: getattr(head_outputs, name)
+            for name in ["heatmap", "reg", "height", "dim", "rot", "vel"]
+            if getattr(head_outputs, name) is not None
+        }
+
     def test_centerpoint_forward_compute_metrics_and_decode_run(self) -> None:
         """
         Test that the model runs end to end over voxelized inputs, producing head outputs of the
@@ -283,8 +304,11 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(
             head_spec.dynamic_axes,
             {
-                name: {0: "batch_size", 2: "H", 3: "W"}
-                for name in ["spatial_features", "heatmap", "reg", "height", "dim", "rot", "vel"]
+                "spatial_features": {0: "batch_size", 2: "H", 3: "W"},
+                **{
+                    name: {0: "batch_size", 2: "out_height", 3: "out_width"}
+                    for name in ["heatmap", "reg", "height", "dim", "rot", "vel"]
+                },
             },
         )
         (spatial_features,) = head_spec.args
@@ -333,6 +357,146 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "eval mode"):
             self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+
+    def test_exported_graphs_keep_the_runtime_names_and_the_model_in_eval_mode(self) -> None:
+        """
+        Test that the exported graphs carry the runtime's input and output names in binding
+        order, and that exporting leaves the submodules the wrappers share in eval mode.
+        """
+        self.centerpoint.eval()
+        specs = self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
+        # deploy.onnx of the CenterPoint base config.
+        onnx_cfg = OmegaConf.create(
+            {"dynamo": False, "opset_version": 17, "do_constant_folding": False}
+        )
+        expected_names = {
+            "pts_voxel_encoder_centerpoint": (["input_features"], ["pillar_features"]),
+            "pts_backbone_neck_head_centerpoint": (
+                ["spatial_features"],
+                ["heatmap", "reg", "height", "dim", "rot", "vel"],
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as output_dir:
+            for name, spec in specs.items():
+                onnx_path = Path(output_dir) / f"{name}.onnx"
+                export_to_onnx(spec, onnx_cfg, onnx_path)
+                graph = onnx.load(str(onnx_path)).graph
+                self.assertEqual(
+                    ([value.name for value in graph.input], [value.name for value in graph.output]),
+                    expected_names[name],
+                )
+
+        self.assertEqual(
+            [name for name, module in self.centerpoint.named_modules() if module.training], []
+        )
+
+    def test_deployment_reproduces_forward_and_names_the_deployed_modules(self) -> None:
+        """Test that the deployment reproduces forward() and carries the deployed names."""
+        self.centerpoint.eval()
+        multi_task_batch_inputs = self._build_multi_task_batch_inputs()
+        graphs = self.centerpoint.deployment_graphs()
+        self.assertTrue(all(isinstance(graph, DeploymentGraph) for graph in graphs))
+        self.assertEqual(
+            [graph.name for graph in graphs],
+            ["pts_voxel_encoder_centerpoint", "pts_backbone_neck_head_centerpoint"],
+        )
+        names = ["heatmap", "reg", "height", "dim", "rot", "vel"]
+
+        # Same modules, so only CUDA kernel-selection noise remains: two forward() calls
+        # differ by up to 1.3e-4 on a shared GPU.
+        check = assert_deployment_reproduces_forward(
+            self.centerpoint,
+            multi_task_batch_inputs,
+            self.device,
+            self._head_tensors,
+            rtol=1e-3,
+            atol=1e-3,
+        )
+        self.assertEqual(list(check.run.outputs), names)
+
+    def test_deployment_reproduces_forward_without_the_velocity_branch(self) -> None:
+        """Test that a head without velocity reproduces forward() with five model outputs."""
+        centerpoint = self._build_centerpoint(self._build_bbox_head(use_velocity=False)).eval()
+        check = assert_deployment_reproduces_forward(
+            centerpoint,
+            self._build_multi_task_batch_inputs(),
+            self.device,
+            self._head_tensors,
+            rtol=1e-3,
+            atol=1e-3,
+        )
+        self.assertEqual(list(check.run.outputs), ["heatmap", "reg", "height", "dim", "rot"])
+
+    def test_deployment_runs_on_deployment_inputs_without_ground_truth(self) -> None:
+        """Test that voxels with an empty GT batch, as a runtime feeds them, trace both graphs."""
+        self.centerpoint.eval()
+        batch_inputs = self._build_multi_task_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
+        assert voxels_data is not None
+        inputs = ModelBatchInputs(
+            multi_task_gt_batch=ModelGTBatch(
+                point_cloud_gt_batch=None,
+                detection3d_gt_batch=None,
+                segmentation3d_gt_batch=None,
+                image_gt_batch=None,
+                io_processing_time=0.0,
+                padding_mask=torch.zeros(self.batch_size, dtype=torch.bool, device=self.device),
+            ),
+            voxels_data=voxels_data,
+            image_data=None,
+            range_view_data=None,
+        )
+
+        specs = self.centerpoint.build_export_specs(inputs)
+
+        (spatial_features,) = specs["pts_backbone_neck_head_centerpoint"].args
+        self.assertEqual(spatial_features.shape[0], self.batch_size)
+
+    def test_deployment_keeps_a_canvas_for_a_sample_without_voxels(self) -> None:
+        """
+        Test that the deployment matches forward() for a sample without voxels, whether it is
+        the last sample of a batch or the only one.
+        """
+        self.centerpoint.eval()
+        batch_inputs = self._build_multi_task_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
+        gt_batch = batch_inputs.multi_task_gt_batch
+        gt_boxes = gt_batch.detection3d_gt_batch
+        assert voxels_data is not None and gt_boxes is not None
+        first_sample_boxes = gt_boxes._replace(
+            **{name: value[:1] for name, value in gt_boxes._asdict().items() if value is not None}
+        )
+        cases = {
+            # Every voxel belongs to the first sample; the second has only its ground truth.
+            "last sample": ModelBatchInputs(
+                multi_task_gt_batch=gt_batch,
+                voxels_data=voxels_data._replace(
+                    batch_indices=torch.zeros_like(voxels_data.batch_indices)
+                ),
+                image_data=None,
+                range_view_data=None,
+            ),
+            "only sample": ModelBatchInputs(
+                multi_task_gt_batch=gt_batch._replace(
+                    detection3d_gt_batch=first_sample_boxes,
+                    padding_mask=gt_batch.padding_mask[:1],
+                ),
+                voxels_data=voxels_data._replace(
+                    voxels=voxels_data.voxels[:0],
+                    coords=voxels_data.coords[:0],
+                    num_points=voxels_data.num_points[:0],
+                    batch_indices=voxels_data.batch_indices[:0],
+                ),
+                image_data=None,
+                range_view_data=None,
+            ),
+        }
+        for case, inputs in cases.items():
+            with self.subTest(case=case):
+                assert_deployment_reproduces_forward(
+                    self.centerpoint, inputs, self.device, self._head_tensors, rtol=1e-3, atol=1e-3
+                )
 
 
 if __name__ == "__main__":

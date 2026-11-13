@@ -22,7 +22,7 @@ around the reusable PointPillars and CenterPoint detection components.
 from __future__ import annotations
 
 from types import MappingProxyType
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from jaxtyping import Float32
 import torch
@@ -34,6 +34,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.deployment.graphs import DeploymentGraph, Graphs
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
@@ -74,12 +75,13 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         Args:
             backbone: BEV backbone.
             neck: BEV neck.
-            bbox_head: CenterPoint dense head. An export-ready copy is taken.
+            bbox_head: Export-ready CenterPoint dense head
+                (:meth:`~autoware_ml.models.detection3d.heads.centerhead.CenterHead.prepare_for_export`).
         """
         super().__init__()
         self.backbone = backbone
         self.neck = neck
-        self.bbox_head = bbox_head.prepare_for_export()
+        self.bbox_head = bbox_head
         # The order the deployed runtime expects, the velocity branch last. Do not reorder.
         self.output_names = ["heatmap", "reg", "height", "dim", "rot"]
         if self.bbox_head.use_velocity:
@@ -229,77 +231,81 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         )
         return multi_task_predictions
 
+    # TODO(vividf): Remove together with ModuleBaseModel.build_export_spec().
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Reject single-module CenterPoint deployment export."""
         del multi_task_batch_inputs
-        raise RuntimeError("CenterPoint deployment uses split modules; call build_export_specs().")
-
-    def build_export_specs(
-        self, multi_task_batch_inputs: ModelBatchInputs
-    ) -> dict[str, ExportSpec]:
-        """Build split CenterPoint deployment export specifications.
-
-        The exported ABI follows the original CenterPoint deployment split:
-        decorated pillar features feed the PFN ONNX module, and dense BEV
-        spatial features feed the backbone/neck/head ONNX module. Scatter is a
-        runtime preprocessing step between the two exported modules.
-
-        Args:
-            multi_task_batch_inputs: Example preprocessed batch used to trace both modules.
-
-        Returns:
-            Ordered mapping of module name to export specification.
-
-        Raises:
-            RuntimeError: If the model is in training mode. Tracing the pillar encoder would
-                update its BatchNorm running statistics, so the caller puts the model in eval
-                mode first, as the deploy script does.
-            ValueError: If the batch carries no voxel data.
-        """
-        if self.training:
-            raise RuntimeError("CenterPoint export needs the model in eval mode.")
-        voxels_data = multi_task_batch_inputs.voxels_data
-        if voxels_data is None:
-            raise ValueError(
-                "ModelBatchInputs must contain voxels_data to build CenterPoint export specs."
-            )
-
-        with torch.no_grad():
-            input_features = self.pts_voxel_encoder.encode(voxels_data)
-            pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
-            # Sized by the batch, as in forward(): the voxel batch indices miss a sample
-            # without voxels.
-            spatial_features = self.pts_middle_encoder(
-                pillar_features=pillar_features,
-                coords=voxels_data.coords,
-                batch_indices=voxels_data.batch_indices,
-                batch_size=multi_task_batch_inputs.batch_size(),
-            )
-
-        head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
-            self.pts_backbone,
-            self.pts_neck,
-            self.bbox_head,
+        raise RuntimeError(
+            "CenterPoint deployment uses split modules; build_export_specs() derives them "
+            "from deployment_graphs()."
         )
-        return {
-            "pts_voxel_encoder_centerpoint": ExportSpec(
+
+    def deployment_graphs(self) -> Sequence[DeploymentGraph]:
+        """Declare the two graphs the Autoware runtime loads, named like its artifacts.
+
+        :meth:`deployment_forward` runs them with the glue between them.
+        """
+        # The graphs trace the live backbone and neck; the head is traced on its export-ready
+        # copy, so the graphs are declared again after a module is replaced (see
+        # ModuleBaseModel.deployment_graphs()).
+        head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
+            self.pts_backbone, self.pts_neck, self.bbox_head.prepare_for_export()
+        )
+        return (
+            DeploymentGraph(
+                "pts_voxel_encoder_centerpoint",
                 module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
-                args=(input_features,),
-                input_names=["input_features"],
-                output_names=["pillar_features"],
-                dynamic_axes={
+                inputs=("input_features",),
+                outputs=("pillar_features",),
+                onnx_dynamic_axes={
                     "input_features": {0: "num_voxels", 1: "num_max_points"},
                     "pillar_features": {0: "num_voxels"},
                 },
             ),
-            "pts_backbone_neck_head_centerpoint": ExportSpec(
+            DeploymentGraph(
+                "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,
-                args=(spatial_features,),
-                input_names=["spatial_features"],
-                output_names=head_wrapper.output_names,
-                dynamic_axes={
-                    name: {0: "batch_size", 2: "H", 3: "W"}
-                    for name in ["spatial_features", *head_wrapper.output_names]
+                inputs=("spatial_features",),
+                # Named after the CenterHeadOutputs fields.
+                outputs=tuple(head_wrapper.output_names),
+                # One axis name is one size: the head maps are the canvas down-sampled by
+                # out_size_factor, so they do not share the canvas's H and W.
+                onnx_dynamic_axes={
+                    "spatial_features": {0: "batch_size", 2: "H", 3: "W"},
+                    **{
+                        name: {0: "batch_size", 2: "out_height", 3: "out_width"}
+                        for name in head_wrapper.output_names
+                    },
                 },
             ),
-        }
+        )
+
+    def deployment_forward(
+        self, multi_task_batch_inputs: ModelBatchInputs, graphs: Graphs
+    ) -> Mapping[str, Float32[torch.Tensor, "batch_size channels height width"]]:
+        """Run the split the Autoware runtime runs::
+
+            decorate -> pts_voxel_encoder_centerpoint -> scatter
+                -> pts_backbone_neck_head_centerpoint
+
+        Pillar decoration and the BEV scatter have no learned parameters and stay out of the
+        graphs.
+        """
+        voxels = multi_task_batch_inputs.voxels_data
+        if voxels is None:
+            raise ValueError(
+                "ModelBatchInputs must contain voxels_data to run the deployed CenterPoint."
+            )
+        input_features = self.pts_voxel_encoder.encode(voxels)
+        pillar_features = graphs["pts_voxel_encoder_centerpoint"](input_features=input_features)[
+            "pillar_features"
+        ]
+        # Sized by the batch, as in forward(): the voxel batch indices miss a sample
+        # without voxels.
+        spatial_features = self.pts_middle_encoder(
+            pillar_features=pillar_features.to(graphs.device).squeeze(1),
+            coords=voxels.coords.to(graphs.device),
+            batch_indices=voxels.batch_indices.to(graphs.device),
+            batch_size=multi_task_batch_inputs.batch_size(),
+        )
+        return graphs["pts_backbone_neck_head_centerpoint"](spatial_features=spatial_features)
