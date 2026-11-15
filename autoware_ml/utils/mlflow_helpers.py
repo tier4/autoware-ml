@@ -40,6 +40,7 @@ MLFLOW_PARENT_RUN_ID = "mlflow.parentRunId"
 MLFLOW_RUN_NAME = "mlflow.runName"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_ARTIFACTS_DIRNAME = "config"
+RESOLVED_CONFIG_FILENAME = "resolved.yaml"
 AUTOWARE_ML_RUN_ID_ENV = "AUTOWARE_ML_RUN_ID"
 AUTOWARE_ML_HYDRA_RUN_DIR_ENV = "AUTOWARE_ML_HYDRA_RUN_DIR"
 MLFLOW_PARAM_KEY_REPLACEMENTS = (
@@ -362,6 +363,25 @@ def load_run_metadata(checkpoint_path: Path) -> dict[str, Any] | None:
         metadata_path = parent / RUN_METADATA_FILENAME
         if metadata_path.exists():
             return json.loads(metadata_path.read_text(encoding="utf-8"))
+    return None
+
+
+def find_run_config(checkpoint_path: Path) -> Path | None:
+    """Find the resolved config of the run that saved a checkpoint.
+
+    A run writes ``config/resolved.yaml`` next to its ``checkpoints`` directory, see
+    :func:`write_run_config_artifacts`.
+
+    Args:
+        checkpoint_path: Checkpoint path whose parent directories are searched.
+
+    Returns:
+        Path of the resolved config when present, otherwise ``None``.
+    """
+    for parent in checkpoint_path.parents:
+        config_path = parent / CONFIG_ARTIFACTS_DIRNAME / RESOLVED_CONFIG_FILENAME
+        if config_path.is_file():
+            return config_path
     return None
 
 
@@ -696,7 +716,7 @@ def write_run_config_artifacts(cfg: DictConfig, artifact_dir: Path) -> None:
     """Persist the resolved Hydra config and CLI overrides into MLflow artifacts."""
     config_dir = artifact_dir / CONFIG_ARTIFACTS_DIRNAME
     config_dir.mkdir(parents=True, exist_ok=True)
-    (config_dir / "resolved.yaml").write_text(
+    (config_dir / RESOLVED_CONFIG_FILENAME).write_text(
         OmegaConf.to_yaml(cfg, resolve=True),
         encoding="utf-8",
     )

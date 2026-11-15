@@ -1,0 +1,40 @@
+# @package _global_
+# Distill a PTv3 seg3d teacher into the seg3d student of the experiment: the segmentation logits
+# and the deepest encoder features. An experiment composes it through its defaults list,
+# before _self_:
+#   - /distillation: ptv3_seg3d
+# and names the teacher checkpoint when it runs:
+#   autoware-ml train --config-name <experiment> \
+#       teacher_weights=[<run>/artifacts/checkpoints/best.ckpt]
+# See ptv3_det3d_seg3d.yaml for how the teacher is rebuilt and what the student checkpoints hold.
+# Checkpoint(s) of the teacher, given on the command line. Unset, the run fails at fit setup.
+teacher_weights: null
+
+model:
+  distillation:
+    _target_: autoware_ml.distillation.distillation.Distillation
+    stages: [train]
+    teacher:
+      _target_: autoware_ml.distillation.teacher.Teacher
+      weights: ${teacher_weights}
+      autocast_dtype: bfloat16
+      share_student_inputs: true
+    terms:
+      - _target_: autoware_ml.distillation.term.DistillationTerm
+        name: seg3d_logits
+        student: segmentation3d_head_outputs.logits
+        teacher: segmentation3d_head_outputs.logits
+        weight: 1.0
+        loss:
+          _target_: autoware_ml.losses.distillation.soft_target.SoftTargetKLDivLoss
+          temperature: 2.0
+      # Deepest encoder stage, (voxels, channels). A student encoder of another width needs an
+      # `adapter` (a torch.nn.Linear) on this term.
+      - _target_: autoware_ml.distillation.term.DistillationTerm
+        name: encoder_features
+        student: module:encoder
+        teacher: module:encoder
+        weight: 0.1
+        loss:
+          _target_: autoware_ml.losses.distillation.feature.FeatureMSELoss
+          normalize: true

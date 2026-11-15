@@ -1,0 +1,9 @@
+# @package _global_
+# The LitePT multi-task experiment, distilled from a PTv3 teacher trained with
+# multi/ptv3/t4dataset/voxel012_b8_100e_t4dataset_122m: run with teacher_weights=[<best.ckpt>].
+defaults:
+  - voxel012_b8_100e_t4dataset_122m
+  - /distillation: ptv3_det3d_seg3d
+  - _self_
+
+experiment_name: distill_ptv3_voxel012_b8_100e_t4dataset_122m

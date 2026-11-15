@@ -77,6 +77,8 @@ class TransFusionHeadOutputs(BaseModel):
       dense_heatmap: Heatmap to save probability for each class in a BEV heatmap.
       query_heatmap_score: Heatmap scores gathered at each query position.
       query_labels: Class index predicted for each query.
+      query_positions: Flattened BEV position each query was picked at, None when the outputs
+        were built without them. A distillation runs another head at these positions.
       separate_head_outputs: Per-proposal outputs from the separate head.
     """
 
@@ -85,6 +87,7 @@ class TransFusionHeadOutputs(BaseModel):
     dense_heatmap: Float[torch.Tensor, "batch_size num_classes height width"]
     query_heatmap_score: Float[torch.Tensor, "batch_size num_classes num_queries"]
     query_labels: Int64[torch.Tensor, "batch_size num_queries"]
+    query_positions: Int64[torch.Tensor, "batch_size num_queries"] | None = None
 
     separate_head_outputs: TransFusionSeparateHeadOutputs
 
@@ -106,6 +109,14 @@ class TransFusionHeadOutputs(BaseModel):
             raise ValueError(
                 f"query_heatmap_score must have shape ({batch_size}, {num_classes}, "
                 f"{num_queries}), got {tuple(self.query_heatmap_score.shape)}."
+            )
+        if (
+            self.query_positions is not None
+            and self.query_positions.shape != self.query_labels.shape
+        ):
+            raise ValueError(
+                f"query_positions must have shape {tuple(self.query_labels.shape)}, got "
+                f"{tuple(self.query_positions.shape)}."
             )
         if self.separate_head_outputs.heatmap.shape[:2] != (batch_size, num_classes):
             raise ValueError(
@@ -129,6 +140,7 @@ class TransFusionHeadOutputs(BaseModel):
             dense_heatmap=self.dense_heatmap[mask],
             query_heatmap_score=self.query_heatmap_score[mask],
             query_labels=self.query_labels[mask],
+            query_positions=None if self.query_positions is None else self.query_positions[mask],
             separate_head_outputs=TransFusionSeparateHeadOutputs(
                 heatmap=separate.heatmap[mask],
                 center=separate.center[mask],

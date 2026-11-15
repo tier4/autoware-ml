@@ -30,6 +30,7 @@ nav = [
     { "CLI Reference" = "user-guide/cli.md" },
     { "Configuration" = "user-guide/configuration.md" },
     { "Training" = "user-guide/training.md" },
+    { "Knowledge Distillation" = "user-guide/distillation.md" },
     { "MLflow" = "user-guide/mlflow.md" },
     { "Optuna" = "user-guide/optuna.md" },
     { "Deployment" = "user-guide/deployment.md" },

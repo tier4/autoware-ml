@@ -36,6 +36,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.distillation.distillation import Distillation
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.eval_mixin import MetricEvalMixin
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
@@ -96,6 +97,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        distillation: Distillation | None = None,
     ):
         """Initialize base model.
 
@@ -110,6 +112,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 ``interval`` or ``monitor``.
             metrics: Task metrics accumulated during validation and test. Empty
                 or ``None`` logs only losses.
+            distillation: Teacher and terms that distill a frozen model into this one, see
+                :class:`Distillation`. ``None`` trains on the ground truth alone.
         """
         super().__init__(metrics=metrics)
         self._data_preprocessor = data_preprocessor
@@ -120,9 +124,10 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         )
         self.scheduler_config = dict(scheduler_config) if scheduler_config else {}
         self.log_dict_configs = log_dict_configs
+        self.distillation = distillation
 
     def setup(self, stage: str) -> None:
-        """Check the datamodule against the needs of the model.
+        """Check the datamodule against the needs of the model, and set up the distillation.
 
         A streaming model needs a :class:`StreamingDataModule`, which serves the frames of
         every scene in time order to each batch position. The plain DataModule and fitting on
@@ -136,6 +141,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 datamodule, or with one that is not a StreamingDataModule.
         """
         super().setup(stage)
+        if stage == "fit" and self.distillation is not None:
+            self.distillation.setup(self, self.device)
         if not self.requires_streaming:
             return
         datamodule = self.trainer.datamodule
@@ -146,6 +153,16 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 "datamodule must stream scene-contiguous frames; use a StreamingDataModule, "
                 f"got {found}."
             )
+
+    def teardown(self, stage: str) -> None:
+        """Release the hooks the distillation placed on the model.
+
+        Args:
+            stage: Lightning stage being torn down.
+        """
+        super().teardown(stage)
+        if stage == "fit" and self.distillation is not None:
+            self.distillation.teardown()
 
     def transfer_batch_to_device(
         self, batch: ModelGTBatch, device: torch.device, dataloader_idx: int
@@ -166,6 +183,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def on_after_batch_transfer(self, batch: ModelGTBatch, dataloader_idx: int) -> ModelBatchInputs:
         """Apply runtime preprocessing after Lightning moves a batch to device.
 
+        On the splits the distillation runs at, the teacher then runs on the same batch and
+        its outputs ride along as the ``distillation_targets`` of the inputs.
+
         Args:
             batch: Collated batch of type :class:`ModelGTBatch` on the target device.
             dataloader_idx: Lightning dataloader index.
@@ -173,7 +193,29 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         Returns:
             Batch of type :class:`ModelBatchInputs` after runtime preprocessing.
         """
-        return self._data_preprocessor(batch, is_training=self.training)
+        batch_inputs = self._data_preprocessor(batch, is_training=self.training)
+        if self.distillation is not None and self.distillation.active(self._running_split()):
+            batch_inputs = self.distillation.prepare_batch(batch, batch_inputs)
+        return batch_inputs
+
+    def _running_split(self) -> str:
+        """Name the split of the running step: train, val, test or predict.
+
+        Read from the trainer when one is attached, otherwise from the module mode.
+
+        Returns:
+            The split name.
+        """
+        trainer = self._trainer
+        if trainer is None:
+            return SplitType.TRAIN.value if self.training else SplitType.VAL.value
+        if trainer.training:
+            return SplitType.TRAIN.value
+        if trainer.validating or trainer.sanity_checking:
+            return SplitType.VAL.value
+        if trainer.testing:
+            return SplitType.TEST.value
+        return SplitType.PREDICT.value
 
     @abstractmethod
     def decode_outputs(
@@ -260,7 +302,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     ) -> tuple[MappingProxyType[str, Float32[torch.Tensor, " 1"]], ModelOutputs]:
         """
         Core step shared by training, validation, and test. It runs one forward pass,
-        computes metrics, and logs them.
+        computes metrics, adds the distillation terms when the batch carries teacher targets,
+        and logs them.
 
         Args:
             multi_task_batch_inputs: Full batch dictionary from the dataloader.
@@ -274,6 +317,11 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         metrics = self.compute_metrics(multi_task_batch_inputs, outputs)
         if "loss" not in metrics:
             raise ValueError("compute_metrics() must return a dict containing a 'loss' key.")
+        if (
+            self.distillation is not None
+            and multi_task_batch_inputs.distillation_targets is not None
+        ):
+            metrics = self.distillation.compute(multi_task_batch_inputs, outputs, metrics)
         batch_size = self.get_log_batch_size(multi_task_batch_inputs)
         # Step-level logging is training-only, see LogDictConfigs.on_step. Enabling it for
         # val/test would make Lightning suffix the keys (``val/loss_step``/``val/loss_epoch``)
@@ -382,6 +430,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         is configured explicitly through ``scheduler_config``. The framework
         only auto-fills ``total_steps`` when the configured scheduler declares
         that argument and it was not already bound in the scheduler factory.
+        Every trainable parameter must land in a group, see
+        :func:`build_optimizer_param_groups`.
 
         Returns:
             Optimizer instance or Lightning optimizer configuration dictionary.
@@ -397,7 +447,23 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             estimated_stepping_batches=self.trainer.estimated_stepping_batches
             if self._trainer is not None
             else None,
+            extra_groups=self._extra_optimizer_groups(),
         )
+
+    def _extra_optimizer_groups(self) -> dict[str, list[torch.nn.Parameter]]:
+        """Parameter groups the framework adds next to :meth:`build_optimizer_groups`.
+
+        The adapters of the distillation train with the model but are not its own, so a model
+        that groups its parameters structurally does not know them. They form the
+        ``distillation`` group unless the model's groups hold them already.
+
+        Returns:
+            Mapping from group name to parameters, empty without a distillation.
+        """
+        if self.distillation is None:
+            return {}
+        params = [p for p in self.distillation.parameters() if p.requires_grad]
+        return {"distillation": params} if params else {}
 
     def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
         """Build the single-module deployment export specification.

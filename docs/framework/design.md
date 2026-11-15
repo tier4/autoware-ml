@@ -258,6 +258,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
+        distillation: Distillation | None = None,
     ):
         ...
 
@@ -301,6 +302,8 @@ The base class handles:
   additionally per training step when `log_dict_configs` asks for it, and feeds
   `build_eval_output()` into the attached metric suites at validation and test
 - **Predict step** - Runs forward and formats predictions via `decode_outputs()`
+- **Distillation** - Runs the configured teacher on the batch after preprocessing and adds
+  its terms to the loss, see [Knowledge Distillation](../user-guide/distillation.md)
 - **Export contract** - Every model builds its own export specification from the model inputs
 - **Example input** - Collates the first training sample as the example input so the model
   summary reports FLOPs

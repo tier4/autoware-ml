@@ -219,6 +219,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         scheduler_config: Mapping[str, Any] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
         partial_annotations: PartialAnnotations | None = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize StreamPETR.
 
@@ -236,6 +237,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             metrics: Detection metrics accumulated during validation and test.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the head must not supervise in that sample. None supervises every class.
+            **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel`, such as the
+                distillation.
 
         Raises:
             ValueError: If ``partial_annotations`` does not list the classes of the head in
@@ -249,6 +252,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             optimizer_group_overrides=optimizer_group_overrides,
             scheduler_config=scheduler_config,
             metrics=metrics,
+            **kwargs,
         )
         # The attribute keeps the checkpoint keys and the AWML converter prefixes,
         # image_feature_extractor.img_backbone.* and image_feature_extractor.img_neck.*.
