@@ -207,7 +207,7 @@ class TestAV2MotionDatabaseRecords(AV2MotionDatabaseTestCase):
 
     def test_process_scenario_records_writes_one_record_per_scenario(self) -> None:
         """
-        Input: three train, one val and one 50 step test scenario written as real files,
+        Input: three train, one val and one test scenario with its future withheld written as real files,
         processed by two workers with two scenarios per task.
         Expected: the cache file holds one record per scenario in split and id order, every
         record carries a motion struct with its relative tracks path and step count and
@@ -219,7 +219,7 @@ class TestAV2MotionDatabaseRecords(AV2MotionDatabaseTestCase):
         for scenario_id in ("a0", "a1", "a2"):
             write_scenario(root / "train", scenario_id)
         write_scenario(root / "val", "b0")
-        write_scenario(root / "test", "c0", num_steps=50)
+        write_scenario(root / "test", "c0", num_state_steps=50)
         database = _database(
             root,
             self.cache_path,
@@ -235,7 +235,7 @@ class TestAV2MotionDatabaseRecords(AV2MotionDatabaseTestCase):
         self.assertEqual([record.scenario_id for record in records], ["a0", "a1", "a2", "b0", "c0"])
         self.assertTrue(all(record.motion is not None for record in records))
         self.assertEqual(records[0].motion.tracks_relative_path, "train/a0/scenario_a0.parquet")
-        self.assertEqual(records[-1].motion.num_steps, 50)
+        self.assertEqual(records[-1].motion.num_steps, 110)
         self.assertEqual(records[0].lidar_frames, [])
         self.assertIsNone(records[0].boxes_3d)
 

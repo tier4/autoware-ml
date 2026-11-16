@@ -93,19 +93,21 @@ class TestAV2MotionRecordsGenerator(unittest.TestCase):
         self.assertAlmostEqual(motion.step_seconds, 0.1)
         self.assertEqual(motion.num_tracks, 3)
 
-    def test_a_test_split_scenario_ends_at_the_current_step(self) -> None:
+    def test_a_test_split_scenario_keeps_the_full_window(self) -> None:
         """
-        Input: a test split scenario of exactly the observed steps.
-        Expected: the window is the observed steps and the current step is its last one.
+        Input: a test split scenario shaped like the dataset ships it, 110 timestamps with
+        states at the observed steps only.
+        Expected: the window keeps every timestamp, the shape of the other splits, and the
+        current step is the last observed one.
         Check: num_steps, current_step_index and the tracks path under the test split.
         """
-        write_scenario(self.root / "test", "t00", num_steps=OBSERVED_STEPS)
+        write_scenario(self.root / "test", "t00", num_steps=110, num_state_steps=OBSERVED_STEPS)
 
         (record,) = AV2MotionRecordsGenerator(
             self.root, _scenario_data("t00", split="test")
         ).generate_dataset_records()
 
-        self.assertEqual(record.motion.num_steps, OBSERVED_STEPS)
+        self.assertEqual(record.motion.num_steps, 110)
         self.assertEqual(record.motion.current_step_index, OBSERVED_STEPS - 1)
         self.assertEqual(record.motion.tracks_relative_path, "test/t00/scenario_t00.parquet")
 

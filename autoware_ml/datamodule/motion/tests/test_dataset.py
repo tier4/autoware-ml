@@ -61,7 +61,7 @@ def _write_database(tmp_path: Path) -> AV2MotionDatabase:
     for scenario_id in VAL_IDS:
         write_scenario(root / "val", scenario_id)
     for scenario_id in TEST_IDS:
-        write_scenario(root / "test", scenario_id, num_steps=50)
+        write_scenario(root / "test", scenario_id, num_state_steps=50)
     database = AV2MotionDatabase(
         version="AV2MotionForecasting-test-v1.0.0",
         root_path=str(root),
@@ -317,10 +317,10 @@ class TestMotionDataModule(MotionDatasetTestCase):
         Input: a data module over the database with the scenario splitter and loaders of
         batch size 2 without workers.
         Expected: the fit stage serves the two train scenarios in one batch and the val
-        scenario alone, and the test stage serves the three 50 step scenarios as batches of
-        2 and 1 with the current step at 49.
+        scenario alone, and the test stage serves the three test scenarios, 110 steps with the
+        future withheld, as batches of 2 and 1 with the current step at 49.
         Check: the batch sizes, the motion batch shapes, the scene tokens, the padding
-        mask and the current step of the test batch.
+        mask, the current step and the withheld future of the test batch.
         """
         loader = DataLoaderConfig(batch_size=2, num_workers=0)
         datamodule = DataModule(
@@ -354,5 +354,6 @@ class TestMotionDataModule(MotionDatasetTestCase):
         datamodule.setup("test")
         test_batches = list(datamodule.test_dataloader())
         self.assertEqual([batch.batch_size for batch in test_batches], [2, 1])
-        self.assertEqual(test_batches[0].motion_gt_batch.agent_positions.shape, (2, 3, 50, 3))
+        self.assertEqual(test_batches[0].motion_gt_batch.agent_positions.shape, (2, 3, 110, 3))
         self.assertEqual(test_batches[0].motion_gt_batch.current_step_index, 49)
+        self.assertFalse(test_batches[0].motion_gt_batch.agent_valid[:, :, 50:].any().item())

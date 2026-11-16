@@ -170,19 +170,25 @@ class TestAgentTracks(AV2MotionReaderTestCase):
 
     def test_agent_tracks_of_a_test_scenario(self) -> None:
         """
-        Input: a test split scenario of 50 steps, the observed window only.
-        Expected: the reader takes the step count from the file, so a scenario without the
-        future reads as 50 fully valid steps of the focal track.
-        Check: the step count and the valid mask of the focal track.
+        Input: a test split scenario shaped like the dataset ships it, 110 timestamps with
+        states at the first 50 steps only.
+        Expected: the reader takes the step count from the timestamps, so the window has 110
+        steps, the focal track is valid at every observed step, and every agent is invalid
+        after the current step.
+        Check: the step count, the valid mask of the focal track up to the current step, and
+        the valid mask of every agent after it.
         """
-        scenario_path = write_scenario(self.tmp_path / "test", "t00", num_steps=50)
+        scenario_path = write_scenario(
+            self.tmp_path / "test", "t00", num_steps=110, num_state_steps=50
+        )
 
         tracks = AV2MotionReader(_tracks_file(scenario_path)).read_agent_tracks(
             av2_motion_taxonomy(), 49
         )
 
-        self.assertEqual(tracks.num_steps, 50)
-        self.assertTrue(tracks.valid[0].all().item())
+        self.assertEqual(tracks.num_steps, 110)
+        self.assertTrue(tracks.valid[0, :50].all().item())
+        self.assertFalse(tracks.valid[:, 50:].any().item())
 
     def test_agent_tracks_rejects_a_current_step_outside_the_window(self) -> None:
         """
