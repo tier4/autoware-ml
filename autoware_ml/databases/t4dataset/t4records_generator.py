@@ -227,8 +227,19 @@ class T4RecordsGenerator:
             f"sample steps: {self.sample_steps} and max sweeps: {MAX_SWEEPS}"
         )
 
-        for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
-            sample = self.t4_devkit_dataset.sample[sample_index]
+        samples = list(enumerate(self.t4_devkit_dataset.sample))
+        if self.scenario_data.dataset_params.require_semantic_mask:
+            samples = [
+                (sample_index, sample)
+                for sample_index, sample in samples
+                if sample.data[self.lidar_channel] in self.lidarseg_by_sample_data
+            ]
+            if not samples:
+                raise ValueError(
+                    f"Scenario {self.scenario_data.scenario_id} has no semantic masks "
+                    f"for lidar channel {self.lidar_channel.value}."
+                )
+        for sample_index, sample in samples[:: self.sample_steps]:
             t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
             records.append(t4_sample_record.to_dataset_record())
 

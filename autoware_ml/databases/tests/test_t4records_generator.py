@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -138,3 +140,54 @@ def test_the_sweep_window_stops_at_the_scene_start(generator: T4RecordsGenerator
         f"{_SCENE_DIR}/data/LIDAR_TOP/{token}.bin"
         for token in ("frame1", "frame0", "frame2", "frame3")
     ]
+
+
+@pytest.mark.parametrize(
+    ("require_mask", "mask_indices", "sample_steps", "expected_indices"),
+    [
+        (True, [0, 10, 20], 1, [0, 10, 20]),
+        (True, list(range(21)), 1, list(range(21))),
+        (True, [1, 11, 20], 2, [1, 20]),
+        (False, [0, 10, 20], 1, list(range(21))),
+        (False, [], 2, list(range(0, 21, 2))),
+    ],
+)
+def test_mask_selection_preserves_annotation_rates_and_original_indices(
+    generator: T4RecordsGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+    require_mask: bool,
+    mask_indices: list[int],
+    sample_steps: int,
+    expected_indices: list[int],
+) -> None:
+    """The opt-in selects masks before sampling despite incorrect keyframe flags."""
+    params = DatasetParams(
+        dataset_name=_DATASET_NAME,
+        sample_steps=sample_steps,
+        require_semantic_mask=require_mask,
+    )
+    generator.scenario_data = generator.scenario_data.model_copy(update={"dataset_params": params})
+    generator.sample_steps = sample_steps
+    devkit = _ChainDevkit(generator.database_root_path, num_frames=21)
+    devkit.sample = [
+        SimpleNamespace(data={LidarChannel.LIDAR_TOP: f"frame{index}"}) for index in range(21)
+    ]
+    generator.t4_devkit_dataset = devkit
+    generator.lidarseg_by_sample_data = {f"frame{index}": Mock() for index in mask_indices}
+    extract = Mock(
+        side_effect=lambda sample, index: SimpleNamespace(to_dataset_record=lambda: index)
+    )
+    monkeypatch.setattr(generator, "extract_t4_sample_record", extract)
+
+    assert generator.generate_dataset_records() == expected_indices
+    assert extract.call_count == len(expected_indices)
+
+
+def test_a_mask_required_scene_without_masks_raises(generator: T4RecordsGenerator) -> None:
+    """An opted-in scene with no semantic annotations is an error."""
+    params = DatasetParams(dataset_name=_DATASET_NAME, sample_steps=1, require_semantic_mask=True)
+    generator.scenario_data = generator.scenario_data.model_copy(update={"dataset_params": params})
+    generator.t4_devkit_dataset.sample = [SimpleNamespace(data={LidarChannel.LIDAR_TOP: "frame0"})]
+
+    with pytest.raises(ValueError, match="has no semantic masks"):
+        generator.generate_dataset_records()

@@ -50,12 +50,14 @@ class DatasetParams(BaseModel):
     Attributes:
       dataset_name: Name of the dataset.
       sample_steps: Number of steps to sample.
+      require_semantic_mask: Select only samples with a mask for the configured lidar channel.
     """
 
     model_config = ConfigDict(frozen=True, strict=True)
 
     dataset_name: str
     sample_steps: int = Field(ge=1)
+    require_semantic_mask: bool = False
 
     def __str__(self) -> str:
         """String representation of the database version."""
@@ -71,17 +73,23 @@ class DatasetParams(BaseModel):
           str: Content representation of the parameters.
         """
 
+        mask_selection = ", require_semantic_mask=True" if self.require_semantic_mask else ""
         return (
-            f"DatasetParams(dataset_name={self.dataset_name!r}, sample_steps={self.sample_steps})"
+            f"DatasetParams(dataset_name={self.dataset_name!r}, "
+            f"sample_steps={self.sample_steps}{mask_selection})"
         )
 
     def __eq__(self, other: DatasetParams) -> bool:
         """Compare two database versions by their version and settings."""
-        return self.dataset_name == other.dataset_name and self.sample_steps == other.sample_steps
+        return (
+            self.dataset_name == other.dataset_name
+            and self.sample_steps == other.sample_steps
+            and self.require_semantic_mask == other.require_semantic_mask
+        )
 
     def __hash__(self) -> int:
         """Hash the database version by its version and settings."""
-        return hash(str(self))
+        return hash(self.hash_repr)
 
 
 class ScenarioData(BaseModel):

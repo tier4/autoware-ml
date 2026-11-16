@@ -78,6 +78,20 @@ class TestScenarioDataHashRepr(unittest.TestCase):
         self.assertNotEqual(self._scenario(True).hash_repr, self._scenario(False).hash_repr)
         self.assertNotEqual(self._scenario(True).hash_repr, self._scenario(None).hash_repr)
 
+    def test_mask_selection_changes_cached_content_and_parameter_identity(self) -> None:
+        """Filtered and unfiltered records cannot share a content hash."""
+        original = self._scenario(True)
+        params = original.dataset_params.model_copy(update={"require_semantic_mask": True})
+        selected = original.model_copy(update={"dataset_params": params})
+
+        self.assertNotEqual(original.hash_repr, selected.hash_repr)
+        self.assertNotEqual(original.dataset_params, params)
+        self.assertEqual(len({original.dataset_params, params}), 2)
+        self.assertEqual(
+            original.dataset_params.hash_repr,
+            "DatasetParams(dataset_name='db_test', sample_steps=2)",
+        )
+
 
 class TestT4DatabaseHash(unittest.TestCase):
     """Unit tests for the content hash that keys the T4 database cache file."""
