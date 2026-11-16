@@ -87,14 +87,14 @@ class AV2MotionRecordsGenerator:
 
         # The reader is the only module importing the av2 devkit, so it is imported here and
         # a database can be constructed and hashed without it
-        from autoware_ml.databases.argoverse2.av2_motion_reader import read_scenario_metadata
+        from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
 
         scenario_id = self.scenario_data.scenario_id
         for path in (self.tracks_path, self.map_path):
             if not path.is_file():
                 raise ValueError(f"Scenario {scenario_id} is missing its file {path}.")
 
-        metadata = read_scenario_metadata(self.tracks_path)
+        metadata = AV2MotionReader(self.tracks_path).read_metadata()
         if metadata.scenario_id != scenario_id:
             raise ValueError(
                 f"The tracks file {self.tracks_path} belongs to scenario "
