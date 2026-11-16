@@ -110,6 +110,7 @@ def box_footprints_map(boxes: np.ndarray, ego2global: Any) -> np.ndarray:
     heights = np.repeat(boxes[:, 2], corners.shape[1])
     corners3 = np.column_stack([corners.reshape(-1, 2), heights])
     map_xy = _to_map_xy(corners3, ego2global).reshape(corners.shape)
+    # TODO: remove this shapely operation to speed up the evaluation.
     return shapely.polygons(map_xy)
 
 
@@ -372,6 +373,7 @@ class CorridorFilter(MetricFilter):
         far = float(corners[:, :, 0].max())
         if far <= 0.0:
             return np.zeros(boxes.shape[0], dtype=bool)
+        # TODO: remove this shapely operation to speed up the evaluation.
         strip = shapely.box(0.0, -half_width, far, half_width)
         footprints = shapely.polygons(corners)
         return np.asarray(shapely.intersects(strip, footprints), dtype=bool)
@@ -444,6 +446,7 @@ class CollisionFilter(MetricFilter):
         drivable = localized_surface(ego, self.params, lanelet_map.region_union(self.region))
         region = wheeled_reachable_region(ego, self.params, drivable)
         if not region.is_empty:
+            # TODO: remove this shapely operation to speed up the evaluation.
             shapely.prepare(region)
         return region
 
@@ -473,6 +476,7 @@ class CollisionFilter(MetricFilter):
         if region.is_empty:
             return np.zeros(points.shape[0], dtype=bool)
         map_xy = _to_map_xy(points, frame_meta.ego2global)
+        # TODO: remove this shapely operation to speed up the evaluation.
         map_points = shapely.points(map_xy[:, 0], map_xy[:, 1])
         return np.asarray(shapely.contains(region, map_points), dtype=bool)
 
@@ -498,6 +502,7 @@ class CollisionFilter(MetricFilter):
         if region.is_empty:
             return np.zeros(boxes.shape[0], dtype=bool)
         footprints = box_footprints_map(boxes, frame_meta.ego2global)
+        # TODO: remove this shapely operation to speed up the evaluation.
         return np.asarray(shapely.intersects(region, footprints), dtype=bool)
 
     def available(self, frame_meta: FrameMetaSample | None) -> bool:
