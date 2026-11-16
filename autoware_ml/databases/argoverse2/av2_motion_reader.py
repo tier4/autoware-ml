@@ -22,9 +22,10 @@ the city frame of the scenario.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import cached_property
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import NamedTuple
 
 import numpy as np
 import torch

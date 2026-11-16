@@ -21,7 +21,8 @@ the format of the files.
 
 from __future__ import annotations
 
-from typing import NamedTuple, Sequence
+from collections.abc import Sequence
+from typing import NamedTuple
 
 from jaxtyping import Bool, Float32, Int64
 from torch import Tensor

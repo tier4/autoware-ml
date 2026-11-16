@@ -23,9 +23,10 @@ the builders, so a test module can skip when it is absent.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -99,14 +100,14 @@ def write_scenario(
       Path: The scenario directory.
     """
 
-    from av2.datasets.motion_forecasting.data_schema import (
+    from av2.datasets.motion_forecasting.data_schema import (  # noqa: PLC0415
         ArgoverseScenario,
         ObjectState,
         ObjectType,
         Track,
         TrackCategory,
     )
-    from av2.datasets.motion_forecasting.scenario_serialization import (
+    from av2.datasets.motion_forecasting.scenario_serialization import (  # noqa: PLC0415
         serialize_argoverse_scenario_parquet,
     )
 
