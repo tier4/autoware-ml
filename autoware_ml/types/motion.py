@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Enumerations of the agent roles and the map polyline kinds of the motion task."""
 
 from enum import IntEnum
 
