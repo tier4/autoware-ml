@@ -221,12 +221,12 @@ between them can declare that split instead, with two methods: `deployment_graph
 returns its `DeploymentGraph`s (one exported module each, named after the graph, with
 the tensor names it takes and returns), and
 `deployment_forward(multi_task_batch_inputs, graphs)` runs the deployed inference on
-the preprocessed batch `forward()` takes, the glue in plain code and each graph called as
-`graphs[name](input_name=tensor)`. `build_export_specs()` then runs that function
+the preprocessed batch `forward()` takes, the glue in plain code and each graph run as
+`graphs[name].run(input_name=tensor)`. `build_export_specs()` then runs that function
 once on the example batch in eval mode and returns one export spec per
 `DeploymentGraph`, traced on the tensors the function passed it. Every declared graph
-is called exactly once, and a graph's inputs must not be modified in place after
-the call, since export traces the graph on them; the run rejects a function that
+runs exactly once, and a graph's inputs must not be modified in place after
+the run, since export traces the graph on them; the run rejects a function that
 breaks either rule. The model outputs are what `deployment_forward()` returns. Each
 `DeploymentGraph` module is export-ready as declared, the live submodule or the copy
 its `prepare_for_export()` makes; the framework never alters it, and it declares

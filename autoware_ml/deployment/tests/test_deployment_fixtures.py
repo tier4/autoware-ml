@@ -44,13 +44,15 @@ class _TwoStepModel(nn.Module):
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
         return (
-            DeploymentGraph("linear", module=self.linear, inputs=("scaled",), outputs=("logits",)),
+            DeploymentGraph(
+                "linear", module=self.linear, input_names=("scaled",), output_names=("logits",)
+            ),
         )
 
     def deployment_forward(
         self, multi_task_batch_inputs: Float32[torch.Tensor, "batch_size 3"], graphs: Graphs
     ) -> Mapping[str, Float32[torch.Tensor, "batch_size channels"]]:
-        return graphs["linear"](scaled=multi_task_batch_inputs * self.graph_scale)
+        return graphs["linear"].run(scaled=multi_task_batch_inputs * self.graph_scale)
 
     def deployment_declaration(self) -> DeploymentDeclaration:
         return DeploymentDeclaration(tuple(self.deployment_graphs()), self.deployment_forward)
