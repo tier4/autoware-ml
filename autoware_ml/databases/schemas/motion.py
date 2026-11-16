@@ -25,8 +25,9 @@ records and resolves the map of the scene through its map provider.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
