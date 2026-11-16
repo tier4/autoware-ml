@@ -24,8 +24,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import NamedTuple
 
-from jaxtyping import Bool, Float32, Int64
 import torch
+from jaxtyping import Bool, Float32, Int64, Shaped
 from torch import Tensor
 
 from autoware_ml.types.dataset import DatasetFormat
@@ -151,17 +151,21 @@ class MotionGTSample(NamedTuple):
     map_polylines: MapPolylinesSample | None = None
 
 
-def _pad_rows(tensor: Tensor, num_rows: int, fill: float | int | bool) -> Tensor:
+def _pad_rows(
+    tensor: Shaped[Tensor, " num_input_rows *rest"],
+    num_rows: int,
+    fill: float | int | bool,
+) -> Shaped[Tensor, " num_rows *rest"]:
     """
     Pad the first dimension of a tensor up to a row count.
 
     Args:
-      tensor: Tensor to pad.
+      tensor: Tensor to pad, of any dtype; the trailing dimensions are kept.
       num_rows: Row count to pad to, at least the rows of the tensor.
       fill: Value of the padded rows.
 
     Returns:
-      Tensor: The padded tensor.
+      Shaped[Tensor, " num_rows *rest"]: The padded tensor, of the dtype of the input.
     """
 
     padding = num_rows - tensor.shape[0]
