@@ -16,12 +16,15 @@
 
 from __future__ import annotations
 
-from typing import Any
 import unittest
+from typing import Any
 
 import polars as pl
 
-from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord, DatasetTableSchema
+from autoware_ml.databases.schemas.dataset_schemas import (
+    DatasetRecord,
+    DatasetTableSchema,
+)
 from autoware_ml.databases.schemas.motion import MotionDataModel, MotionDatasetSchema
 from autoware_ml.types.dataset import DatasetFormat
 
@@ -250,7 +253,7 @@ class TestMotionValidation(unittest.TestCase):
     def test_motion_is_strict_about_the_format_enum(self) -> None:
         """
         Input: the model built with the string "av2" and a dictionary naming the unknown format
-        "womd".
+        "foo".
         Expected: the model itself takes the enum and only load_from_dictionary decodes the
         stored string, so a stray string or an unknown format fails loudly.
         Check: ValueError from the constructor and from load_from_dictionary.
@@ -259,5 +262,5 @@ class TestMotionValidation(unittest.TestCase):
             _motion(dataset_format="av2")
         with self.assertRaises(ValueError):
             MotionDataModel.load_from_dictionary(
-                _motion().to_dictionary() | {"dataset_format": "womd"}
+                _motion().to_dictionary() | {"dataset_format": "foo"}
             )
