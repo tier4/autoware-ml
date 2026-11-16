@@ -90,12 +90,10 @@ class LoadAgentTracks(BaseTransform):
         """
 
         if source.dataset_format is DatasetFormat.AV2:
-            from autoware_ml.databases.argoverse2.av2_motion_reader import (
-                read_agent_tracks,
-            )
+            from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
 
-            return read_agent_tracks(
-                Path(source.tracks_path), self.taxonomy, source.current_step_index
+            return AV2MotionReader(Path(source.tracks_path)).read_agent_tracks(
+                self.taxonomy, source.current_step_index
             )
         raise ValueError(f"No tracks reader for the {source.dataset_format.value} format.")
 
@@ -172,33 +170,30 @@ class LoadVectorMap(BaseTransform):
             raise ValueError(
                 f"{self.__class__.__name__}: the scenario of {source.tracks_path} has no map."
             )
-        map_polylines = self._read(source.dataset_format, source.map_path)
+        map_polylines = self._read(source)
         motion_gt_sample = model_gt_sample.motion_gt_sample._replace(map_polylines=map_polylines)
         return model_gt_sample._replace(motion_gt_sample=motion_gt_sample)
 
-    def _read(self, dataset_format: DatasetFormat, map_path: str) -> MapPolylinesSample:
+    def _read(self, source: MotionSourceSample) -> MapPolylinesSample:
         """
-        Read a map file with the reader of its dataset format.
+        Read the map of a scenario with the reader of its dataset format.
 
         Args:
-          dataset_format: Dataset format of the scenario.
-          map_path: Path of the file.
+          source: Source of the scenario, naming its map file.
 
         Returns:
           MapPolylinesSample: The polylines of the map.
         """
 
-        if dataset_format is DatasetFormat.AV2:
-            from autoware_ml.databases.argoverse2.av2_motion_reader import (
-                read_vector_map,
-            )
+        if source.dataset_format is DatasetFormat.AV2:
+            from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
 
-            return read_vector_map(
-                Path(map_path),
+            reader = AV2MotionReader(Path(source.tracks_path), Path(source.map_path))
+            return reader.read_vector_map(
                 num_points_per_polyline=self.num_points_per_polyline,
                 polyline_types=self.polyline_types,
             )
-        raise ValueError(f"No map reader for the {dataset_format.value} format.")
+        raise ValueError(f"No map reader for the {source.dataset_format.value} format.")
 
     def __repr__(self) -> str:
         """Return a string representation of the transform."""
