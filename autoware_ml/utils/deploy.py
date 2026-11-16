@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import inspect
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import hydra
 import lightning as L
@@ -39,6 +39,9 @@ from torch.export import Dim
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.ops.segment.scatter_reduce import register_scatter_reduce_onnx_symbolic
+
+if TYPE_CHECKING:
+    import tensorrt as trt
 
 logger = logging.getLogger(__name__)
 
@@ -414,8 +417,11 @@ def parse_onnx_file(parser: Any, onnx_path: Path) -> None:
 
 
 def create_optimization_profile(
-    builder: Any, tensorrt_cfg: DictConfig, network: Any, module_name: str
-) -> Any | None:
+    builder: trt.Builder,
+    tensorrt_cfg: DictConfig,
+    network: trt.INetworkDefinition,
+    module_name: str,
+) -> trt.IOptimizationProfile | None:
     """Create the optimization profile of ``network`` from its module's ``input_shapes``.
 
     The shapes live under ``deploy.tensorrt.modules.<module_name>.input_shapes``, keyed by
@@ -456,9 +462,9 @@ def create_optimization_profile(
     missing = []
     for tensor in inputs:
         shapes = input_shapes.get(tensor.name)
+        if shapes is None and -1 in tuple(tensor.shape):
+            missing.append(tensor.name)
         if shapes is None:
-            if -1 in tuple(tensor.shape):
-                missing.append(tensor.name)
             continue
         min_shape = shapes.get("min_shape")
         opt_shape = shapes.get("opt_shape")
