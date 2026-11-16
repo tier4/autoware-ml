@@ -22,7 +22,9 @@ import torch
 
 from autoware_ml.dataclasses.batch.motion import (
     PADDED_INDEX,
+    AgentTracksBatch,
     AgentTracksSample,
+    MapPolylinesBatch,
     MapPolylinesSample,
     MotionGTBatch,
     MotionGTSample,
@@ -100,6 +102,42 @@ class TestAgentTracksSample(unittest.TestCase):
         self.assertIsNone(tracks._replace(sizes=None).sizes)
 
 
+class TestAgentTracksBatch(unittest.TestCase):
+    """The agent tracks batch collates the tracks of the scenarios on its own."""
+
+    def test_collate_pads_the_agents_of_the_tracks(self) -> None:
+        """
+        Input: agent tracks of one and of two agents, collated without a GT sample around them.
+        Expected: the tracks are padded to two agents per scenario, and the mask and the batch
+        size follow the scenarios.
+        Check: batch_size, the position shape, the mask and the padded role.
+        """
+        batch = AgentTracksBatch.collate([_tracks(num_agents=1), _tracks(num_agents=2)])
+
+        self.assertEqual(batch.batch_size, 2)
+        self.assertEqual(batch.positions.shape, (2, 2, 5, 3))
+        self.assertEqual(batch.mask.tolist(), [[True, False], [True, True]])
+        self.assertEqual(batch.agent_roles[0, 1].item(), PADDED_INDEX)
+
+
+class TestMapPolylinesBatch(unittest.TestCase):
+    """The map polylines batch collates the vector maps of the scenarios on its own."""
+
+    def test_collate_pads_the_polylines_of_the_maps(self) -> None:
+        """
+        Input: maps of two and of one polyline, collated without a GT sample around them.
+        Expected: the maps are padded to two polylines per scenario with the padded type.
+        Check: the point shape, the mask and the padded polyline type.
+        """
+        batch = MapPolylinesBatch.collate(
+            [_polylines(num_polylines=2), _polylines(num_polylines=1)]
+        )
+
+        self.assertEqual(batch.points.shape, (2, 2, 4, 3))
+        self.assertEqual(batch.mask.tolist(), [[True, True], [True, False]])
+        self.assertEqual(batch.polyline_types[1, 1].item(), PADDED_INDEX)
+
+
 class TestMotionGTBatch(unittest.TestCase):
     """The GT batch pads the samples to the widest one and masks the padding."""
 
@@ -119,22 +157,22 @@ class TestMotionGTBatch(unittest.TestCase):
 
         self.assertIsNotNone(batch)
         self.assertEqual(batch.batch_size, 2)
-        self.assertEqual(batch.agent_positions.shape, (2, 3, 5, 3))
-        self.assertEqual(batch.agent_headings.shape, (2, 3, 5))
-        self.assertEqual(batch.agent_velocities.shape, (2, 3, 5, 2))
-        self.assertEqual(batch.agent_valid.shape, (2, 3, 5))
-        self.assertEqual(batch.agent_mask.tolist(), [[True, False, False], [True, True, True]])
-        self.assertTrue(batch.agent_positions[0, 0].eq(1.0).all().item())
-        self.assertTrue(batch.agent_positions[0, 1:].eq(0.0).all().item())
-        self.assertFalse(batch.agent_valid[0, 1:].any().item())
-        self.assertTrue(batch.agent_valid[0, 0].all().item())
-        self.assertEqual(batch.agent_types[0].tolist(), [0, -1, -1])
-        self.assertEqual(batch.agent_roles[0].tolist(), [0, PADDED_INDEX, PADDED_INDEX])
-        self.assertEqual(batch.track_ids, [["0"], ["0", "1", "2"]])
-        self.assertEqual(batch.current_step_index, 2)
-        self.assertEqual(batch.step_seconds, 0.1)
-        self.assertEqual(batch.ignore_index, -1)
-        self.assertIsNone(batch.agent_sizes)
+        self.assertEqual(batch.agents.positions.shape, (2, 3, 5, 3))
+        self.assertEqual(batch.agents.headings.shape, (2, 3, 5))
+        self.assertEqual(batch.agents.velocities.shape, (2, 3, 5, 2))
+        self.assertEqual(batch.agents.valid.shape, (2, 3, 5))
+        self.assertEqual(batch.agents.mask.tolist(), [[True, False, False], [True, True, True]])
+        self.assertTrue(batch.agents.positions[0, 0].eq(1.0).all().item())
+        self.assertTrue(batch.agents.positions[0, 1:].eq(0.0).all().item())
+        self.assertFalse(batch.agents.valid[0, 1:].any().item())
+        self.assertTrue(batch.agents.valid[0, 0].all().item())
+        self.assertEqual(batch.agents.agent_types[0].tolist(), [0, -1, -1])
+        self.assertEqual(batch.agents.agent_roles[0].tolist(), [0, PADDED_INDEX, PADDED_INDEX])
+        self.assertEqual(batch.agents.track_ids, [["0"], ["0", "1", "2"]])
+        self.assertEqual(batch.agents.current_step_index, 2)
+        self.assertEqual(batch.agents.step_seconds, 0.1)
+        self.assertEqual(batch.agents.ignore_index, -1)
+        self.assertIsNone(batch.agents.sizes)
 
     def test_collate_pads_the_polylines_and_masks_the_padding(self) -> None:
         """
@@ -150,29 +188,31 @@ class TestMotionGTBatch(unittest.TestCase):
 
         self.assertIsNotNone(batch)
         self.assertTrue(batch.has_map)
-        self.assertEqual(batch.map_points.shape, (2, 3, 4, 3))
-        self.assertEqual(batch.map_valid.shape, (2, 3, 4))
-        self.assertEqual(batch.polyline_mask.tolist(), [[True, False, False], [True, True, True]])
-        self.assertFalse(batch.map_valid[0, 1:].any().item())
-        self.assertTrue(batch.map_points[0, 1:].eq(0.0).all().item())
-        self.assertEqual(batch.map_polyline_types[0].tolist(), [0, PADDED_INDEX, PADDED_INDEX])
-        self.assertEqual(batch.map_polyline_types[1].tolist(), [0, 1, 2])
-        self.assertEqual(batch.map_is_intersection[0].tolist(), [True, False, False])
-        self.assertEqual(batch.element_ids, [["0"], ["0", "1", "2"]])
+        self.assertEqual(batch.map_polylines.points.shape, (2, 3, 4, 3))
+        self.assertEqual(batch.map_polylines.valid.shape, (2, 3, 4))
+        self.assertEqual(
+            batch.map_polylines.mask.tolist(), [[True, False, False], [True, True, True]]
+        )
+        self.assertFalse(batch.map_polylines.valid[0, 1:].any().item())
+        self.assertTrue(batch.map_polylines.points[0, 1:].eq(0.0).all().item())
+        self.assertEqual(
+            batch.map_polylines.polyline_types[0].tolist(), [0, PADDED_INDEX, PADDED_INDEX]
+        )
+        self.assertEqual(batch.map_polylines.polyline_types[1].tolist(), [0, 1, 2])
+        self.assertEqual(batch.map_polylines.is_intersection[0].tolist(), [True, False, False])
+        self.assertEqual(batch.map_polylines.element_ids, [["0"], ["0", "1", "2"]])
 
     def test_collate_without_maps_leaves_them_none(self) -> None:
         """
         Input: two samples without a vector map.
-        Expected: the batch has no map and every map field is None.
-        Check: has_map, map_points, polyline_mask and element_ids.
+        Expected: the batch has no map, so the whole map batch is None.
+        Check: has_map and map_polylines.
         """
         batch = MotionGTBatch.collate_gt_samples([_sample(num_polylines=None)] * 2)
 
         self.assertIsNotNone(batch)
         self.assertFalse(batch.has_map)
-        self.assertIsNone(batch.map_points)
-        self.assertIsNone(batch.polyline_mask)
-        self.assertIsNone(batch.element_ids)
+        self.assertIsNone(batch.map_polylines)
 
     def test_collate_stacks_the_sizes_when_every_sample_carries_them(self) -> None:
         """
@@ -190,8 +230,8 @@ class TestMotionGTBatch(unittest.TestCase):
         )
 
         self.assertIsNotNone(batch)
-        self.assertEqual(batch.agent_sizes.shape, (2, 3, 3))
-        self.assertEqual(batch.agent_sizes[0, 2].tolist(), [0.0, 0.0, 0.0])
+        self.assertEqual(batch.agents.sizes.shape, (2, 3, 3))
+        self.assertEqual(batch.agents.sizes[0, 2].tolist(), [0.0, 0.0, 0.0])
         with self.assertRaisesRegex(ValueError, "agent sizes"):
             MotionGTBatch.collate_gt_samples([with_sizes, _sample()])
 
@@ -230,18 +270,18 @@ class TestMotionGTBatch(unittest.TestCase):
         Input: a batch with sizes and a map, and a batch without a map, moved to the CPU.
         Expected: every tensor field lands on the device, the python fields are kept, and a
         None map stays None.
-        Check: the device of the agent, size and map tensors, the track ids and the map
-        points of the batch without a map.
+        Check: the device of the agent, size and map tensors, the track ids and the map of
+        the batch without a map.
         """
         batch = MotionGTBatch.collate_gt_samples([_sample(sizes=torch.ones(2, 3))])
         self.assertIsNotNone(batch)
 
         moved = batch.to_device(torch.device("cpu"))
 
-        self.assertEqual(moved.agent_positions.device.type, "cpu")
-        self.assertEqual(moved.agent_sizes.device.type, "cpu")
-        self.assertEqual(moved.map_points.device.type, "cpu")
-        self.assertEqual(moved.polyline_mask.device.type, "cpu")
-        self.assertEqual(moved.track_ids, batch.track_ids)
+        self.assertEqual(moved.agents.positions.device.type, "cpu")
+        self.assertEqual(moved.agents.sizes.device.type, "cpu")
+        self.assertEqual(moved.map_polylines.points.device.type, "cpu")
+        self.assertEqual(moved.map_polylines.mask.device.type, "cpu")
+        self.assertEqual(moved.agents.track_ids, batch.agents.track_ids)
         without_map = MotionGTBatch.collate_gt_samples([_sample(num_polylines=None)])
-        self.assertIsNone(without_map.to_device(torch.device("cpu")).map_points)
+        self.assertIsNone(without_map.to_device(torch.device("cpu")).map_polylines)

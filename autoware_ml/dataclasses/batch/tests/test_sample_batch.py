@@ -519,8 +519,8 @@ class TestModelGTBatchMotionCollation(unittest.TestCase):
 
         assert batch is not None
         self.assertEqual(batch.batch_size, 2)
-        self.assertEqual(batch.agent_mask.tolist(), [[True, False], [True, True]])
-        self.assertEqual(batch.track_ids, [["0"], ["0", "1"]])
+        self.assertEqual(batch.agents.mask.tolist(), [[True, False], [True, True]])
+        self.assertEqual(batch.agents.track_ids, [["0"], ["0", "1"]])
 
     def test_collate_without_any_scenario_leaves_it_none(self) -> None:
         self.assertIsNone(self._collate([self._build_sample(None), self._build_sample(None)]))
@@ -536,7 +536,7 @@ class TestModelGTBatchMotionCollation(unittest.TestCase):
             gt_samples=[self._build_sample(1)], max_num_3d_gt_bboxes=None, max_num_2d_gt_bboxes=None
         )
         moved = batch.to_device(torch.device("cpu"))
-        self.assertEqual(moved.motion_gt_batch.agent_positions.device.type, "cpu")
+        self.assertEqual(moved.motion_gt_batch.agents.positions.device.type, "cpu")
 
         empty = ModelGTBatch.collate_gt_samples(
             gt_samples=[self._build_sample(None)],
