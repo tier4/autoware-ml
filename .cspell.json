@@ -90,6 +90,7 @@
     "capsys",
     "cdist",
     "centerhead",
+    "centerness",
     "cgroupfs",
     "charliermarsh",
     "checkpointed",
