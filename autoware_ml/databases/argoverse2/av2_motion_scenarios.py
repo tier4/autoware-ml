@@ -23,11 +23,11 @@ stay compact: a digest of the scenario ids instead of a listing.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Mapping, Sequence
 
 from pydantic import model_validator
 
