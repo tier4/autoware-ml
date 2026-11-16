@@ -26,11 +26,11 @@ class QualityFocalLoss(nn.Module):
     """Quality focal loss over sigmoid logits with IoU-quality targets.
 
     A positive is supervised toward the IoU between its predicted and its assigned box
-    instead of a hard 1, following Generalized Focal Loss: its class term is
-    ``BCE(logit, q) * |q - sigmoid(logit)|^beta``, every other term ``BCE(logit, 0) *
-    sigmoid(logit)^beta``.
+    instead of a hard 1, following Generalized Focal Loss. Every score of every query is one
+    binary term ``BCE(logit, t) * |t - sigmoid(logit)|^beta`` whose target ``t`` is the
+    quality on the class a positive is assigned to and 0 everywhere else.
 
-    The loss takes float32 logits and qualities: in bfloat16 the gap ``|q - sigmoid(logit)|``
+    The loss takes float32 logits and qualities: in bfloat16 the gap ``|t - sigmoid(logit)|``
     of a positive scored within 1/256 of its quality rounds to 0 and the positive gets no
     gradient, so a head training under autocast casts its logits first.
     """
@@ -79,25 +79,13 @@ class QualityFocalLoss(nn.Module):
                     f"QualityFocalLoss takes float32 {name}, got {tensor.dtype}; cast them in "
                     "the head, under autocast its logits are half precision."
                 )
-        num_classes = logits.size(1)
-        prob = logits.sigmoid()
-        # Every term starts as background: target 0 modulated by sigmoid(logit)^beta.
-        loss = F.binary_cross_entropy_with_logits(
-            logits, torch.zeros_like(logits), reduction="none"
-        ) * prob.pow(self.beta)
-
-        positive = (labels >= 0) & (labels < num_classes)
-        pos_inds = torch.nonzero(positive, as_tuple=False).squeeze(-1)
-        if pos_inds.numel() > 0:
-            pos_labels = labels[pos_inds].long()
-            quality = quality_scores[pos_inds]
-            gap = (quality - prob[pos_inds, pos_labels]).abs().pow(self.beta)
-            loss[pos_inds, pos_labels] = (
-                F.binary_cross_entropy_with_logits(
-                    logits[pos_inds, pos_labels], quality, reduction="none"
-                )
-                * gap
-            )
+        class_ids = torch.arange(logits.size(1), device=logits.device)
+        # A background label (num_classes or negative) matches no class, so its row is all 0.
+        # The quality is selected, not multiplied in, so a background query's value is never read.
+        targets = torch.where(labels[:, None] == class_ids, quality_scores[:, None], 0.0)
+        loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none") * (
+            targets - logits.sigmoid()
+        ).abs().pow(self.beta)
         if weights is not None:
             loss = loss * weights
         return loss.sum() / avg_factor

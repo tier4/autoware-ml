@@ -164,6 +164,26 @@ class TestQualityFocalLoss(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "float32 quality_scores"):
                     self.loss_fn(self.logits, self.labels, self.quality.to(dtype), avg_factor=1.0)
 
+    def test_the_quality_of_a_background_query_is_not_read(self) -> None:
+        """
+        Input: the four queries with a NaN quality on both background queries, as the IoU of an
+        all-zero target box can be.
+        Expected: a background query targets 0 on every class whatever its quality holds.
+        Check: the loss and the gradient of every logit against those of the finite qualities.
+        """
+        quality = self.quality.clone()
+        quality[self.labels.eq(3) | self.labels.lt(0)] = float("nan")
+        logits = self.logits.clone().requires_grad_()
+        reference_logits = self.logits.clone().requires_grad_()
+
+        loss = self.loss_fn(logits, self.labels, quality, avg_factor=1.0)
+        reference = self.loss_fn(reference_logits, self.labels, self.quality, avg_factor=1.0)
+        loss.backward()
+        reference.backward()
+
+        torch.testing.assert_close(loss, reference)
+        torch.testing.assert_close(logits.grad, reference_logits.grad)
+
 
 if __name__ == "__main__":
     unittest.main()
