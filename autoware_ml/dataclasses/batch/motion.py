@@ -41,11 +41,12 @@ class AgentTracksSample(NamedTuple):
     scenario.
     """
 
-    # (A, T, 3), position of every agent at every step
+    # (A, T, 3), (x, y, z) position of every agent at every step; z is zero for a source that
+    # records planar positions only (Argoverse 2)
     positions: Float32[Tensor, "num_agents num_steps 3"]
     # (A, T), heading of every agent at every step in radians
     headings: Float32[Tensor, "num_agents num_steps"]
-    # (A, T), planar velocity of every agent at every step in meters per second
+    # (A, T, 2), planar (vx, vy) velocity of every agent at every step in meters per second
     velocities: Float32[Tensor, "num_agents num_steps 2"]
     # (A, T), whether the agent was observed at the step
     valid: Bool[Tensor, "num_agents num_steps"]

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the readers of the Argoverse 2 Motion Forecasting files."""
+"""Tests for the reader of the Argoverse 2 Motion Forecasting files."""
 
 from __future__ import annotations
 
@@ -28,9 +28,7 @@ if importlib.util.find_spec("av2") is None:
     raise unittest.SkipTest("the av2 devkit is not installed")
 
 from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: E402
-    read_agent_tracks,
-    read_scenario_metadata,
-    read_vector_map,
+    AV2MotionReader,
     step_seconds_of,
 )
 from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
@@ -62,6 +60,10 @@ class AV2MotionReaderTestCase(unittest.TestCase):
         self.tmp_path = Path(self._tmp_dir.name)
         self.scenario_path = write_scenario(self.tmp_path / "train", "abc")
 
+    def reader(self) -> AV2MotionReader:
+        """Reader of the tracks and the map of the synthetic scenario "abc"."""
+        return AV2MotionReader(_tracks_file(self.scenario_path), _map_file(self.scenario_path))
+
 
 class TestScenarioMetadata(AV2MotionReaderTestCase):
     """The scenario metadata is read from the tracks file alone."""
@@ -73,7 +75,7 @@ class TestScenarioMetadata(AV2MotionReaderTestCase):
         and tracks, and derives the step period and the timestamps from the time axis.
         Check: every metadata field, the period and the first and fiftieth timestamps.
         """
-        metadata = read_scenario_metadata(_tracks_file(self.scenario_path))
+        metadata = self.reader().read_metadata()
 
         self.assertEqual(metadata.scenario_id, "abc")
         self.assertEqual(metadata.city, CITY)
@@ -107,7 +109,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         Check: the agent and step counts, the tensor shapes and dtypes, the track id order,
         the current step, the period, the ignore index and the absent sizes.
         """
-        tracks = read_agent_tracks(_tracks_file(self.scenario_path), av2_motion_taxonomy(), 49)
+        tracks = self.reader().read_agent_tracks(av2_motion_taxonomy(), 49)
 
         self.assertEqual(tracks.num_agents, 3)
         self.assertEqual(tracks.num_steps, 110)
@@ -137,7 +139,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         Check: the valid masks, sampled positions, velocities and headings, and the type and
         role of every track.
         """
-        tracks = read_agent_tracks(_tracks_file(self.scenario_path), av2_motion_taxonomy(), 49)
+        tracks = self.reader().read_agent_tracks(av2_motion_taxonomy(), 49)
         walker = tracks.track_ids.index("walker")
         cone = tracks.track_ids.index("cone")
 
@@ -167,7 +169,9 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         """
         scenario_path = write_scenario(self.tmp_path / "test", "t00", num_steps=50)
 
-        tracks = read_agent_tracks(_tracks_file(scenario_path), av2_motion_taxonomy(), 49)
+        tracks = AV2MotionReader(_tracks_file(scenario_path)).read_agent_tracks(
+            av2_motion_taxonomy(), 49
+        )
 
         self.assertEqual(tracks.num_steps, 50)
         self.assertTrue(tracks.valid[0].all().item())
@@ -179,7 +183,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         Check: ValueError naming the window bounds.
         """
         with self.assertRaisesRegex(ValueError, "current_step_index must lie in \\[0, 110\\)"):
-            read_agent_tracks(_tracks_file(self.scenario_path), av2_motion_taxonomy(), 110)
+            self.reader().read_agent_tracks(av2_motion_taxonomy(), 110)
 
     def test_agent_tracks_rejects_an_unlisted_object_type(self) -> None:
         """
@@ -203,7 +207,7 @@ class TestAgentTracks(AV2MotionReaderTestCase):
         )
 
         with self.assertRaisesRegex(KeyError, "'bus' is not listed in the vocabulary"):
-            read_agent_tracks(_tracks_file(scenario_path), narrowed, 49)
+            AV2MotionReader(_tracks_file(scenario_path)).read_agent_tracks(narrowed, 49)
 
 
 class TestVectorMap(AV2MotionReaderTestCase):
@@ -220,7 +224,7 @@ class TestVectorMap(AV2MotionReaderTestCase):
         Check: the counts, shapes and dtype, the type, id and intersection lists, the sampled
         coordinates of the lane and the crossing, and the first and last boundary point.
         """
-        polylines = read_vector_map(_map_file(self.scenario_path), num_points_per_polyline=5)
+        polylines = self.reader().read_vector_map(num_points_per_polyline=5)
 
         self.assertEqual(polylines.num_polylines, 6)
         self.assertEqual(polylines.num_points_per_polyline, 5)
@@ -258,8 +262,7 @@ class TestVectorMap(AV2MotionReaderTestCase):
         Expected: the other polylines are left out and the kept ones keep the file order.
         Check: the type list and the points shape.
         """
-        polylines = read_vector_map(
-            _map_file(self.scenario_path),
+        polylines = self.reader().read_vector_map(
             num_points_per_polyline=4,
             polyline_types=[PolylineType.LANE_CENTERLINE, PolylineType.CROSSWALK_EDGE],
         )
@@ -274,7 +277,7 @@ class TestVectorMap(AV2MotionReaderTestCase):
         resampling, so a batch can still stack it.
         Check: the polyline count, the shapes of every tensor and the empty id list.
         """
-        polylines = read_vector_map(_map_file(self.scenario_path), polyline_types=[])
+        polylines = self.reader().read_vector_map(polyline_types=[])
 
         self.assertEqual(polylines.num_polylines, 0)
         self.assertEqual(polylines.points.shape, (0, 20, 3))
@@ -289,4 +292,38 @@ class TestVectorMap(AV2MotionReaderTestCase):
         Check: ValueError naming the minimum.
         """
         with self.assertRaisesRegex(ValueError, "num_points_per_polyline must be at least 2"):
-            read_vector_map(_map_file(self.scenario_path), num_points_per_polyline=1)
+            self.reader().read_vector_map(num_points_per_polyline=1)
+
+    def test_vector_map_rejects_a_reader_without_a_map(self) -> None:
+        """
+        Input: a reader given the tracks file of the synthetic scenario only.
+        Expected: the tracks stay readable but the map cannot be read without its file.
+        Check: the metadata is read and ValueError names the missing map file.
+        """
+        reader = AV2MotionReader(_tracks_file(self.scenario_path))
+
+        self.assertEqual(reader.read_metadata().scenario_id, "abc")
+        with self.assertRaisesRegex(ValueError, "was given no map file"):
+            reader.read_vector_map()
+
+
+class TestReaderCaching(AV2MotionReaderTestCase):
+    """The reader parses each file of the scenario at most once."""
+
+    def test_files_are_parsed_once(self) -> None:
+        """
+        Input: one reader asked for the metadata, the agent tracks and the vector map twice.
+        Expected: the parsed scenario and map are kept on the reader and reused.
+        Check: the scenario and map objects are identical across reads.
+        """
+        reader = self.reader()
+
+        reader.read_metadata()
+        scenario = reader.scenario
+        reader.read_agent_tracks(av2_motion_taxonomy(), 49)
+        reader.read_vector_map()
+        static_map = reader.static_map
+        reader.read_vector_map()
+
+        self.assertIs(reader.scenario, scenario)
+        self.assertIs(reader.static_map, static_map)
