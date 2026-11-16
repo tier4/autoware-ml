@@ -125,7 +125,7 @@ def test_load_region_polygons_keys_lanelets_by_subtype(tmp_path) -> None:
 def test_region_filter_membership() -> None:
     region_filter = _region_filter(["road"], _road_map())
     xyz = np.array([[10.0, 0.0, 0.0], [100.0, 0.0, 0.0]])  # inside road, off-road
-    keep = region_filter.keep(xyz, {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH})
+    keep = region_filter.keep_points(xyz, frame_meta(STUB_MAP_PATH))
     assert keep.tolist() == [True, False]
 
 
@@ -134,14 +134,14 @@ def test_region_filter_box_footprint_any_overlap() -> None:
     # overhangs onto the road: center-in-region drops it, footprint any-overlap
     # keeps it. A box at y=8 is fully off the road and dropped.
     region_filter = _region_filter(["road"], _narrow_road_map())
-    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
+    meta = frame_meta(STUB_MAP_PATH)
     boxes = np.array(
         [
             [10.0, 4.0, 0.0, 4.0, 4.0, 1.5, 0.0, 0.0, 0.0],  # y in [2, 6], overlaps road
             [10.0, 8.0, 0.0, 4.0, 4.0, 1.5, 0.0, 0.0, 0.0],  # footprint y in [6, 10] -> off road
         ]
     )
-    assert region_filter.keep(boxes, context).tolist() == [True, False]
+    assert region_filter.keep_boxes(boxes, meta).tolist() == [True, False]
 
 
 def _narrow_road_map() -> LaneletMap:
@@ -160,7 +160,7 @@ def test_collision_filter_keeps_forward_reachable_on_road() -> None:
         max_speed_mps=10.0,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
     )
-    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
+    meta = frame_meta(STUB_MAP_PATH)
     xyz = np.array(
         [
             [10.0, 0.0, 0.0],  # ahead on the centerline, reachable -> keep
@@ -169,7 +169,7 @@ def test_collision_filter_keeps_forward_reachable_on_road() -> None:
             [100.0, 0.0, 0.0],  # off the road (x > 50) -> drop
         ]
     )
-    assert collision_filter.keep(xyz, context).tolist() == [True, False, False, False]
+    assert collision_filter.keep_points(xyz, meta).tolist() == [True, False, False, False]
 
 
 def test_collision_filter_curvature_bound_excludes_close_lateral() -> None:
@@ -182,24 +182,21 @@ def test_collision_filter_curvature_bound_excludes_close_lateral() -> None:
         max_speed_mps=10.0,
         params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
     )
-    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
-    assert collision_filter.keep(np.array([[5.0, 8.0, 0.0]]), context).tolist() == [False]
+    meta = frame_meta(STUB_MAP_PATH)
+    assert collision_filter.keep_points(np.array([[5.0, 8.0, 0.0]]), meta).tolist() == [False]
 
 
-def test_collision_filter_required_keys() -> None:
+def test_collision_filter_needs_the_frame_metadata() -> None:
     collision_filter = _collision_filter(_road_map(), vehicle=EGO)
-    assert collision_filter.required_eval_keys == (
-        "ego2global",
-        "lanelet_map_path",
-    )
+    assert collision_filter.needs_frame_meta is True
 
 
 def test_corridor_filter_is_a_forward_strip_without_a_map() -> None:
     # The corridor is a fixed-width forward strip in the ego frame with no
     # length bound (distance slicing is the range axis's job). No map, no
-    # pose, no context keys.
+    # pose, no frame metadata.
     corridor_filter = CorridorFilter(width_m=3.0)
-    assert corridor_filter.required_eval_keys == ()
+    assert corridor_filter.needs_frame_meta is False
     xyz = np.array(
         [
             [10.0, 0.0, 0.0],  # ahead on the centerline -> keep
@@ -208,7 +205,7 @@ def test_corridor_filter_is_a_forward_strip_without_a_map() -> None:
             [-1.0, 0.0, 0.0],  # behind ego -> drop
         ]
     )
-    assert corridor_filter.keep(xyz, {}).tolist() == [True, True, False, False]
+    assert corridor_filter.keep_points(xyz, None).tolist() == [True, True, False, False]
 
 
 def test_corridor_filter_keeps_overlapping_box_footprints() -> None:
@@ -225,23 +222,23 @@ def test_corridor_filter_keeps_overlapping_box_footprints() -> None:
             [-1.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.7853981],  # nose crosses x=0 -> keep
         ]
     )
-    assert corridor_filter.keep(boxes, {}).tolist() == [True, True, False, False, True]
+    assert corridor_filter.keep_boxes(boxes, None).tolist() == [True, True, False, False, True]
 
 
 def test_filters_accept_tensor_metadata() -> None:
     # Collation + Lightning device transfer deliver the frame metadata as
     # tensors, not numpy arrays, filters must convert (cuda included).
     region_filter = _region_filter(["road"], _road_map())
-    keep = region_filter.keep(
+    keep = region_filter.keep_points(
         np.array([[10.0, 0.0, 0.0]]),
-        {"ego2global": torch.eye(4), "lanelet_map_path": STUB_MAP_PATH},
+        frame_meta(STUB_MAP_PATH),
     )
     assert keep.tolist() == [True]
 
     collision_filter = _collision_filter(_road_map(), vehicle=EGO, region=["road"])
-    keep = collision_filter.keep(
+    keep = collision_filter.keep_points(
         np.array([[10.0, 0.0, 0.0]]),
-        {"ego2global": torch.eye(4), "lanelet_map_path": STUB_MAP_PATH},
+        frame_meta(STUB_MAP_PATH),
     )
     assert keep.tolist() == [True]
 
@@ -253,13 +250,13 @@ def test_region_filter_margin_erodes_outer_border_only() -> None:
     road = Polygon([(0, -10), (50, -10), (50, 0), (0, 0)])
     walkway = Polygon([(0, 0), (50, 0), (50, 3), (0, 3)])
     lanelet_map = LaneletMap({"road": [road], "walkway": [walkway]})
-    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
+    meta = frame_meta(STUB_MAP_PATH)
 
     eroded = _region_filter(["road"], lanelet_map, margin=-0.5)
     near_internal = np.array([[10.0, -0.1, 0.0]])  # 0.1 m from the road-walkway border
     near_outer = np.array([[10.0, -9.8, 0.0]])  # 0.2 m from the outer border
-    assert eroded.keep(near_internal, context).tolist() == [True]
-    assert eroded.keep(near_outer, context).tolist() == [False]
+    assert eroded.keep_points(near_internal, meta).tolist() == [True]
+    assert eroded.keep_points(near_outer, meta).tolist() == [False]
     assert eroded.name == "region_road_minus0p5"
 
 
@@ -270,22 +267,22 @@ def test_region_filter_positive_margin_grows_into_off_map_space_only() -> None:
     road = Polygon([(0, -10), (50, -10), (50, 0), (0, 0)])
     walkway = Polygon([(0, 0), (50, 0), (50, 3), (0, 3)])
     lanelet_map = LaneletMap({"road": [road], "walkway": [walkway]})
-    context = {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
+    meta = frame_meta(STUB_MAP_PATH)
 
     expanded = _region_filter(["road"], lanelet_map, margin=0.5)
     off_map_near_road = np.array([[10.0, -10.3, 0.0]])  # 0.3 m below the road's outer border
     on_walkway = np.array([[10.0, 0.2, 0.0]])  # inside the adjacent walkway
     far_off_map = np.array([[10.0, -11.0, 0.0]])  # 1.0 m below, beyond the margin
-    assert expanded.keep(off_map_near_road, context).tolist() == [True]
-    assert expanded.keep(on_walkway, context).tolist() == [False]
-    assert expanded.keep(far_off_map, context).tolist() == [False]
+    assert expanded.keep_points(off_map_near_road, meta).tolist() == [True]
+    assert expanded.keep_points(on_walkway, meta).tolist() == [False]
+    assert expanded.keep_points(far_off_map, meta).tolist() == [False]
     assert expanded.name == "region_road_plus0p5"
 
 
 def test_region_filter_name_and_cache_key() -> None:
     region_filter = _region_filter(["road", "crosswalk"], _road_map())
     assert region_filter.name == "region_road_crosswalk"
-    assert region_filter.required_eval_keys == ("ego2global", "lanelet_map_path")
+    assert region_filter.needs_frame_meta is True
 
 
 def test_filter_cache_keys_follow_the_mask_parameters() -> None:
@@ -312,9 +309,7 @@ def test_region_absent_from_scene_is_empty_not_an_error() -> None:
     # 'walkway' is a valid token but this scene's map has none: the slice is
     # legitimately empty (membership false everywhere), the eval keeps running.
     walkway_filter = _region_filter(["walkway"], _road_map(), margin=0.2)
-    keep = walkway_filter.keep(
-        np.array([[10.0, 0.0, 0.0]]), {"ego2global": np.eye(4), "lanelet_map_path": STUB_MAP_PATH}
-    )
+    keep = walkway_filter.keep_points(np.array([[10.0, 0.0, 0.0]]), frame_meta(STUB_MAP_PATH))
     assert keep.tolist() == [False]
 
 
@@ -436,8 +431,8 @@ def test_detection3d_suite_region_filter_restricts_gt() -> None:
 def test_region_filter_available_needs_the_frame_map_path() -> None:
     # The dataset hands over None for a frame whose scene has no map.
     region_filter = _region_filter(["road"], _road_map())
-    assert region_filter.available({"lanelet_map_path": STUB_MAP_PATH}) is True
-    assert region_filter.available({"lanelet_map_path": None}) is False
+    assert region_filter.available(frame_meta(STUB_MAP_PATH)) is True
+    assert region_filter.available(frame_meta(None)) is False
 
 
 def test_map_provider_osm_path_is_none_without_a_map(tmp_path) -> None:

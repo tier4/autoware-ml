@@ -407,9 +407,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         active = self._stage_filter_keys()
         available = []
         for index, metric_filter in enumerate(self._component_filters):
-            is_available = metric_filter.cache_key in active and metric_filter.available(
-                self._filter_context(metric_filter, frame_meta)
-            )
+            is_available = metric_filter.cache_key in active and metric_filter.available(frame_meta)
             if metric_filter.cache_key in active:
                 self._note_frame_coverage(index, is_available)
             available.append(is_available)
@@ -426,7 +424,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         Only filters that are active at this stage *and* whose map is available for
         this frame are evaluated. The other columns stay ``False`` and are never
         read (their groups are skipped at compute, or the scene has no map), so a
-        validation clone never touches test-only context keys and a map-less scene
+        validation clone never touches test-only frame metadata and a map-less scene
         contributes nothing to the slice. The full box rows are passed (not just
         centers) so region filters can test footprint overlap.
         """
@@ -434,8 +432,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         columns = []
         for index, metric_filter in enumerate(self._component_filters):
             if available[index]:
-                context = self._filter_context(metric_filter, frame_meta)
-                columns.append(metric_filter.keep(elements, context))
+                columns.append(metric_filter.keep_boxes(elements, frame_meta))
             else:
                 columns.append(np.zeros(elements.shape[0], dtype=bool))
         stacked = (

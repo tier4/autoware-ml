@@ -31,10 +31,12 @@ from functools import lru_cache
 from math import atan2
 from typing import Any
 
+from jaxtyping import Bool, Float
 import numpy as np
 import shapely
 import torch
 
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.metrics.base import MetricFilter, number_token
 from autoware_ml.metrics.detection3d.geometry import bev_corners_batch
 from autoware_ml.metrics.geometry.lanelet import KNOWN_REGION_TOKENS, LaneletMap
@@ -109,11 +111,6 @@ def box_footprints_map(boxes: np.ndarray, ego2global: Any) -> np.ndarray:
     corners3 = np.column_stack([corners.reshape(-1, 2), heights])
     map_xy = _to_map_xy(corners3, ego2global).reshape(corners.shape)
     return shapely.polygons(map_xy)
-
-
-def _is_boxes(elements: np.ndarray) -> bool:
-    """Elements are detection boxes ``[cx,cy,cz,dx,dy,dz,yaw,...]`` rather than bare points."""
-    return elements.ndim == 2 and elements.shape[1] >= 7
 
 
 def ego_collision_agent(
@@ -227,7 +224,7 @@ class RegionFilter(MetricFilter):
 
     # The map comes with the frame: the dataset that served it resolved the path against its
     # own corpus, so frames of different sources read different maps through one filter.
-    required_eval_keys = ("ego2global", "lanelet_map_path")
+    needs_frame_meta = True
 
     def __post_init__(self) -> None:
         """Validate the region tokens and derive the display name."""
@@ -241,47 +238,67 @@ class RegionFilter(MetricFilter):
     def cache_key(self) -> str:
         """Every parameter that shapes the mask, equal keys must mean equal masks.
 
-        The map is not a parameter: it comes per frame with the context, so two
+        The map is not a parameter: it comes per frame with the metadata, so two
         filters with the same region and margin mask every frame alike.
         """
         region = ",".join(sorted(self.region))
         return f"region:{region}:{self.margin:g}"
 
-    def keep(self, xyz: np.ndarray, context: dict[str, Any]) -> np.ndarray:
-        """Mask of elements in the region.
-
-        Detection boxes (7 or more columns) belong to the region when their
-        footprint overlaps it (any part inside), so an object overhanging from
-        an off-region center still counts. Segmentation points (3 columns) use
-        point-in-polygon.
+    def keep_points(
+        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
+    ) -> Bool[np.ndarray, " num_points"]:
+        """Mask of the points inside the region (point-in-polygon).
 
         Args:
-            xyz: Points ``(N, 3)`` or box rows ``(N, 7+)`` in base_link.
-            context: Per-frame values with the ego pose and lanelet map path.
+            points: Point positions in base_link.
+            frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
 
         Returns:
-            Boolean mask of elements in the region.
+            Boolean mask of the points in the region.
         """
-        xyz = np.asarray(xyz, dtype=np.float64)
-        if xyz.shape[0] == 0:
+        points = np.asarray(points, dtype=np.float64)
+        if points.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        lanelet_map = LaneletMap.from_osm(context["lanelet_map_path"])
-        if _is_boxes(xyz):
-            footprints = box_footprints_map(xyz, context["ego2global"])
-            return lanelet_map.intersects(self.region, footprints, self.margin)
-        map_xy = _to_map_xy(xyz, context["ego2global"])
+        frame_meta = self.require_frame_meta(frame_meta)
+        lanelet_map = LaneletMap.from_osm(frame_meta.lanelet_map_path)
+        map_xy = _to_map_xy(points, frame_meta.ego2global)
         return lanelet_map.contains(self.region, map_xy, self.margin)
 
-    def available(self, context: dict[str, Any]) -> bool:
+    def keep_boxes(
+        self,
+        boxes: Float[np.ndarray, "num_boxes num_box_params"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_boxes"]:
+        """Mask of the boxes whose footprint overlaps the region.
+
+        A box belongs to the region when any part of its footprint is inside, so
+        an object overhanging from an off-region center still counts.
+
+        Args:
+            boxes: Box rows ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
+            frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
+
+        Returns:
+            Boolean mask of the boxes in the region.
+        """
+        boxes = np.asarray(boxes, dtype=np.float64)
+        if boxes.shape[0] == 0:
+            return np.zeros((0,), dtype=bool)
+        frame_meta = self.require_frame_meta(frame_meta)
+        lanelet_map = LaneletMap.from_osm(frame_meta.lanelet_map_path)
+        footprints = box_footprints_map(boxes, frame_meta.ego2global)
+        return lanelet_map.intersects(self.region, footprints, self.margin)
+
+    def available(self, frame_meta: FrameMetaSample | None) -> bool:
         """False for frames without a lanelet map, so the suite excludes them.
 
         Args:
-            context: Per-frame values with the lanelet map path.
+            frame_meta: Metadata of the frame, with the lanelet map path.
 
         Returns:
             Whether the frame carries a lanelet map.
         """
-        return context["lanelet_map_path"] is not None
+        return self.require_frame_meta(frame_meta).lanelet_map_path is not None
 
 
 @dataclass(frozen=True)
@@ -302,8 +319,6 @@ class CorridorFilter(MetricFilter):
     width_m: float = 3.0
     name: str = "corridor"
 
-    required_eval_keys = ()
-
     def __post_init__(self) -> None:
         """Validate the strip width."""
         if self.width_m <= 0.0:
@@ -315,32 +330,51 @@ class CorridorFilter(MetricFilter):
         """Every parameter that shapes the mask, equal keys must mean equal masks."""
         return f"corridor:w{self.width_m:g}"
 
-    def keep(self, xyz: np.ndarray, context: dict[str, Any]) -> np.ndarray:
-        """Mask of elements inside the strip (footprint overlap / point test).
+    def keep_points(
+        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
+    ) -> Bool[np.ndarray, " num_points"]:
+        """Mask of the points inside the strip.
 
         Args:
-            xyz: Points ``(N, 3)`` or box rows ``(N, 7+)`` in base_link.
-            context: Unused, the strip lives in the ego frame.
+            points: Point positions in base_link.
+            frame_meta: Unused, the strip lives in the ego frame.
 
         Returns:
-            Boolean mask of elements inside the strip.
+            Boolean mask of the points inside the strip.
         """
-        xyz = np.asarray(xyz, dtype=np.float64)
-        if xyz.shape[0] == 0:
+        points = np.asarray(points, dtype=np.float64)
+        if points.shape[0] == 0:
+            return np.zeros((0,), dtype=bool)
+        return (points[:, 0] >= 0.0) & (np.abs(points[:, 1]) <= self.width_m / 2.0)
+
+    def keep_boxes(
+        self,
+        boxes: Float[np.ndarray, "num_boxes num_box_params"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_boxes"]:
+        """Mask of the boxes whose footprint overlaps the strip.
+
+        Args:
+            boxes: Box rows ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
+            frame_meta: Unused, the strip lives in the ego frame.
+
+        Returns:
+            Boolean mask of the boxes overlapping the strip.
+        """
+        boxes = np.asarray(boxes, dtype=np.float64)
+        if boxes.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
         half_width = self.width_m / 2.0
-        if _is_boxes(xyz):
-            corners = bev_corners_batch(xyz)
-            # The strip has no length bound, and no geometry library has an
-            # unbounded polygon: truncating it at the batch's own farthest corner
-            # is the same test for every box in the batch.
-            far = float(corners[:, :, 0].max())
-            if far <= 0.0:
-                return np.zeros(xyz.shape[0], dtype=bool)
-            strip = shapely.box(0.0, -half_width, far, half_width)
-            footprints = shapely.polygons(corners)
-            return np.asarray(shapely.intersects(strip, footprints), dtype=bool)
-        return (xyz[:, 0] >= 0.0) & (np.abs(xyz[:, 1]) <= half_width)
+        corners = bev_corners_batch(boxes)
+        # The strip has no length bound, and no geometry library has an
+        # unbounded polygon: truncating it at the batch's own farthest corner
+        # is the same test for every box in the batch.
+        far = float(corners[:, :, 0].max())
+        if far <= 0.0:
+            return np.zeros(boxes.shape[0], dtype=bool)
+        strip = shapely.box(0.0, -half_width, far, half_width)
+        footprints = shapely.polygons(corners)
+        return np.asarray(shapely.intersects(strip, footprints), dtype=bool)
 
 
 @dataclass(frozen=True)
@@ -373,7 +407,7 @@ class CollisionFilter(MetricFilter):
     max_speed_mps: float = field(default=16.7, kw_only=True)
     name: str = field(default="collision", kw_only=True)
 
-    required_eval_keys = ("ego2global", "lanelet_map_path")
+    needs_frame_meta = True
 
     def __post_init__(self) -> None:
         """Validate the road region tokens and the ego speed fallback."""
@@ -399,7 +433,7 @@ class CollisionFilter(MetricFilter):
     def _region_for_pose(self, lanelet_map_path: str, x: float, y: float, heading: float):
         """The ego collision area in the map frame for one ego pose.
 
-        The suite calls :meth:`keep` for the ground truth and the predictions of
+        The suite calls :meth:`keep_boxes` for the ground truth and the predictions of
         the same frame in sequence and the area depends only on the map and the
         pose, so one cached entry serves both calls.
         """
@@ -413,36 +447,60 @@ class CollisionFilter(MetricFilter):
             shapely.prepare(region)
         return region
 
-    def _ego_region(self, context: dict[str, Any]):
+    def _ego_region(self, frame_meta: FrameMetaSample):
         """The ego collision area in the map frame for this frame."""
         return self._region_for_pose(
-            str(context["lanelet_map_path"]), *ego2global_pose(context["ego2global"])
+            str(frame_meta.lanelet_map_path), *ego2global_pose(frame_meta.ego2global)
         )
 
-    def keep(self, xyz: np.ndarray, context: dict[str, Any]) -> np.ndarray:
-        """Mask of elements inside the ego collision area (footprint / point test).
+    def keep_points(
+        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
+    ) -> Bool[np.ndarray, " num_points"]:
+        """Mask of the points inside the ego collision area.
 
         Args:
-            xyz: Points ``(N, 3)`` or box rows ``(N, 7+)`` in base_link.
-            context: Per-frame values with the ego pose and lanelet map path.
+            points: Point positions in base_link.
+            frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
 
         Returns:
-            Boolean mask of elements inside the collision area.
+            Boolean mask of the points inside the collision area.
         """
-        xyz = np.asarray(xyz, dtype=np.float64)
-        if xyz.shape[0] == 0:
+        points = np.asarray(points, dtype=np.float64)
+        if points.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        region = self._ego_region(context)
+        frame_meta = self.require_frame_meta(frame_meta)
+        region = self._ego_region(frame_meta)
         if region.is_empty:
-            return np.zeros(xyz.shape[0], dtype=bool)
-        if _is_boxes(xyz):
-            footprints = box_footprints_map(xyz, context["ego2global"])
-            return np.asarray(shapely.intersects(region, footprints), dtype=bool)
-        map_xy = _to_map_xy(xyz, context["ego2global"])
-        points = shapely.points(map_xy[:, 0], map_xy[:, 1])
-        return np.asarray(shapely.contains(region, points), dtype=bool)
+            return np.zeros(points.shape[0], dtype=bool)
+        map_xy = _to_map_xy(points, frame_meta.ego2global)
+        map_points = shapely.points(map_xy[:, 0], map_xy[:, 1])
+        return np.asarray(shapely.contains(region, map_points), dtype=bool)
 
-    def available(self, context: dict[str, Any]) -> bool:
+    def keep_boxes(
+        self,
+        boxes: Float[np.ndarray, "num_boxes num_box_params"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_boxes"]:
+        """Mask of the boxes whose footprint meets the ego collision area.
+
+        Args:
+            boxes: Box rows ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
+            frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
+
+        Returns:
+            Boolean mask of the boxes meeting the collision area.
+        """
+        boxes = np.asarray(boxes, dtype=np.float64)
+        if boxes.shape[0] == 0:
+            return np.zeros((0,), dtype=bool)
+        frame_meta = self.require_frame_meta(frame_meta)
+        region = self._ego_region(frame_meta)
+        if region.is_empty:
+            return np.zeros(boxes.shape[0], dtype=bool)
+        footprints = box_footprints_map(boxes, frame_meta.ego2global)
+        return np.asarray(shapely.intersects(region, footprints), dtype=bool)
+
+    def available(self, frame_meta: FrameMetaSample | None) -> bool:
         """False when the frame has no collision area, so the suite excludes it.
 
         A scene without a lanelet map has none, and neither has a frame whose ego
@@ -451,11 +509,12 @@ class CollisionFilter(MetricFilter):
         missed object can never be counted because nothing is in path at all.
 
         Args:
-            context: Per-frame values with the ego pose and lanelet map path.
+            frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
 
         Returns:
             Whether the frame has a collision area to evaluate against.
         """
-        if context["lanelet_map_path"] is None:
+        frame_meta = self.require_frame_meta(frame_meta)
+        if frame_meta.lanelet_map_path is None:
             return False
-        return not self._ego_region(context).is_empty
+        return not self._ego_region(frame_meta).is_empty
