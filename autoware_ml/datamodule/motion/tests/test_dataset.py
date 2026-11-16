@@ -216,16 +216,16 @@ class TestMotionDataset(MotionDatasetTestCase):
         self.assertEqual(batch.frame_meta_batch.scene_tokens, ["a0", "a1"])
         self.assertEqual(batch.batch_size, 2)
         motion = batch.motion_gt_batch
-        self.assertEqual(motion.agent_positions.shape, (2, 3, 110, 3))
-        self.assertTrue(motion.agent_mask.all().item())
-        self.assertEqual(motion.map_points.shape, (2, 6, 5, 3))
-        self.assertEqual(motion.current_step_index, 49)
+        self.assertEqual(motion.agents.positions.shape, (2, 3, 110, 3))
+        self.assertTrue(motion.agents.mask.all().item())
+        self.assertEqual(motion.map_polylines.points.shape, (2, 6, 5, 3))
+        self.assertEqual(motion.agents.current_step_index, 49)
 
     def test_a_pipeline_without_the_map_loader_serves_tracks_only(self) -> None:
         """
         Input: a dataset whose pipeline loads the tracks only, collated from one sample.
         Expected: the motion batch has no map and the agent tensors of one sample.
-        Check: map_points and the agent positions shape.
+        Check: map_polylines and the agent positions shape.
         """
         dataset = _dataset(self.database, with_map=False).bind(
             self.database.load_polars_scenario_dataframe()
@@ -233,8 +233,8 @@ class TestMotionDataset(MotionDatasetTestCase):
 
         batch = dataset.collate_fn([dataset[0]])
 
-        self.assertIsNone(batch.motion_gt_batch.map_points)
-        self.assertEqual(batch.motion_gt_batch.agent_positions.shape, (1, 3, 110, 3))
+        self.assertIsNone(batch.motion_gt_batch.map_polylines)
+        self.assertEqual(batch.motion_gt_batch.agents.positions.shape, (1, 3, 110, 3))
 
     def test_records_without_a_scenario_are_rejected(self) -> None:
         """
@@ -344,8 +344,8 @@ class TestMotionDataModule(MotionDatasetTestCase):
         datamodule.setup("fit")
         train_batch = next(iter(datamodule.train_dataloader()))
         self.assertEqual(train_batch.batch_size, 2)
-        self.assertEqual(train_batch.motion_gt_batch.agent_positions.shape, (2, 3, 110, 3))
-        self.assertEqual(train_batch.motion_gt_batch.map_points.shape, (2, 6, 5, 3))
+        self.assertEqual(train_batch.motion_gt_batch.agents.positions.shape, (2, 3, 110, 3))
+        self.assertEqual(train_batch.motion_gt_batch.map_polylines.points.shape, (2, 6, 5, 3))
         self.assertEqual(sorted(train_batch.frame_meta_batch.scene_tokens), list(TRAIN_IDS))
         self.assertFalse(train_batch.padding_mask.any().item())
         val_batch = next(iter(datamodule.val_dataloader()))
@@ -354,6 +354,6 @@ class TestMotionDataModule(MotionDatasetTestCase):
         datamodule.setup("test")
         test_batches = list(datamodule.test_dataloader())
         self.assertEqual([batch.batch_size for batch in test_batches], [2, 1])
-        self.assertEqual(test_batches[0].motion_gt_batch.agent_positions.shape, (2, 3, 110, 3))
-        self.assertEqual(test_batches[0].motion_gt_batch.current_step_index, 49)
-        self.assertFalse(test_batches[0].motion_gt_batch.agent_valid[:, :, 50:].any().item())
+        self.assertEqual(test_batches[0].motion_gt_batch.agents.positions.shape, (2, 3, 110, 3))
+        self.assertEqual(test_batches[0].motion_gt_batch.agents.current_step_index, 49)
+        self.assertFalse(test_batches[0].motion_gt_batch.agents.valid[:, :, 50:].any().item())
