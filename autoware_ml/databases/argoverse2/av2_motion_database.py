@@ -17,10 +17,9 @@
 from __future__ import annotations
 
 import logging
-import time
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from typing import Mapping, Sequence
 
 import polars as pl
 from tqdm import tqdm
@@ -52,7 +51,7 @@ class AV2MotionRecordsGeneratorWorkerParams:
     """
 
     database_root_path: str
-    scenario_data: tuple[ScenarioData, ...]
+    scenario_data: Sequence[ScenarioData]
 
 
 def _apply_av2_motion_records_generator(
@@ -196,8 +195,6 @@ class AV2MotionDatabase(BaseDatabase):
     def process_scenario_records(self) -> None:
         """Process scenario records from the database."""
 
-        start_time = time.perf_counter()
-
         df_hash = self.database_hash
         df_cache_path = self.cache_file_path
         if df_cache_path.exists():
@@ -220,12 +217,6 @@ class AV2MotionDatabase(BaseDatabase):
         df.write_parquet(df_cache_path)
         logger.info(f"Saved the database cache to {df_cache_path} with the hash: {df_hash}")
 
-        elapsed = time.perf_counter() - start_time
-        logger.info(
-            f"Elapsed time to process scenario records: {elapsed:.4f} seconds for the database: "
-            f"{self.version}"
-        )
-
     def _run_records_generator(
         self, scenario_data: Sequence[ScenarioData]
     ) -> Sequence[DatasetRecord]:
@@ -239,13 +230,12 @@ class AV2MotionDatabase(BaseDatabase):
           Sequence[DatasetRecord]: One record per scenario, in the order of the scenarios.
         """
 
-        chunk = self._scenarios_per_worker_task
         worker_params = [
             AV2MotionRecordsGeneratorWorkerParams(
                 database_root_path=str(self._root_path),
-                scenario_data=tuple(scenario_data[start : start + chunk]),
+                scenario_data=tuple(scenario_data[start : start + self._scenarios_per_worker_task]),
             )
-            for start in range(0, len(scenario_data), chunk)
+            for start in range(0, len(scenario_data), self._scenarios_per_worker_task)
         ]
 
         records: list[DatasetRecord] = []
