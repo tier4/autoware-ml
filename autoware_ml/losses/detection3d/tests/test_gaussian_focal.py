@@ -102,7 +102,8 @@ class TestGaussianFocalLoss(unittest.TestCase):
                     self.loss_fn(self.prediction.to(dtype), self.target)
 
     def test_avg_factor_replaces_the_peak_count(self) -> None:
-        """
+        """Test that a given average factor replaces the peak count as the divisor.
+
         Input: the two-peak heatmap scored with an average factor of 4 and of 0.5.
         Expected: a given average factor divides the summed loss instead of the peak count,
         as given, also below 1.

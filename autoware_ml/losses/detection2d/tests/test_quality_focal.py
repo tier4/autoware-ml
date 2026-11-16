@@ -57,7 +57,8 @@ class TestQualityFocalLoss(unittest.TestCase):
         self.quality = torch.rand(4, generator=generator)
 
     def test_the_loss_of_a_background_score_by_hand(self) -> None:
-        """
+        """Test that a background score costs its cross-entropy to 0 times its probability^beta.
+
         Input: one score of probability 0.5 for one class, labeled background (label 1 = the
         class count), average factor 1.
         Expected: a background score is pushed toward 0, scaled by its probability to the power
@@ -69,7 +70,8 @@ class TestQualityFocalLoss(unittest.TestCase):
         torch.testing.assert_close(loss, torch.tensor(math.log(2.0) * 0.25))
 
     def test_a_positive_targets_its_iou(self) -> None:
-        """
+        """Test that the class score of a positive is pulled toward its IoU, not toward 1.
+
         Input: one positive of class 0 with an IoU quality of 0.7, scored 0.7, 0.4 and 0.95 for
         its class, the other class far below zero.
         Expected: the class score of a positive is pulled toward its IoU rather than 1, so a
@@ -95,7 +97,8 @@ class TestQualityFocalLoss(unittest.TestCase):
         self.assertLess(float(losses[0.7]), 1e-6)
 
     def test_every_term_follows_the_formula(self) -> None:
-        """
+        """Test that every term and its gradient follow the Generalized Focal Loss formula.
+
         Input: four queries over three classes, two positives of classes 0 and 2 and two
         background queries, one labeled by the class count and one by -1, average factor 3.
         Expected: the term of a positive on its own class targets its quality, every other
@@ -115,7 +118,8 @@ class TestQualityFocalLoss(unittest.TestCase):
         torch.testing.assert_close(logits.grad, reference_logits.grad)
 
     def test_weights_drop_their_terms(self) -> None:
-        """
+        """Test that per-class weights scale their terms and a zero weight drops them.
+
         Input: the four queries with weights of one, and with the last class weighted zero.
         Expected: weights of one change nothing, and a zero-weighted column leaves the loss of
         the other columns: the loss over the first two classes, where the positive of class 2
@@ -136,7 +140,8 @@ class TestQualityFocalLoss(unittest.TestCase):
         )
 
     def test_avg_factor_divides_as_given(self) -> None:
-        """
+        """Test that the summed loss is divided by the average factor as given.
+
         Input: the four queries scored with an average factor of 4 and of 0.5.
         Expected: the summed loss is divided by the average factor as given, also below 1.
         Check: both losses against the loss with an average factor of 1.
@@ -151,7 +156,8 @@ class TestQualityFocalLoss(unittest.TestCase):
         )
 
     def test_half_precision_inputs_are_refused(self) -> None:
-        """
+        """Test that half precision logits or qualities are refused.
+
         Input: the logits, then the qualities, in bfloat16 and in float16.
         Expected: in bfloat16 a positive scored within 1/256 of its quality gets no gradient,
         so the loss takes float32 only and a head training under autocast casts first.
@@ -165,7 +171,8 @@ class TestQualityFocalLoss(unittest.TestCase):
                     self.loss_fn(self.logits, self.labels, self.quality.to(dtype), avg_factor=1.0)
 
     def test_the_quality_of_a_background_query_is_not_read(self) -> None:
-        """
+        """Test that the quality of a background query is never read.
+
         Input: the four queries with a NaN quality on both background queries, as the IoU of an
         all-zero target box can be.
         Expected: a background query targets 0 on every class whatever its quality holds.
