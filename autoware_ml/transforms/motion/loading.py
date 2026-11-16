@@ -90,7 +90,9 @@ class LoadAgentTracks(BaseTransform):
         """
 
         if source.dataset_format is DatasetFormat.AV2:
-            from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
+            from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: PLC0415
+                AV2MotionReader,
+            )
 
             return AV2MotionReader(Path(source.tracks_path)).read_agent_tracks(
                 self.taxonomy, source.current_step_index
@@ -186,7 +188,9 @@ class LoadVectorMap(BaseTransform):
         """
 
         if source.dataset_format is DatasetFormat.AV2:
-            from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
+            from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: PLC0415
+                AV2MotionReader,
+            )
 
             reader = AV2MotionReader(Path(source.tracks_path), Path(source.map_path))
             return reader.read_vector_map(
