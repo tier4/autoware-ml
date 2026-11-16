@@ -75,23 +75,25 @@ deploy:
     modules:
       end_to_end: {}
   tensorrt:
-    input_shapes:
-      points:
-        min_shape: [5000, 4]
-        opt_shape: [60000, 4]
-        max_shape: [160000, 4]
-      coors:
-        min_shape: [5000, 3]
-        opt_shape: [60000, 3]
-        max_shape: [160000, 3]
-      voxel_coors:
-        min_shape: [3000, 3]
-        opt_shape: [30000, 3]
-        max_shape: [60000, 3]
-      inverse_map:
-        min_shape: [5000]
-        opt_shape: [60000]
-        max_shape: [160000]
+    modules:
+      end_to_end:
+        input_shapes:
+          points:
+            min_shape: [5000, 4]
+            opt_shape: [60000, 4]
+            max_shape: [160000, 4]
+          coors:
+            min_shape: [5000, 3]
+            opt_shape: [60000, 3]
+            max_shape: [160000, 3]
+          voxel_coors:
+            min_shape: [3000, 3]
+            opt_shape: [30000, 3]
+            max_shape: [60000, 3]
+          inverse_map:
+            min_shape: [5000]
+            opt_shape: [60000]
+            max_shape: [160000]
 
 model:
   _target_: autoware_ml.models.segmentation3d.frnet.FRNet

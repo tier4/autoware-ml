@@ -165,7 +165,9 @@ class DeploymentExport:
                             f"ONNX file not found: {module_onnx_path}. "
                             "TensorRT export requires a valid ONNX model."
                         )
-                    build_tensorrt_engine(module_onnx_path, self.deploy_cfg, module_engine_path)
+                    build_tensorrt_engine(
+                        module_onnx_path, self.deploy_cfg, module_engine_path, module_name
+                    )
                     tensorrt_exported_paths.append(module_engine_path)
 
         # Implement the export logic here

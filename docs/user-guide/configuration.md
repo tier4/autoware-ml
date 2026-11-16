@@ -268,11 +268,13 @@ deploy:
 
   tensorrt:
     workspace_size: 8589934592  # 8 GiB
-    input_shapes:
-      input:
-        min_shape: [1, 5, 1080, 1920]
-        opt_shape: [1, 5, 1440, 2560]
-        max_shape: [1, 5, 2160, 3840]
+    modules:
+      end_to_end:
+        input_shapes:
+          input:
+            min_shape: [1, 5, 1080, 1920]
+            opt_shape: [1, 5, 1440, 2560]
+            max_shape: [1, 5, 2160, 3840]
 ```
 
 ## Config Inheritance
