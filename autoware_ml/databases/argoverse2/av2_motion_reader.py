@@ -274,40 +274,53 @@ class AV2MotionReader:
         is_intersection: list[bool] = []
         element_ids: list[str] = []
 
+        def resample(polyline: np.ndarray) -> np.ndarray:
+            return _resample(np.asarray(polyline, dtype=np.float64), num_points_per_polyline)
+
         def add(
             polyline: np.ndarray,
             kind: PolylineType,
             element_id: int,
             intersection: bool,
         ) -> None:
-            if kind not in kept_types:
-                return
-            points.append(
-                _resample(np.asarray(polyline, dtype=np.float64), num_points_per_polyline)
-            )
+            # The polyline is already resampled, so a boundary is interpolated only once
+            points.append(polyline)
             types.append(int(kind))
             is_intersection.append(intersection)
             element_ids.append(str(element_id))
 
-        for lane_id in sorted(static_map.lane_segments):
+        lane_types = {
+            PolylineType.LANE_CENTERLINE,
+            PolylineType.LANE_LEFT_BOUNDARY,
+            PolylineType.LANE_RIGHT_BOUNDARY,
+        }
+        lane_ids = sorted(static_map.lane_segments) if kept_types & lane_types else []
+        for lane_id in lane_ids:
             lane = static_map.lane_segments[lane_id]
-            left = _resample(lane.left_boundary, num_points_per_polyline)
-            right = _resample(lane.right_boundary, num_points_per_polyline)
-            add(
-                (left + right) / 2.0,
-                PolylineType.LANE_CENTERLINE,
-                lane_id,
-                lane.is_intersection,
-            )
-            add(left, PolylineType.LANE_LEFT_BOUNDARY, lane_id, lane.is_intersection)
-            add(right, PolylineType.LANE_RIGHT_BOUNDARY, lane_id, lane.is_intersection)
-        for crossing_id in sorted(static_map.pedestrian_crossings):
-            crossing = static_map.pedestrian_crossings[crossing_id]
-            add(crossing.edge1, PolylineType.CROSSWALK_EDGE, crossing_id, False)
-            add(crossing.edge2, PolylineType.CROSSWALK_EDGE, crossing_id, False)
-        for area_id in sorted(static_map.drivable_areas):
-            boundary = static_map.drivable_areas[area_id]
-            add(boundary, PolylineType.DRIVABLE_AREA_BOUNDARY, area_id, False)
+            left = resample(lane.left_boundary)
+            right = resample(lane.right_boundary)
+            if PolylineType.LANE_CENTERLINE in kept_types:
+                # The mean of the two boundaries is not spaced at equal arc length, so the
+                # centerline is resampled once from it
+                add(
+                    resample((left + right) / 2.0),
+                    PolylineType.LANE_CENTERLINE,
+                    lane_id,
+                    lane.is_intersection,
+                )
+            if PolylineType.LANE_LEFT_BOUNDARY in kept_types:
+                add(left, PolylineType.LANE_LEFT_BOUNDARY, lane_id, lane.is_intersection)
+            if PolylineType.LANE_RIGHT_BOUNDARY in kept_types:
+                add(right, PolylineType.LANE_RIGHT_BOUNDARY, lane_id, lane.is_intersection)
+        if PolylineType.CROSSWALK_EDGE in kept_types:
+            for crossing_id in sorted(static_map.pedestrian_crossings):
+                crossing = static_map.pedestrian_crossings[crossing_id]
+                for edge in (crossing.edge1, crossing.edge2):
+                    add(resample(edge), PolylineType.CROSSWALK_EDGE, crossing_id, False)
+        if PolylineType.DRIVABLE_AREA_BOUNDARY in kept_types:
+            for area_id in sorted(static_map.drivable_areas):
+                boundary = static_map.drivable_areas[area_id]
+                add(resample(boundary), PolylineType.DRIVABLE_AREA_BOUNDARY, area_id, False)
 
         num_polylines = len(points)
         stacked = (
