@@ -415,7 +415,8 @@ def test_create_optimization_profile_refuses_the_dynamic_inputs_without_an_entry
 def test_create_optimization_profile_refuses_an_entry_of_no_input_and_the_old_table() -> None:
     """Test that a misspelled entry and a table at the old place are refused by key.
 
-    Input: a module entry ``spatial_featues`` for a network whose input is ``spatial_features``;
+    Input: a module entry ``spatial_feature`` (singular) for a network whose input is
+        ``spatial_features``;
         then a ``deploy.tensorrt.input_shapes`` table at the top level.
     Expected: ValueError naming the unknown entry and the graph's inputs; ValueError naming
         the new key for the old table.
@@ -423,9 +424,9 @@ def test_create_optimization_profile_refuses_an_entry_of_no_input_and_the_old_ta
     """
     shapes = {"min_shape": [1, 32, 8, 8], "opt_shape": [1, 32, 8, 8], "max_shape": [1, 32, 8, 8]}
     network = _FakeNetwork([_FakeInput("spatial_features", (-1, 32, -1, -1))])
-    with pytest.raises(ValueError, match=r"names \['spatial_featues'\], which are not inputs"):
+    with pytest.raises(ValueError, match=r"names \['spatial_feature'\], which are not inputs"):
         deploy.create_optimization_profile(
-            _FakeBuilder(), _tensorrt_cfg("head", {"spatial_featues": shapes}), network, "head"
+            _FakeBuilder(), _tensorrt_cfg("head", {"spatial_feature": shapes}), network, "head"
         )
     with pytest.raises(ValueError, match="deploy.tensorrt.modules.head.input_shapes"):
         deploy.create_optimization_profile(
