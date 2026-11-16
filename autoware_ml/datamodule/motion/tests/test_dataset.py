@@ -35,7 +35,11 @@ from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
     write_scenario,
 )
 from autoware_ml.databases.scenarios import DatasetParams  # noqa: E402
-from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema  # noqa: E402
+from autoware_ml.databases.schemas.dataset_schemas import (  # noqa: E402
+    DatasetRecord,
+    DatasetTableSchema,
+)
+from autoware_ml.databases.schemas.motion import MotionDataModel  # noqa: E402
 from autoware_ml.datamodule.data_module import DataLoaderConfig, DataModule  # noqa: E402
 from autoware_ml.datamodule.motion.dataset import MotionDataset  # noqa: E402
 from autoware_ml.datamodule.sources import DatasetSource  # noqa: E402
@@ -253,6 +257,56 @@ class TestMotionDataset(MotionDatasetTestCase):
                 transforms=None,
                 dataset_records_dataframe=pl.concat([records, perception]),
             )
+
+    def test_records_of_a_recording_dataset_are_served(self) -> None:
+        """
+        Input: a record table holding one T4Dataset motion record, whose tracks and map
+        paths are null by the schema, bound to a dataset.
+        Expected: a record is told apart from a null struct by its dataset format, not by its
+        tracks path, so a recording dataset record is served with its paths left None.
+        Check: the dataset length and the format, paths and window of the source sample.
+        """
+        motion = MotionDataModel(
+            dataset_format=DatasetFormat.T4,
+            tracks_relative_path=None,
+            map_relative_path=None,
+            scenario_key=None,
+            focal_track_id=None,
+            first_step_index=12,
+            current_step_index=4,
+            num_steps=17,
+            step_seconds=0.5,
+            num_tracks=8,
+        )
+        record = DatasetRecord(
+            scenario_id="scene",
+            sample_id="scene",
+            sample_index=0,
+            timestamp_seconds=2.0,
+            location=None,
+            vehicle_type=None,
+            scenario_name="scene",
+            lidar_frames=[],
+            lidar_sources=None,
+            image_frames=None,
+            category_mapping=None,
+            boxes_3d=None,
+            motion=motion,
+        )
+        records = pl.DataFrame(
+            [record.to_dictionary()], schema=DatasetTableSchema.to_polars_schema()
+        )
+
+        dataset = _dataset(self.database).bind(records)
+
+        self.assertEqual(len(dataset), 1)
+        source = dataset.get_data_sample(0).motion_source_sample
+        self.assertIs(source.dataset_format, DatasetFormat.T4)
+        self.assertIsNone(source.tracks_path)
+        self.assertIsNone(source.map_path)
+        self.assertEqual(
+            (source.first_step_index, source.current_step_index, source.num_steps), (12, 4, 17)
+        )
 
 
 class TestMotionDataModule(MotionDatasetTestCase):

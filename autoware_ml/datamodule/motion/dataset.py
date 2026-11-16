@@ -96,11 +96,11 @@ class MotionDataset(BaseDataset):
 
         records = dataset_records_dataframe.select(self._SERVED_COLUMNS)
         motion = pl.col(DatasetTableSchema.MOTION.name)
-        # A null struct may be read back as a struct of null fields, and the tracks path is
-        # never null in a motion record
+        # A null struct may be read back as a struct of null fields. The dataset format is the
+        # one field every motion record sets: a recording dataset leaves its paths null
         absent = (
             motion.is_null()
-            | motion.struct.field(MotionDatasetSchema.tracks_relative_path.name).is_null()
+            | motion.struct.field(MotionDatasetSchema.dataset_format.name).is_null()
         )
         num_absent = records.select(absent.sum()).item()
         if num_absent:
