@@ -88,6 +88,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -120,6 +121,8 @@ class PTv3Seg3DDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            qk_norm: Whether decoder attention layer-normalizes queries and keys
+                per head, see :class:`SerializedAttention`.
         """
         super().__init__()
         self.order = list(order)
@@ -177,6 +180,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        qk_norm=qk_norm,
                     ),
                     name=f"block{block_index}",
                 )

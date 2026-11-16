@@ -536,6 +536,7 @@ class SerializedAttention(PointModule):
         upcast_attention: bool,
         upcast_softmax: bool,
         rope_base: float | None = None,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize serialized attention.
 
@@ -555,6 +556,10 @@ class SerializedAttention(PointModule):
             rope_base: Frequency base for axis-split 3D rotary embedding over
                 voxel coordinates. ``None`` disables RoPE, which is the PTv3
                 default and leaves the attention path unchanged.
+            qk_norm: Whether to layer-normalize queries and keys per head before
+                the rotation. The logits are then bounded by the two norm gains,
+                which removes the attention-logit growth that otherwise builds up
+                over long runs and ends in a divergence.
         """
         super().__init__()
         if channels % num_heads != 0:
@@ -587,6 +592,8 @@ class SerializedAttention(PointModule):
         self.softmax = nn.Softmax(dim=-1)
         self.rpe = RelativePositionEncoding(patch_size, num_heads) if enable_rpe else None
         self.rope = Point3DRoPE(channels // num_heads, rope_base) if rope_base is not None else None
+        self.q_norm = nn.LayerNorm(channels // num_heads) if qk_norm else None
+        self.k_norm = nn.LayerNorm(channels // num_heads) if qk_norm else None
         self.flash_attn = None
 
     @torch.no_grad()
@@ -669,23 +676,29 @@ class SerializedAttention(PointModule):
         qkv = self.qkv(point.feat)[order]
         head_dim = channel_count // head_count
 
-        # With RoPE the projection has to be split before attention so queries
-        # and keys can be rotated by their voxel positions; without it the
+        # QK-norm and RoPE need the projection split before attention so queries
+        # and keys can be normalized and rotated per head; without either the
         # packed layout is handed to each branch untouched, as PTv3 expects.
-        roped: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
-        if self.rope is not None:
+        split: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+        if self.rope is not None or self.q_norm is not None:
             query, key, value = qkv.reshape(-1, 3, head_count, head_dim).unbind(dim=1)
-            query, key = self.rope(query, key, point.grid_coord[order])
-            roped = (query, key, value)
+            if self.q_norm is not None and self.k_norm is not None:
+                # Before the rotation, which preserves norms, so every logit stays
+                # within the product of the two gains times sqrt(head_dim).
+                query = self.q_norm(query).to(qkv.dtype)
+                key = self.k_norm(key).to(qkv.dtype)
+            if self.rope is not None:
+                query, key = self.rope(query, key, point.grid_coord[order])
+            split = (query, key, value)
 
         if not self.enable_flash:
-            if roped is None:
+            if split is None:
                 qkv = qkv.reshape(-1, patch_size, 3, head_count, head_dim)
                 q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(dim=0)
             else:
                 q, k, v = (
                     tensor.reshape(-1, patch_size, head_count, head_dim).permute(0, 2, 1, 3)
-                    for tensor in roped
+                    for tensor in split
                 )
             if self.upcast_attention:
                 q = q.float()
@@ -707,8 +720,8 @@ class SerializedAttention(PointModule):
                 self.flash_attn = load_flash_attn_module()
             packed = (
                 qkv.reshape(-1, 3, head_count, head_dim)
-                if roped is None
-                else torch.stack(roped, dim=1)
+                if split is None
+                else torch.stack(split, dim=1)
             )
             # flash attention takes fp16 or bf16; keep the autocast dtype instead of forcing
             # fp16, and fall back to fp16 outside autocast.
@@ -791,6 +804,7 @@ class Block(PointModule):
         enable_conv: bool = True,
         enable_attn: bool = True,
         rope_base: float | None = None,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -820,6 +834,8 @@ class Block(PointModule):
                 stages.
             rope_base: Frequency base for axis-split 3D rotary embedding, or
                 ``None`` to disable it.
+            qk_norm: Whether the attention layer-normalizes queries and keys per
+                head, see :class:`SerializedAttention`.
 
         Raises:
             ValueError: Raised when the block would carry no operation at all.
@@ -860,6 +876,7 @@ class Block(PointModule):
                 upcast_attention=upcast_attention,
                 upcast_softmax=upcast_softmax,
                 rope_base=rope_base,
+                qk_norm=qk_norm,
             )
             self.norm2 = PointSequential(nn.LayerNorm(channels))
             self.mlp = PointSequential(MLP(channels, mlp_ratio, proj_drop))
@@ -1254,6 +1271,7 @@ class PointTransformerV3Encoder(PointModule):
         enc_conv: Sequence[bool] | bool = True,
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1287,6 +1305,8 @@ class PointTransformerV3Encoder(PointModule):
                 every stage.
             enc_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            qk_norm: Whether every attention layer-normalizes queries and keys
+                per head, see :class:`SerializedAttention`.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -1339,6 +1359,7 @@ class PointTransformerV3Encoder(PointModule):
                         enable_conv=self.enc_conv[stage_index],
                         enable_attn=self.enc_attn[stage_index],
                         rope_base=self.enc_rope_base[stage_index],
+                        qk_norm=qk_norm,
                     ),
                     name=f"block{block_index}",
                 )
@@ -1443,6 +1464,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_conv: Sequence[bool] = (True, True, True, False, False),
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
+        qk_norm: bool = False,
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1475,6 +1497,10 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv: Per-stage convolution flags.
             enc_attn: Per-stage attention flags.
             enc_rope_base: Rotary-embedding frequency base per stage.
+            qk_norm: Whether the attention stages layer-normalize queries and
+                keys per head. Off in the published parametrization; the T4
+                recipes turn it on because the conv-less blocks otherwise grow
+                their attention logits until the run diverges.
         """
         super().__init__(
             in_channels=in_channels,
@@ -1501,6 +1527,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv=enc_conv,
             enc_attn=enc_attn,
             enc_rope_base=enc_rope_base,
+            qk_norm=qk_norm,
         )
 
 

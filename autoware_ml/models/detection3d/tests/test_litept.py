@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 import torch
 
@@ -23,8 +25,10 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
     LitePTEncoder,
     Point3DRoPE,
+    SerializedAttention,
     rope_span,
 )
+from autoware_ml.utils.point_cloud.structures import Point
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_litept_encoder,
@@ -145,6 +149,75 @@ def test_block_rejects_a_configuration_with_no_operation() -> None:
             enable_conv=False,
             enable_attn=False,
         )
+
+
+def build_rope_attention(qk_norm: bool) -> SerializedAttention:
+    return SerializedAttention(
+        channels=24,
+        num_heads=2,
+        patch_size=8,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        order_index=0,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+        rope_base=100.0,
+        qk_norm=qk_norm,
+    )
+
+
+def build_attention_point(num_points: int = 8) -> Point:
+    return Point(
+        {
+            "feat": torch.randn(num_points, 24),
+            "grid_coord": torch.randint(0, 8, (num_points, 3), dtype=torch.int32),
+            "serialized_order": torch.arange(num_points).reshape(1, num_points),
+            "serialized_inverse": torch.arange(num_points).reshape(1, num_points),
+            "offset": torch.tensor([num_points], dtype=torch.long),
+        }
+    )
+
+
+def test_qk_norm_makes_attention_invariant_to_query_key_projection_growth() -> None:
+    """Growing the query/key projection sharpens plain attention; with QK-norm it changes nothing."""
+    torch.manual_seed(0)
+    plain, normed = build_rope_attention(qk_norm=False), build_rope_attention(qk_norm=True)
+    normed.load_state_dict(plain.state_dict(), strict=False)
+    point = build_attention_point()
+    plain_reference = plain(deepcopy(point)).feat
+    normed_reference = normed(deepcopy(point)).feat
+
+    with torch.no_grad():
+        for attention in (plain, normed):
+            attention.qkv.weight[: 2 * attention.channels].mul_(1000.0)
+            attention.qkv.bias[: 2 * attention.channels].mul_(1000.0)
+
+    assert not torch.allclose(plain(deepcopy(point)).feat, plain_reference, atol=1e-3)
+    assert torch.allclose(normed(deepcopy(point)).feat, normed_reference, atol=1e-4)
+
+
+def test_qk_norm_is_absent_from_ptv3_and_sized_per_head_in_litept() -> None:
+    """PTv3 keeps its state-dict layout; LitePT normalizes each head's query and key."""
+    assert not any("q_norm" in key or "k_norm" in key for key in build_ptv3_encoder().state_dict())
+    encoder = LitePTEncoder(
+        in_channels=4,
+        order=("z",),
+        stride=(2,),
+        enc_depths=(1, 1),
+        enc_channels=(12, 24),
+        enc_num_head=(1, 2),
+        enc_patch_size=(2, 2),
+        enc_conv=(True, False),
+        enc_attn=(False, True),
+        qk_norm=True,
+    )
+    attention = encoder.enc._modules["enc1"]._modules["block0"].attn
+    assert tuple(attention.q_norm.normalized_shape) == (12,)
+    assert tuple(attention.k_norm.normalized_shape) == (12,)
 
 
 def test_litept_encoder_gates_convolution_and_attention_per_stage() -> None:
