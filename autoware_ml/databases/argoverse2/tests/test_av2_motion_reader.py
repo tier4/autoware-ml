@@ -82,7 +82,8 @@ class TestScenarioMetadata(AV2MotionReaderTestCase):
         self.assertEqual(metadata.focal_track_id, FOCAL_TRACK_ID)
         self.assertEqual(metadata.num_steps, 110)
         self.assertEqual(metadata.num_tracks, 3)
-        self.assertAlmostEqual(metadata.step_seconds, 0.1)
+        self.assertEqual(metadata.step_seconds, 0.1)
+        self.assertEqual(metadata.timestamps_ns.dtype, np.int64)
         self.assertAlmostEqual(float(metadata.timestamps_seconds[0]), 1.0)
         self.assertAlmostEqual(float(metadata.timestamps_seconds[49]), 5.9)
 
@@ -93,9 +94,20 @@ class TestScenarioMetadata(AV2MotionReaderTestCase):
         Check: ValueError naming the uneven spacing and the step count.
         """
         with self.assertRaisesRegex(ValueError, "not uniformly spaced"):
-            step_seconds_of(np.array([0.0, 0.1, 0.3]))
+            step_seconds_of(np.array([0, 100_000_000, 300_000_000], dtype=np.int64))
         with self.assertRaisesRegex(ValueError, "at least two steps"):
-            step_seconds_of(np.array([0.0]))
+            step_seconds_of(np.array([0], dtype=np.int64))
+
+    def test_step_seconds_is_exact_at_an_epoch_timestamp(self) -> None:
+        """
+        Input: 110 steps 100 ms apart starting at an Argoverse 2 scale epoch of 3.16e17 ns.
+        Expected: the period is taken between the integer nanoseconds, so it is exactly 0.1 s;
+        periods taken between the timestamps in seconds come out as 0.10000002 s.
+        Check: the period equals 0.1.
+        """
+        timestamps_ns = 315_969_629_019_741_000 + 100_000_000 * np.arange(110, dtype=np.int64)
+
+        self.assertEqual(step_seconds_of(timestamps_ns), 0.1)
 
 
 class TestAgentTracks(AV2MotionReaderTestCase):

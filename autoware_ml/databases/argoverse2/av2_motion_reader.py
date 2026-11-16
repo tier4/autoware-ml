@@ -35,7 +35,7 @@ from av2.datasets.motion_forecasting.scenario_serialization import (
 )
 from av2.geometry.interpolate import interp_arc
 from av2.map.map_api import ArgoverseStaticMap
-from jaxtyping import Float64
+from jaxtyping import Float64, Int64
 
 from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.dataclasses.batch.motion import AgentTracksSample, MapPolylinesSample
@@ -53,33 +53,43 @@ class ScenarioMetadata(NamedTuple):
       scenario_id: Identifier of the scenario.
       city: City the scenario was recorded in.
       focal_track_id: Identifier of the focal agent.
-      timestamps_seconds: Timestamp of every step of the window in seconds.
+      timestamps_ns: Timestamp of every step of the window in nanoseconds, as the tracks
+        file stores it.
       num_tracks: Number of agent tracks in the scenario.
     """
 
     scenario_id: str
     city: str
     focal_track_id: str
-    timestamps_seconds: Float64[np.ndarray, " num_steps"]
+    timestamps_ns: Int64[np.ndarray, " num_steps"]
     num_tracks: int
 
     @property
     def num_steps(self) -> int:
         """Number of steps in the window."""
-        return len(self.timestamps_seconds)
+        return len(self.timestamps_ns)
+
+    @property
+    def timestamps_seconds(self) -> Float64[np.ndarray, " num_steps"]:
+        """Timestamp of every step of the window in seconds."""
+        return self.timestamps_ns / 1e9
 
     @property
     def step_seconds(self) -> float:
         """Period between two steps in seconds."""
-        return step_seconds_of(self.timestamps_seconds)
+        return step_seconds_of(self.timestamps_ns)
 
 
-def step_seconds_of(timestamps_seconds: Float64[np.ndarray, " num_steps"]) -> float:
+def step_seconds_of(timestamps_ns: Int64[np.ndarray, " num_steps"]) -> float:
     """
     Period of a uniformly sampled time axis.
 
+    The periods are taken between the integer nanosecond timestamps and converted once. An
+    epoch timestamp in seconds carries a float64 rounding error of about 6e-8 s, so periods
+    taken in seconds come out as 0.10000002 rather than 0.1.
+
     Args:
-      timestamps_seconds: Timestamp of every step in seconds, at least two of them.
+      timestamps_ns: Timestamp of every step in nanoseconds, at least two of them.
 
     Returns:
       float: The period between two steps in seconds.
@@ -88,18 +98,18 @@ def step_seconds_of(timestamps_seconds: Float64[np.ndarray, " num_steps"]) -> fl
       ValueError: If there are fewer than two steps or the steps are not uniform.
     """
 
-    if len(timestamps_seconds) < 2:
+    if len(timestamps_ns) < 2:
         raise ValueError(
-            f"A scenario needs at least two steps to have a period, got {len(timestamps_seconds)}."
+            f"A scenario needs at least two steps to have a period, got {len(timestamps_ns)}."
         )
-    periods = np.diff(timestamps_seconds)
-    step_seconds = float(np.median(periods))
-    if step_seconds <= 0.0 or not np.allclose(periods, step_seconds, rtol=1e-3, atol=1e-6):
+    periods_ns = np.diff(np.asarray(timestamps_ns, dtype=np.int64))
+    step_ns = float(np.median(periods_ns))
+    if step_ns <= 0.0 or not np.allclose(periods_ns, step_ns, rtol=1e-3, atol=1e3):
         raise ValueError(
             "The steps of the scenario are not uniformly spaced, got periods between "
-            f"{periods.min()} s and {periods.max()} s."
+            f"{periods_ns.min()} ns and {periods_ns.max()} ns."
         )
-    return step_seconds
+    return step_ns / 1e9
 
 
 class AV2MotionReader:
@@ -142,9 +152,9 @@ class AV2MotionReader:
         return ArgoverseStaticMap.from_json(self.map_path)
 
     @property
-    def timestamps_seconds(self) -> Float64[np.ndarray, " num_steps"]:
-        """Timestamp of every step of the window in seconds."""
-        return np.asarray(self.scenario.timestamps_ns, dtype=np.float64) * 1e-9
+    def timestamps_ns(self) -> Int64[np.ndarray, " num_steps"]:
+        """Timestamp of every step of the window in nanoseconds."""
+        return np.asarray(self.scenario.timestamps_ns, dtype=np.int64)
 
     def read_metadata(self) -> ScenarioMetadata:
         """
@@ -159,7 +169,7 @@ class AV2MotionReader:
             scenario_id=scenario.scenario_id,
             city=scenario.city_name,
             focal_track_id=scenario.focal_track_id,
-            timestamps_seconds=self.timestamps_seconds,
+            timestamps_ns=self.timestamps_ns,
             num_tracks=len(scenario.tracks),
         )
 
@@ -219,7 +229,7 @@ class AV2MotionReader:
             agent_roles=torch.from_numpy(agent_roles),
             track_ids=[track.track_id for track in tracks],
             current_step_index=current_step_index,
-            step_seconds=step_seconds_of(self.timestamps_seconds),
+            step_seconds=step_seconds_of(self.timestamps_ns),
             ignore_index=taxonomy.ignore_index,
             sizes=None,
         )
