@@ -21,9 +21,9 @@ by the loading transform at sample time.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import logging
 from pathlib import Path
-from typing import Sequence
 
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
@@ -87,7 +87,9 @@ class AV2MotionRecordsGenerator:
 
         # The reader is the only module importing the av2 devkit, so it is imported here and
         # a database can be constructed and hashed without it
-        from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
+        from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: PLC0415
+            AV2MotionReader,
+        )
 
         scenario_id = self.scenario_data.scenario_id
         for path in (self.tracks_path, self.map_path):
