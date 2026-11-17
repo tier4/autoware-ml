@@ -69,7 +69,14 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
         self.batch = torch.randn(4, 3)
 
     def test_returns_the_run_when_the_deployment_reproduces_forward(self) -> None:
-        """Test that equal compositions pass and the run, with its graph inputs, comes back."""
+        """Test that equal compositions pass and the result, with its graph inputs, comes back.
+
+        Input: the two-step model whose deployment scales by the same 2.0 as ``forward()``,
+            on a (4, 3) batch.
+        Expected: the check returns the one ``linear`` graph, (4, 2) forward outputs and the
+            (4, 3) tensor the graph ran on.
+        Check: the graph names and both shapes.
+        """
         model = _TwoStepModel().eval()
         check = assert_deployment_reproduces_forward(
             model,
@@ -85,7 +92,12 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
         self.assertEqual(tuple(scaled.shape), (4, 3))
 
     def test_fails_when_the_glue_differs_from_forward(self) -> None:
-        """Test that a deployment whose glue drifts from forward() fails the check."""
+        """Test that a deployment whose glue drifts from forward() fails the check.
+
+        Input: the two-step model whose deployment scales by 3.0 while ``forward()`` uses 2.0.
+        Expected: AssertionError naming ``logits`` as differing from ``forward()``.
+        Check: the error message.
+        """
         model = _TwoStepModel(graph_scale=3.0).eval()
         with self.assertRaisesRegex(AssertionError, "'logits' differs from forward"):
             assert_deployment_reproduces_forward(
@@ -98,7 +110,12 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
             )
 
     def test_fails_when_the_reference_does_not_name_the_model_outputs(self) -> None:
-        """Test that a reference mapping with other names than the model outputs is refused."""
+        """Test that a reference mapping with other names than the model outputs is refused.
+
+        Input: ``forward_tensors`` naming ``scores`` while the deployment returns ``logits``.
+        Expected: AssertionError asking for exactly the model outputs.
+        Check: the error message.
+        """
         model = _TwoStepModel().eval()
         with self.assertRaisesRegex(AssertionError, "exactly the model outputs"):
             assert_deployment_reproduces_forward(
@@ -111,7 +128,12 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
             )
 
     def test_fails_for_a_model_without_graphs(self) -> None:
-        """Test that a model declaring no graphs fails instead of passing vacuously."""
+        """Test that a model declaring no graphs fails instead of passing vacuously.
+
+        Input: a model whose ``deployment_declaration()`` returns ``None``.
+        Expected: AssertionError saying it declares no deployment graphs.
+        Check: the error message.
+        """
 
         class _NoGraphs(nn.Module):
             def forward(

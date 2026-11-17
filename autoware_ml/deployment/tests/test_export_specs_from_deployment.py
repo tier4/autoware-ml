@@ -19,9 +19,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 import tempfile
-from typing import Any
 import unittest
 
+from jaxtyping import Float32
 from omegaconf import OmegaConf
 import torch
 from torch import nn
@@ -34,6 +34,11 @@ from autoware_ml.deployment.graphs import (
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.deploy import ExportSpec, export_to_onnx
+
+#: The toy batch: named float tensors of any shape.
+_Batch = Mapping[str, Float32[torch.Tensor, "*shape"]]
+#: What a toy model's forward() returns: one tensor, or tensors by name.
+_Outputs = Float32[torch.Tensor, "*shape"] | Mapping[str, Float32[torch.Tensor, "*shape"]]
 
 
 class _Encoder(nn.Module):
@@ -59,7 +64,7 @@ class _ToyModel(ModuleBaseModel):
             data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         )
 
-    def decode_outputs(self, multi_task_batch_inputs: Mapping[str, Any], outputs: Any) -> Any:
+    def decode_outputs(self, multi_task_batch_inputs: _Batch, outputs: _Outputs) -> _Outputs:
         del multi_task_batch_inputs
         return outputs
 
@@ -70,12 +75,14 @@ class _GraphModel(_ToyModel):
         self.encoder = _Encoder()
         self.head = _Head()
 
-    def forward(self, multi_task_batch_inputs: Mapping[str, Any]) -> dict[str, torch.Tensor]:
+    def forward(self, multi_task_batch_inputs: _Batch) -> dict[str, Float32[torch.Tensor, "1 2"]]:
         bev = self.encoder(multi_task_batch_inputs["points"].float()).sum(dim=0, keepdim=True)
         plus, minus = self.head(bev)
         return {"plus": plus, "minus": minus}
 
-    def compute_metrics(self, multi_task_batch_inputs: Mapping[str, Any], outputs: Any):
+    def compute_metrics(
+        self, multi_task_batch_inputs: _Batch, outputs: Mapping[str, Float32[torch.Tensor, "1 2"]]
+    ) -> dict[str, Float32[torch.Tensor, ""]]:
         del multi_task_batch_inputs
         return {"loss": outputs["plus"].sum()}
 
@@ -99,14 +106,16 @@ class _GraphModel(_ToyModel):
 
 
 class _PlainModel(_ToyModel):
-    def forward(self, multi_task_batch_inputs: Mapping[str, Any]) -> torch.Tensor:
+    def forward(self, multi_task_batch_inputs: _Batch) -> Float32[torch.Tensor, " num"]:
         return multi_task_batch_inputs["x"] + 1.0
 
-    def compute_metrics(self, multi_task_batch_inputs: Mapping[str, Any], outputs: Any):
+    def compute_metrics(
+        self, multi_task_batch_inputs: _Batch, outputs: Float32[torch.Tensor, " num"]
+    ) -> dict[str, Float32[torch.Tensor, ""]]:
         del multi_task_batch_inputs
         return {"loss": outputs.sum()}
 
-    def build_export_spec(self, batch_inputs: Mapping[str, Any]) -> ExportSpec:
+    def build_export_spec(self, batch_inputs: _Batch) -> ExportSpec:
         return ExportSpec(
             module=self,
             args=(batch_inputs["x"],),
@@ -124,16 +133,23 @@ class _Wrapper(nn.Module):
         return self.inner(x)
 
 
-def _batch() -> dict[str, torch.Tensor]:
+def _batch() -> dict[str, Float32[torch.Tensor, "*shape"]]:
+    """The toy batch: ``points`` (2, 2) and an ``unused`` tensor the deployment ignores."""
     return {"points": torch.tensor([[1.0, 2.0], [3.0, 4.0]]), "unused": torch.zeros(1)}
 
 
-def _identity_deployment(**axes) -> DeploymentDeclaration:
-    """One identity graph ``g`` fed the batch's ``x``."""
+def _identity_deployment(
+    onnx_dynamic_axes: Mapping[str, Mapping[int, str]] | None = None,
+) -> DeploymentDeclaration:
+    """One identity graph ``g`` fed the batch's ``x``, with the given dynamic axes."""
     return DeploymentDeclaration(
         (
             DeploymentGraph(
-                "g", module=nn.Identity(), input_names=("x",), output_names=("y",), **axes
+                "g",
+                module=nn.Identity(),
+                input_names=("x",),
+                output_names=("y",),
+                onnx_dynamic_axes=onnx_dynamic_axes or {},
             ),
         ),
         lambda multi_task_batch_inputs, executors: executors["g"].run(
@@ -146,7 +162,13 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
     """Unit tests for the export specs derived from a declared deployment."""
 
     def test_specs_are_derived_one_per_graph_in_declaration_order(self) -> None:
-        """Test that each graph gets one spec, in order, with its declared names."""
+        """Test that each graph gets one spec, in order, with its declared names.
+
+        Input: the two-graph toy model in eval mode and the toy batch.
+        Expected: specs ``encoder`` then ``head`` with the declared input and output names,
+            the live modules, no dynamic axes and both export stages supported.
+        Check: the spec keys, names, module identity, ``dynamic_axes`` and ``supported_stages``.
+        """
         model = _GraphModel().eval()
         specs = model.build_export_specs(_batch())
 
@@ -162,7 +184,13 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertEqual(encoder.supported_stages, frozenset({"onnx", "tensorrt"}))
 
     def test_trace_inputs_are_the_tensors_the_function_passed(self) -> None:
-        """Test that each spec traces on the tensors the function passed, matching forward()."""
+        """Test that each spec traces on the tensors the function passed, matching forward().
+
+        Input: the two-graph toy model on points ``[[1, 2], [3, 4]]``.
+        Expected: the encoder spec's arg is the points; the head spec's arg is the doubled rows
+            summed, ``[[8, 12]]``; the head run on it equals ``forward()``.
+        Check: both spec args and the head outputs against ``forward()``.
+        """
         model = _GraphModel().eval()
         specs = model.build_export_specs(_batch())
 
@@ -177,7 +205,12 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertTrue(torch.equal(minus, forward["minus"]))
 
     def test_graph_declared_axes_land_in_the_spec(self) -> None:
-        """Test that a graph's declared dynamic axes become the spec's dynamic axes."""
+        """Test that a graph's declared dynamic axes become the spec's dynamic axes.
+
+        Input: an identity graph declaring axis 0 of ``x`` and ``y`` as ``num_points``.
+        Expected: the spec's ``dynamic_axes`` is that same mapping.
+        Check: equality of ``dynamic_axes``.
+        """
         deployment = _identity_deployment(
             onnx_dynamic_axes={"x": {0: "num_points"}, "y": {0: "num_points"}}
         )
@@ -187,7 +220,12 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertEqual(specs["g"].dynamic_axes, {"x": {0: "num_points"}, "y": {0: "num_points"}})
 
     def test_multi_input_spec_args_follow_the_declared_input_order(self) -> None:
-        """Test that a spec's args and input names follow the graph's declared input order."""
+        """Test that a spec's args and input names follow the graph's declared input order.
+
+        Input: a subtraction graph declaring ``(a, b)``, run with ``b=1`` before ``a=10``.
+        Expected: ``input_names == ['a', 'b']``, args ``(10, 1)``, and the module gives 9.
+        Check: the spec's names, arg values and the module's output.
+        """
 
         # ONNX binds inputs by position: args and names follow ``inputs``, not the order the
         # function passed the keywords in.
@@ -211,7 +249,12 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertTrue(torch.equal(spec.module(*spec.args), torch.tensor([9.0])))
 
     def test_graphs_passed_as_a_generator_export_every_graph(self) -> None:
-        """Test that graphs given as a generator are read once and every graph is exported."""
+        """Test that graphs given as a generator are read once and every graph is exported.
+
+        Input: a declaration whose graphs are a one-graph generator.
+        Expected: one spec, ``g``.
+        Check: the spec keys.
+        """
 
         # The graphs must be read once: a generator is empty on a second pass.
         def graphs():
@@ -229,7 +272,12 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         )
 
     def test_a_misspelled_input_name_fails_at_export_naming_both_sides(self) -> None:
-        """Test that a misspelled input name fails at export, naming the graph and the names."""
+        """Test that a misspelled input name fails at export, naming the graph and the names.
+
+        Input: a graph declaring ``typo`` whose function passes ``x``.
+        Expected: TypeError naming ``g``, ``['typo']`` and ``['x']``.
+        Check: the error message.
+        """
         deployment = DeploymentDeclaration(
             (
                 DeploymentGraph(
@@ -246,7 +294,13 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
             )
 
     def test_a_graph_input_reused_in_place_is_rejected(self) -> None:
-        """Test that the function rewriting a graph's input in place is rejected at export."""
+        """Test that the function rewriting a graph's input in place is rejected at export.
+
+        Input: two identity graphs; the function multiplies ``g``'s output, which is its
+            input tensor, in place before passing it to ``h``.
+        Expected: ValueError listing ``{'g': ['x']}``.
+        Check: the error message.
+        """
 
         # nn.Identity returns the tensor it got: in place, the function would rewrite g's
         # trace input.
@@ -269,7 +323,12 @@ class TestExportEvalMode(unittest.TestCase):
     """Unit tests for the eval mode a deployment is traced and left in."""
 
     def test_a_deployment_refuses_to_trace_in_training_mode(self) -> None:
-        """Test that a model with deployment graphs in training mode refuses to build specs."""
+        """Test that a model with deployment graphs in training mode refuses to build specs.
+
+        Input: the two-graph toy model in training mode.
+        Expected: RuntimeError asking for eval mode.
+        Check: the error message.
+        """
         model = _GraphModel().train()
         with self.assertRaisesRegex(RuntimeError, "eval mode"):
             model.build_export_specs(_batch())
@@ -277,14 +336,26 @@ class TestExportEvalMode(unittest.TestCase):
     def test_a_deployment_refuses_to_trace_with_a_submodule_in_training_mode(
         self,
     ) -> None:
-        """Test that a submodule in training mode under an eval model is named and refused."""
+        """Test that a submodule in training mode under an eval model is named and refused.
+
+        Input: the toy model in eval mode with its ``encoder`` switched to training mode.
+        Expected: RuntimeError listing ``['encoder', 'encoder.linear']``.
+        Check: the error message.
+        """
         model = _GraphModel().eval()
         model.encoder.train()
         with self.assertRaisesRegex(RuntimeError, r"eval mode.*\['encoder', 'encoder.linear'\]"):
             model.build_export_specs(_batch())
 
     def test_export_leaves_the_submodules_a_wrapper_shares_in_eval_mode(self) -> None:
-        """Test that exporting a wrapper leaves the submodules it shares in eval mode."""
+        """Test that exporting a wrapper leaves the submodules it shares in eval mode.
+
+        Input: a wrapper around an eval ``Linear + BatchNorm1d`` the model shares, traced and
+            exported to ONNX with the TorchScript exporter.
+        Expected: the spec's module is in eval mode and so is every shared submodule after
+            the export.
+        Check: ``training`` of the spec module and of each shared module.
+        """
         shared = nn.Sequential(nn.Linear(2, 2), nn.BatchNorm1d(2)).eval()
         deployment = DeploymentDeclaration(
             (
@@ -316,7 +387,12 @@ class TestModelsWithoutDeploymentGraphs(unittest.TestCase):
     """Unit tests for the export path of a model that declares no deployment graphs."""
 
     def test_models_without_graphs_keep_the_end_to_end_default(self) -> None:
-        """Test that a model without deployment_graphs() keeps the single end_to_end spec."""
+        """Test that a model without deployment_graphs() keeps the single end_to_end spec.
+
+        Input: a model with ``build_export_spec()`` only.
+        Expected: no graphs, no declaration, and one ``end_to_end`` spec with input ``x``.
+        Check: the two ``None`` returns, the spec keys and the input names.
+        """
         model = _PlainModel()
         self.assertIsNone(model.deployment_graphs())
         self.assertIsNone(model.deployment_declaration())
