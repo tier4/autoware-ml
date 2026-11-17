@@ -91,8 +91,6 @@ model:
     on_epoch: true
     prog_bar: true
     sync_dist: true
-  export_output_names:
-    [dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot]
   freeze_encoder: false
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}

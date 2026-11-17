@@ -56,7 +56,6 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
-    SEG3D_HEAD_OUTPUT_NAMES,
     PTv3BaseModel,
     split_block_parameters,
 )
@@ -66,8 +65,8 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
     """PTv3 joint segmentation and detection model.
 
     Training: call forward() then compute_metrics().
-    Deployment: deployment_graphs() - requires export_output_names, grid_size,
-    and point_cloud_range to be provided at construction time.
+    Deployment: deployment_graphs() - requires grid_size and point_cloud_range to be
+    provided at construction time.
     """
 
     def __init__(
@@ -80,7 +79,6 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         log_dict_configs: LogDictConfigs,
         segmentation3d_loss_weight: float = 1.0,
         detection3d_loss_weight: float = 1.0,
-        export_output_names: Sequence[str] | None = None,
         grid_size: float | None = None,
         point_cloud_range: Sequence[float] | None = None,
         optimizer: Callable[..., Optimizer] | None = None,
@@ -102,7 +100,6 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
             log_dict_configs: Logging configuration for training and validation.
             segmentation3d_loss_weight: Weight of the segmentation loss term.
             detection3d_loss_weight: Weight of the detection loss term.
-            export_output_names: Ordered output names used during export.
             grid_size: Voxel grid size used to derive sparse shape for export.
             point_cloud_range: Point-cloud range used to derive sparse shape
                 for export.
@@ -132,9 +129,6 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         self.partial_annotations = partial_annotations
         self.segmentation3d_loss_weight = float(segmentation3d_loss_weight)
         self.detection3d_loss_weight = float(detection3d_loss_weight)
-        self._export_output_names = (
-            list(export_output_names) if export_output_names is not None else None
-        )
 
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         """Group pretrained and newly initialized joint-task parameters."""
@@ -343,19 +337,14 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
             The three graphs; the model outputs are the seg head's, then the det head's.
 
         Raises:
-            ValueError: If the export output names or the geometry were not configured.
+            ValueError: If the geometry was not configured.
         """
-        if self._export_output_names is None:
-            raise ValueError("export_output_names must be provided at construction time to deploy.")
         if self.grid_size is None or self.point_cloud_range is None:
             raise ValueError(
                 "grid_size and point_cloud_range must be provided at construction time to deploy."
             )
-        det3d_output_names = [
-            name for name in self._export_output_names if name not in SEG3D_HEAD_OUTPUT_NAMES
-        ]
         return (
             self.build_encoder_graph(),
             self.build_seg3d_head_graph(self.seg3d_head),
-            build_det3d_head_graph(self, self.bev_neck, self.bbox_head, det3d_output_names),
+            build_det3d_head_graph(self, self.bev_neck, self.bbox_head),
         )
