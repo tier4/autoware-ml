@@ -710,10 +710,10 @@ class SerializedAttention(PointModule):
                 if roped is None
                 else torch.stack(roped, dim=1)
             )
-            # flash attention takes fp16 or bf16; keep the autocast dtype instead of forcing
-            # fp16, and fall back to fp16 outside autocast.
+            # flash attention takes fp16 or bf16; keep the autocast dtype, and use bf16 outside
+            # autocast: without a gradient scaler fp16 returns the q/k gradients as zeros.
             flash_dtype = (
-                packed.dtype if packed.dtype in (torch.float16, torch.bfloat16) else torch.float16
+                packed.dtype if packed.dtype in (torch.float16, torch.bfloat16) else torch.bfloat16
             )
             feat = self.flash_attn.flash_attn_varlen_qkvpacked_func(
                 packed.to(flash_dtype),
