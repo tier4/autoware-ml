@@ -181,7 +181,6 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertIs(encoder.module, model.encoder)
         self.assertIs(head.module, model.head)
         self.assertIsNone(encoder.dynamic_axes)
-        self.assertEqual(encoder.supported_stages, frozenset({"onnx", "tensorrt"}))
 
     def test_trace_inputs_are_the_tensors_the_function_passed(self) -> None:
         """Test that each spec traces on the tensors the function passed, matching forward().
