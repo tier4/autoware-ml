@@ -156,7 +156,7 @@ class TestDet3dDeployment(unittest.TestCase):
         specs = self.model.build_export_specs(self.batch)
         self.assertEqual(set(specs), set(graphs))
         head_spec = specs[DET3D_HEAD_GRAPH]
-        self.assertEqual(head_spec.output_names, list(self.model.export_output_names))
+        self.assertEqual(head_spec.output_names, list(self.model.bbox_head.export_output_names))
         with torch.no_grad():
             outputs = dict(zip(head_spec.output_names, head_spec.module(*head_spec.args)))
         self.assertEqual(len(outputs), len(head_spec.output_names))

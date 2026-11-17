@@ -344,21 +344,20 @@ class PTv3Det3DHeadExportModule(nn.Module):
         bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
         stage_count: int,
-        output_names: Sequence[str],
     ) -> None:
         """Initialize the export-only detection head module.
 
         Args:
             bev_neck: The model's BEV neck; the graph traces a copy.
-            bbox_head: The model's detection head; the graph traces its export copy.
+            bbox_head: The model's detection head; the graph traces its export copy and
+                returns its ``export_output_names``.
             stage_count: Number of encoder stages, the input level included.
-            output_names: Ordered output tensor names emitted by ``bbox_head``.
         """
         super().__init__()
         self.bev_neck = deepcopy(bev_neck).eval()
         self.bbox_head = bbox_head.prepare_for_export(bev_shape=bev_neck.bev_projector.output_shape)
         self.stage_count = stage_count
-        self.output_names = list(output_names)
+        self.output_names = list(bbox_head.export_output_names)
 
     def forward(
         self,
@@ -399,7 +398,6 @@ class PTv3Detection3DModel(PTv3BaseModel):
         voxel_encoder: VoxelFeatureEncoder,
         bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
-        export_output_names: Sequence[str],
         grid_size: float,
         point_cloud_range: Sequence[float],
         log_dict_configs: LogDictConfigs,
@@ -413,8 +411,8 @@ class PTv3Detection3DModel(PTv3BaseModel):
             encoder: PTv3 encoder module.
             voxel_encoder: Voxel feature encoder feeding the embedding stem.
             bev_neck: Detection BEV neck consuming the encoder pooling chain.
-            bbox_head: Detection head producing the decoded predictions.
-            export_output_names: Ordered output names used during export.
+            bbox_head: Detection head producing the decoded predictions; its
+                ``export_output_names`` are the deployed graph's outputs.
             grid_size: Voxel grid size used to derive sparse shape.
             point_cloud_range: Point-cloud range used to derive sparse shape.
             log_dict_configs: Logging configuration for training and validation.
@@ -435,7 +433,6 @@ class PTv3Detection3DModel(PTv3BaseModel):
         self.bev_neck = bev_neck
         self.bbox_head = bbox_head
         self.partial_annotations = partial_annotations
-        self.export_output_names = list(export_output_names)
 
     def build_eval_output(self, batch: ModelBatchInputs, outputs: ModelOutputs) -> EvalOutput:
         """Decode detections and pair them with ground truth for metrics.
@@ -533,9 +530,6 @@ class PTv3Detection3DModel(PTv3BaseModel):
                 serialization_depth,
             ).build_deployment_graph(),
             PTv3Det3DHeadExportModule(
-                self.bev_neck,
-                self.bbox_head,
-                len(self.encoder.stride) + 1,
-                self.export_output_names,
+                self.bev_neck, self.bbox_head, len(self.encoder.stride) + 1
             ).build_deployment_graph(),
         )
