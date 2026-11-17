@@ -35,6 +35,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.deployment.graphs import DeploymentGraph, run_deployment_in_torch
 from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
@@ -323,6 +324,15 @@ class _BEVFusionDetection3DModelTestCase(unittest.TestCase):
             num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
 
+    def _build_single_sample_batch_inputs(self) -> ModelBatchInputs:
+        """Build a one-sample voxelized batch: the deployed lidar graph is single-sample."""
+        batch_size = self.batch_size
+        self.batch_size = 1
+        try:
+            return self._build_batch_inputs(voxels_data=self._build_voxels_data())
+        finally:
+            self.batch_size = batch_size
+
     def _build_detection3d_gt_batch(self) -> Detection3DGTBatch:
         """Build one ground-truth box per sample, all inside the scene, for ``batch_size`` samples."""
         gt_bboxes_3d = torch.tensor(
@@ -515,12 +525,14 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
             self.model.build_eval_output(self.batch_inputs, empty_outputs)
 
     def test_build_export_specs_keeps_first_sample_voxels_in_runtime_dtypes(self) -> None:
-        """Test that only the voxels of batch sample 0 are exported, as ``float32`` and ``int32``."""
-        voxels_data = self.batch_inputs.voxels_data
+        """Test that the one-sample batch's voxels are exported as ``float32`` and ``int32``."""
+        self.model.eval()
+        batch_inputs = self._build_single_sample_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
         assert voxels_data is not None
         first_sample = voxels_data.batch_indices == 0
 
-        export_specs = self.model.build_export_specs(self.batch_inputs)
+        export_specs = self.model.build_export_specs(batch_inputs)
         voxels, coors, num_points_per_voxel = export_specs["bevfusion_lidar"].args
 
         torch.testing.assert_close(voxels, voxels_data.voxels[first_sample])
@@ -532,22 +544,22 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
 
     def test_build_export_specs_requires_voxels_data(self) -> None:
         """Test that export spec construction rejects a batch without voxel data."""
+        self.model.eval()
         with self.assertRaises(ValueError):
             self.model.build_export_specs(self._build_batch_inputs(voxels_data=None))
 
     def test_build_export_specs_wraps_an_exportable_eval_copy(self) -> None:
         """
         Test that the exported wrapper holds a separate eval-mode copy of the model with the
-        exportable middle encoder and attention layers, leaving the training model untouched.
+        exportable middle encoder and attention layers, leaving the model itself untouched.
         """
-        self.model.train()
+        self.model.eval()
 
-        export_specs = self.model.build_export_specs(self.batch_inputs)
+        export_specs = self.model.build_export_specs(self._build_single_sample_batch_inputs())
         export_model = export_specs["bevfusion_lidar"].module.model
 
         self.assertIsNot(export_model, self.model)
         self.assertFalse(export_model.training)
-        self.assertTrue(self.model.training)
         assert export_model.lidar_network is not None
         assert self.model.lidar_network is not None
         export_middle_encoder = export_model.lidar_network.pts_middle_encoder
@@ -567,11 +579,13 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         Test that a lidar-only model exports one main body whose inputs are the first-sample voxel
         tensors, and that the wrapper produces the runtime detection tensors.
         """
-        voxels_data = self.batch_inputs.voxels_data
+        self.model.eval()
+        batch_inputs = self._build_single_sample_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
         assert voxels_data is not None
         num_first_sample_voxels = int((voxels_data.batch_indices == 0).sum())
 
-        export_specs = self.model.build_export_specs(self.batch_inputs)
+        export_specs = self.model.build_export_specs(batch_inputs)
 
         self.assertEqual(list(export_specs), ["bevfusion_lidar"])
         spec = export_specs["bevfusion_lidar"]
@@ -595,6 +609,56 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         self.assertEqual(label_pred.dtype, torch.int64)
         self.assertTrue(torch.isfinite(bbox_pred).all())
         self.assertTrue(torch.all((score >= 0.0) & (score <= 1.0)))
+
+    def test_deployment_keeps_the_runtime_module_and_falls_back_on_onnx(self) -> None:
+        """
+        Test that the lidar-only declaration keeps the runtime's graph name and I/O, and that
+        only ONNX Runtime falls back to PyTorch.
+        """
+        graphs = self.model.deployment_declaration().graphs
+
+        self.assertEqual([type(graph) for graph in graphs], [DeploymentGraph])
+        (graph,) = graphs
+        self.assertEqual(graph.name, "bevfusion_lidar")
+        self.assertEqual(graph.input_names, ("voxels", "coors", "num_points_per_voxel"))
+        self.assertEqual(graph.output_names, ("bbox_pred", "score", "label_pred"))
+        self.assertEqual(
+            graph.onnx_dynamic_axes,
+            {name: {0: "voxels_num"} for name in ("voxels", "coors", "num_points_per_voxel")},
+        )
+
+    def test_deployment_refuses_a_multi_sample_batch(self) -> None:
+        """Test that a multi-sample batch is refused instead of exporting only its first sample."""
+        self.model.eval()
+
+        with self.assertRaisesRegex(ValueError, "batch_size=1"):
+            self.model.build_export_specs(self.batch_inputs)
+
+    def test_camera_lidar_models_keep_their_hand_written_export_specs(self) -> None:
+        """Test that a model with a camera branch declares no deployment graphs."""
+        model = self._build_model(
+            lidar_network=self._build_lidar_network(with_fuser=True),
+            camera_network=self._build_camera_network(),
+        )
+        self.assertIsNone(model.deployment_graphs())
+
+    def test_deployment_reproduces_the_export_wrapper(self) -> None:
+        """Test that the deployment run in PyTorch reproduces the export wrapper's tensors."""
+        self.model.eval()
+        batch_inputs = self._build_single_sample_batch_inputs()
+        deployment = self.model.deployment_declaration()
+        assert deployment is not None
+
+        outputs = run_deployment_in_torch(deployment, batch_inputs, self.device)
+        self.assertEqual(list(outputs), ["bbox_pred", "score", "label_pred"])
+        specs = self.model.build_export_specs(batch_inputs)
+        with torch.no_grad():
+            bbox_pred, score, label_pred = specs["bevfusion_lidar"].module(
+                *specs["bevfusion_lidar"].args
+            )
+        torch.testing.assert_close(outputs["bbox_pred"], bbox_pred)
+        torch.testing.assert_close(outputs["score"], score)
+        torch.testing.assert_close(outputs["label_pred"], label_pred)
 
     def _build_partial_model(self) -> BEVFusionDetection3DModel:
         """Build a lidar-only detector that ignores cyclists in frames flagged as not annotated."""
