@@ -52,11 +52,15 @@ reading the map's speed limits and converting units are the caller's job.
 :class:`EgoReachability` holds everything that depends only on ego (the
 localized drivable area, the filled reachable region used by the prescreen, and
 the per-step fronts), so one frame's many objects share it instead of rebuilding
-identical ego geometry per box.
+identical ego geometry per box. :class:`WheeledReach` does the same for the steps
+of one agent: its arcs are traced once to the horizon and every step reads its
+set from them, where :func:`wheeled_reachable_set` traces them again for each
+``t``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import ceil, cos, hypot, inf, isfinite, pi, sin, tan
 
@@ -499,6 +503,138 @@ def wheeled_reachable_set(
     return shapely.union_all(pieces)
 
 
+class WheeledReach:
+    """A wheeled agent's reachable set at every step of the horizon, from arcs traced once.
+
+    :func:`wheeled_reachable_set` traces every arc again for each ``t``, so stepping one agent
+    through the horizon repeats the same work at every step: the arcs of a shorter travel are
+    prefixes of the horizon arcs, and neither where an arc leaves the road nor the body at each
+    of its poses depends on the step. This class traces the arcs once to the horizon and reads
+    each step's pieces from them, so :meth:`reachable_set` is exactly what
+    :func:`wheeled_reachable_set` returns at ``index * dt_s``.
+
+    :meth:`meets` answers the only question the collision test asks of an object's set, whether
+    it overlaps ego's, without building the set: a sweep lies inside the bodies it is made of,
+    so an arc none of whose bodies touches the other geometry cannot meet it and is never swept.
+    """
+
+    def __init__(self, agent: Agent, params: ReachabilityParams, drivable: BaseGeometry) -> None:
+        """Clip the body at the start pose, the arcs are traced on first use.
+
+        Args:
+            agent: Wheeled agent in the map frame.
+            params: Shared reachability parameters.
+            drivable: Drivable surface the arcs must stay on, sealed against hairline seams.
+        """
+        if agent.motion_model != MotionModel.WHEELED:
+            raise ValueError("only a wheeled agent drives along arcs.")
+        self.agent = agent
+        self.params = params
+        self._drivable = drivable
+        self._seed = Point(agent.x, agent.y)
+        # The body at the start pose, clipped the same way: an agent that cannot move,
+        # or whose every arc leaves the surface at once, still owns it.
+        start = np.array([[agent.x, agent.y, agent.heading]])
+        self._start = _connected_sweep(_body_polygons(agent, start)[0], drivable, self._seed)
+        self._arcs: list[tuple[np.ndarray, np.ndarray]] | None = None
+        self._complete: dict[int, BaseGeometry] = {}
+
+    def _trace(self) -> list[tuple[np.ndarray, np.ndarray]]:
+        """The driven poses of every drivable arc to the horizon, with the body at each pose.
+
+        One pose per step, so the poses a step reaches are a prefix of these. An arc cut at the
+        road edge ends with the pose at the edge, which every step past the cut includes.
+        """
+        if self._arcs is not None:
+            return self._arcs
+        agent, params = self.agent, self.params
+        kmax = 1.0 / params.turn_radius(agent)
+        kappas = np.linspace(
+            -kmax,
+            kmax,
+            _curvature_count(agent, agent.speed * params.horizon_s, kmax, params.arc_samples),
+        )
+        steps = int(params.horizon_s / params.dt_s + 1e-9)
+        distances = np.arange(steps + 1) * agent.speed * params.dt_s
+        arcs = []
+        # An arc is driven from the part of it that starts at the agent, so an agent standing
+        # off the surface drives none of them and there is nothing to trace.
+        on_surface = self._drivable.distance(self._seed) <= SURFACE_TOLERANCE_M
+        # Forward and reverse: the worst case is whichever direction closes the gap.
+        for sign in (1.0, -1.0) if on_surface else ():
+            for poses in _arc_poses(agent, sign * distances, kappas):
+                driven = _drivable_poses(poses, self._seed, self._drivable)
+                if driven is not None:
+                    arcs.append((driven, _body_polygons(agent, driven)))
+        self._arcs = arcs
+        # Flat views of every body, for testing all arcs against a geometry in one call.
+        self._bodies = np.concatenate([bodies for _, bodies in arcs]) if arcs else np.array([])
+        self._body_arc = np.repeat(np.arange(len(arcs)), [len(bodies) for _, bodies in arcs])
+        self._body_pose = (
+            np.concatenate([np.arange(len(bodies)) for _, bodies in arcs])
+            if arcs
+            else np.array([], dtype=np.int64)
+        )
+        return arcs
+
+    def _moves(self, index: int) -> bool:
+        """Whether the agent travels at all by step ``index``."""
+        return self.agent.speed * (index * self.params.dt_s) > SURFACE_TOLERANCE_M
+
+    def _sweep(self, arc: int, index: int) -> BaseGeometry:
+        """The body swept along one arc up to step ``index``, clipped and kept connected."""
+        poses, bodies = self._trace()[arc]
+        count = min(index, poses.shape[0] - 1) + 1
+        complete = count == poses.shape[0]
+        if complete and arc in self._complete:
+            return self._complete[arc]
+        sweep = _connected_sweep(
+            shapely.union_all(bodies[:count]), self._drivable, LineString(poses[:count, :2])
+        )
+        if complete:
+            # An arc cut at the road edge stops growing there, so every later step reads this.
+            self._complete[arc] = sweep
+        return sweep
+
+    def reachable_set(self, index: int) -> BaseGeometry:
+        """Everything the body can occupy within ``index * dt_s``.
+
+        Args:
+            index: Step of the horizon, from 0 to the last full step.
+
+        Returns:
+            The swept reachable set, equal to :func:`wheeled_reachable_set` at that time.
+        """
+        if not self._moves(index):
+            return self._start
+        arcs = self._trace()
+        return shapely.union_all(
+            [self._start, *(self._sweep(arc, index) for arc in range(len(arcs)))]
+        )
+
+    def meets(self, index: int, other: BaseGeometry) -> bool:
+        """Whether the reachable set at step ``index`` overlaps ``other``.
+
+        Args:
+            index: Step of the horizon, from 0 to the last full step.
+            other: Geometry in the map frame, prepared by the caller when it is tested often.
+
+        Returns:
+            The same answer ``other.intersects(self.reachable_set(index))`` gives.
+        """
+        if not self._start.is_empty and other.intersects(self._start):
+            return True
+        if not self._moves(index):
+            return False
+        self._trace()
+        reached = self._body_pose <= index
+        touching = shapely.intersects(other, self._bodies[reached])
+        return any(
+            other.intersects(self._sweep(int(arc), index))
+            for arc in np.unique(self._body_arc[reached][touching])
+        )
+
+
 def localized_surface(
     agent: Agent, params: ReachabilityParams, drivable: BaseGeometry
 ) -> BaseGeometry:
@@ -637,15 +773,15 @@ class EgoReachability:
         shapely.prepare(self._drivable)
         self._hat = wheeled_reachable_region(ego, params, self._drivable)
         shapely.prepare(self._hat)
+        self._reach = WheeledReach(ego, params, self._drivable)
         self._sets: list[BaseGeometry | None] = [None] * (self.steps + 1)
+        self._times: dict[Agent, float] = {}
 
     def _reachable_set(self, index: int) -> BaseGeometry:
         """Ego's prepared reachable-by-``index * dt`` set (built once per step)."""
         reachable = self._sets[index]
         if reachable is None:
-            reachable = wheeled_reachable_set(
-                self.ego, index * self.params.dt_s, self.params, self._drivable
-            )
+            reachable = self._reach.reachable_set(index)
             shapely.prepare(reachable)
             self._sets[index] = reachable
         return reachable
@@ -664,8 +800,29 @@ class EgoReachability:
             return None
         return max(1, ceil(t_min / self.params.dt_s - 1e-9))
 
+    def _first_meeting(self, start: int | None, meets: Callable[[int], bool]) -> float:
+        """Time of the earliest step from ``start`` at which ``meets`` holds, ``inf`` if none.
+
+        Both reachable sets grow with the step, so two sets that meet at one step meet at every
+        later one. The last step therefore decides whether they meet at all, and a bisection
+        finds the first step without testing the ones in between.
+        """
+        if start is None or start > self.steps or not meets(self.steps):
+            return inf
+        low, high = start, self.steps
+        while low < high:
+            middle = (low + high) // 2
+            if meets(middle):
+                high = middle
+            else:
+                low = middle + 1
+        return low * self.params.dt_s
+
     def time_to_collision(self, obj: Agent) -> float:
         """Earliest ``t`` at which ego and ``obj`` can occupy a common point at ``t``.
+
+        The time depends on nothing but the two agents, so it is kept per object: the same box
+        asked about again, by another suite or as a duplicate, is not propagated twice.
 
         Args:
             obj: Object agent in the map frame.
@@ -673,6 +830,13 @@ class EgoReachability:
         Returns:
             The earliest collision time in seconds, ``inf`` when unreachable.
         """
+        ttc = self._times.get(obj)
+        if ttc is None:
+            ttc = self._times[obj] = self._propagate(obj)
+        return ttc
+
+    def _propagate(self, obj: Agent) -> float:
+        """The collision time of ``obj``, by the prescreen and then the stepping."""
         if self._hat.is_empty:
             # Scenes whose map has no drivable region yet are evaluated with an
             # empty surface on purpose: nothing is reachable, every object scores
@@ -688,12 +852,9 @@ class EgoReachability:
             # grows is ego's, by speed * t plus its body.
             distance = obj.footprint.distance(Point(ego.x, ego.y))
             start = self._first_step(distance, ego.speed, ego.body_reach)
-            if start is None:
-                return inf
-            for index in range(start, self.steps + 1):
-                if self._reachable_set(index).intersects(obj.footprint):
-                    return index * params.dt_s
-            return inf
+            return self._first_meeting(
+                start, lambda index: self._reachable_set(index).intersects(obj.footprint)
+            )
 
         # Moving object: its set at t is within speed * t + body of its position, so
         # it must be able to reach the hat, and jointly close the gap to ego, in time.
@@ -706,16 +867,20 @@ class EgoReachability:
         # A wheeled object's whole path must stay on the surface, so its feasibility
         # is checked against the full drivable localized to the object's own reach,
         # never against ego's clip (the approach can start outside it).
-        surface = None
         if obj.motion_model == MotionModel.WHEELED:
             surface = localized_surface(obj, params, self._surface).buffer(SURFACE_TOLERANCE_M)
             shapely.prepare(surface)
-        for index in range(max(start_hat, start_gap), self.steps + 1):
-            t = index * params.dt_s
-            obj_set = reachable_set(obj, t, params, surface)
-            if not obj_set.is_empty and self._reachable_set(index).intersects(obj_set):
-                return t
-        return inf
+            reach = WheeledReach(obj, params, surface)
+
+            def meets(index: int) -> bool:
+                return reach.meets(index, self._reachable_set(index))
+        else:
+
+            def meets(index: int) -> bool:
+                obj_set = reachable_set(obj, index * params.dt_s, params, None)
+                return not obj_set.is_empty and self._reachable_set(index).intersects(obj_set)
+
+        return self._first_meeting(max(start_hat, start_gap), meets)
 
 
 def time_to_collision(
