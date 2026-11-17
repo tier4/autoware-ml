@@ -21,7 +21,7 @@ from jaxtyping import Float32
 import torch
 from torch import nn
 
-from autoware_ml.deployment.graphs import DeploymentDeclaration, DeploymentGraph, Graphs
+from autoware_ml.deployment.graphs import DeploymentDeclaration, DeploymentGraph, GraphExecutors
 from autoware_ml.deployment.tests.deployment_fixtures import assert_deployment_reproduces_forward
 
 
@@ -50,9 +50,11 @@ class _TwoStepModel(nn.Module):
         )
 
     def deployment_forward(
-        self, multi_task_batch_inputs: Float32[torch.Tensor, "batch_size 3"], graphs: Graphs
+        self,
+        multi_task_batch_inputs: Float32[torch.Tensor, "batch_size 3"],
+        executors: GraphExecutors,
     ) -> Mapping[str, Float32[torch.Tensor, "batch_size channels"]]:
-        return graphs["linear"].run(scaled=multi_task_batch_inputs * self.graph_scale)
+        return executors["linear"].run(scaled=multi_task_batch_inputs * self.graph_scale)
 
     def deployment_declaration(self) -> DeploymentDeclaration:
         return DeploymentDeclaration(tuple(self.deployment_graphs()), self.deployment_forward)
@@ -79,7 +81,7 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
         )
         self.assertEqual([graph.name for graph in check.graphs], ["linear"])
         self.assertEqual(tuple(check.forward_outputs.shape), (4, 2))
-        (scaled,) = check.run.graph_inputs["linear"]
+        (scaled,) = check.result.graph_inputs["linear"]
         self.assertEqual(tuple(scaled.shape), (4, 3))
 
     def test_fails_when_the_glue_differs_from_forward(self) -> None:

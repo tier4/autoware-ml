@@ -25,7 +25,7 @@ import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.deployment.graphs import DeploymentGraph, DeploymentRun, run_deployment_in_torch
+from autoware_ml.deployment.graphs import DeploymentGraph, DeploymentResult, run_deployment_in_torch
 from autoware_ml.models.module_base_model import ModuleBaseModel
 
 
@@ -34,7 +34,7 @@ class DeploymentForwardCheck(NamedTuple):
 
     graphs: tuple[DeploymentGraph, ...]
     forward_outputs: ModelOutputs
-    run: DeploymentRun
+    result: DeploymentResult
 
 
 def assert_deployment_reproduces_forward(
@@ -76,13 +76,13 @@ def assert_deployment_reproduces_forward(
     with torch.no_grad():
         forward_outputs = model(multi_task_batch_inputs)
     reference = forward_tensors(forward_outputs)
-    run = run_deployment_in_torch(deployment, multi_task_batch_inputs, device)
+    result = run_deployment_in_torch(deployment, multi_task_batch_inputs, device)
     case.assertEqual(
         set(reference),
-        set(run.outputs),
+        set(result.outputs),
         "forward_tensors must name exactly the model outputs of the deployed function.",
     )
-    for name, tensor in run.outputs.items():
+    for name, tensor in result.outputs.items():
         torch.testing.assert_close(
             tensor,
             reference[name],
@@ -90,4 +90,4 @@ def assert_deployment_reproduces_forward(
             atol=atol,
             msg=lambda detail, name=name: f"Model output {name!r} differs from forward(): {detail}",
         )
-    return DeploymentForwardCheck(deployment.graphs, forward_outputs, run)
+    return DeploymentForwardCheck(deployment.graphs, forward_outputs, result)

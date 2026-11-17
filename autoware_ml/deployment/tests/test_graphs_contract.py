@@ -61,9 +61,9 @@ def _toy_graphs(encoder: nn.Module | None = None, head: nn.Module | None = None)
     )
 
 
-def _toy_forward(multi_task_batch_inputs, graphs):
-    y = graphs["encoder"].run(x=multi_task_batch_inputs["x"].float())["y"]
-    return graphs["head"].run(z=y.to(graphs.device) + 0.5)
+def _toy_forward(multi_task_batch_inputs, executors):
+    y = executors["encoder"].run(x=multi_task_batch_inputs["x"].float())["y"]
+    return executors["head"].run(z=y.to(executors.device) + 0.5)
 
 
 def _run(forward=_toy_forward, graphs=None, x=None):
@@ -119,12 +119,12 @@ class TestRunDeploymentInTorch(unittest.TestCase):
 
     def test_runs_the_function_and_returns_its_outputs(self) -> None:
         """Test that the function runs the graphs and its return value is the model outputs."""
-        run = _run(x=torch.tensor([1, 2, 3]))
+        result = _run(x=torch.tensor([1, 2, 3]))
         # encoder: y=2x; glue: z=y+0.5; head: plus=z+1, minus=z-1
-        self.assertEqual(list(run.outputs), ["plus", "minus"])
-        self.assertTrue(torch.equal(run.outputs["plus"], torch.tensor([3.5, 5.5, 7.5])))
-        self.assertTrue(torch.equal(run.outputs["minus"], torch.tensor([1.5, 3.5, 5.5])))
-        self.assertEqual(list(run.graph_inputs), ["encoder", "head"])
+        self.assertEqual(list(result.outputs), ["plus", "minus"])
+        self.assertTrue(torch.equal(result.outputs["plus"], torch.tensor([3.5, 5.5, 7.5])))
+        self.assertTrue(torch.equal(result.outputs["minus"], torch.tensor([1.5, 3.5, 5.5])))
+        self.assertEqual(list(result.graph_inputs), ["encoder", "head"])
 
     def test_keyword_inputs_bind_in_the_declared_order(self) -> None:
         """Test that a graph's arguments follow its declared ``input_names``, not the call's order."""
@@ -137,13 +137,13 @@ class TestRunDeploymentInTorch(unittest.TestCase):
             ),
         )
 
-        def forward(multi_task_batch_inputs, graphs):
+        def forward(multi_task_batch_inputs, executors):
             a, b = torch.tensor([10.0]), torch.tensor([1.0])
-            return {**graphs["ab"].run(b=b, a=a), **graphs["ba"].run(a=a, b=b)}
+            return {**executors["ab"].run(b=b, a=a), **executors["ba"].run(a=a, b=b)}
 
-        run = _run(forward, graphs)
-        self.assertTrue(torch.equal(run.outputs["a_minus_b"], torch.tensor([9.0])))
-        self.assertTrue(torch.equal(run.outputs["b_minus_a"], torch.tensor([-9.0])))
+        result = _run(forward, graphs)
+        self.assertTrue(torch.equal(result.outputs["a_minus_b"], torch.tensor([9.0])))
+        self.assertTrue(torch.equal(result.outputs["b_minus_a"], torch.tensor([-9.0])))
 
     def test_graph_output_arity_is_checked(self) -> None:
         """Test that a graph returning fewer tensors than it declares is rejected, by name."""
@@ -165,9 +165,9 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_graph_inputs_are_tensors(self) -> None:
         """Test that a graph input that is not a tensor is rejected."""
 
-        def forward(multi_task_batch_inputs, graphs):
-            return graphs["head"].run(
-                z=[graphs["encoder"].run(x=multi_task_batch_inputs["x"])["y"]]
+        def forward(multi_task_batch_inputs, executors):
+            return executors["head"].run(
+                z=[executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]]
             )
 
         with self.assertRaisesRegex(TypeError, r"'head' binds tensors only; got \{'z': 'list'\}"):
@@ -176,8 +176,8 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_unknown_or_missing_input_names_are_named(self) -> None:
         """Test that a call with other keyword names than declared names both sides."""
 
-        def forward(multi_task_batch_inputs, graphs):
-            return graphs["encoder"].run(features=multi_task_batch_inputs["x"])
+        def forward(multi_task_batch_inputs, executors):
+            return executors["encoder"].run(features=multi_task_batch_inputs["x"])
 
         with self.assertRaisesRegex(TypeError, r"missing \['x'\], unknown \['features'\]"):
             _run(forward)
@@ -185,8 +185,8 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_an_undeclared_graph_is_named(self) -> None:
         """Test that calling a graph the model does not declare lists the declared ones."""
 
-        def forward(multi_task_batch_inputs, graphs):
-            return graphs["backbone"].run(x=multi_task_batch_inputs["x"])
+        def forward(multi_task_batch_inputs, executors):
+            return executors["backbone"].run(x=multi_task_batch_inputs["x"])
 
         with self.assertRaisesRegex(KeyError, r"No graph 'backbone'.*\['encoder', 'head'\]"):
             _run(forward)
@@ -194,8 +194,8 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_a_declared_graph_left_uncalled_is_rejected(self) -> None:
         """Test that a function skipping a declared graph is rejected: every graph is exported."""
 
-        def forward(multi_task_batch_inputs, graphs):
-            return graphs["encoder"].run(x=multi_task_batch_inputs["x"])
+        def forward(multi_task_batch_inputs, executors):
+            return executors["encoder"].run(x=multi_task_batch_inputs["x"])
 
         with self.assertRaisesRegex(RuntimeError, r"did not run the declared graphs \['head'\]"):
             _run(forward)
@@ -203,9 +203,9 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_a_graph_called_twice_is_rejected(self) -> None:
         """Test that a second call of one graph in a run is rejected."""
 
-        def forward(multi_task_batch_inputs, graphs):
-            graphs["encoder"].run(x=multi_task_batch_inputs["x"])
-            return graphs["encoder"].run(x=multi_task_batch_inputs["x"])
+        def forward(multi_task_batch_inputs, executors):
+            executors["encoder"].run(x=multi_task_batch_inputs["x"])
+            return executors["encoder"].run(x=multi_task_batch_inputs["x"])
 
         with self.assertRaisesRegex(RuntimeError, "'encoder' was run twice"):
             _run(forward)
@@ -213,13 +213,13 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_the_function_returns_named_tensors(self) -> None:
         """Test that a function returning no mapping, or a non-tensor output, is rejected."""
 
-        def as_tuple(multi_task_batch_inputs, graphs):
-            y = graphs["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
-            return tuple(graphs["head"].run(z=y).values())
+        def as_tuple(multi_task_batch_inputs, executors):
+            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
+            return tuple(executors["head"].run(z=y).values())
 
-        def with_a_list(multi_task_batch_inputs, graphs):
-            y = graphs["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
-            return {**graphs["head"].run(z=y), "extra": [y]}
+        def with_a_list(multi_task_batch_inputs, executors):
+            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
+            return {**executors["head"].run(z=y), "extra": [y]}
 
         with self.assertRaisesRegex(TypeError, "non-empty mapping of name -> tensor, got tuple"):
             _run(as_tuple)
@@ -229,11 +229,11 @@ class TestRunDeploymentInTorch(unittest.TestCase):
     def test_a_graph_input_modified_after_the_call_is_rejected(self) -> None:
         """Test that the function modifying a graph's input after the call is rejected."""
 
-        def forward(multi_task_batch_inputs, graphs):
+        def forward(multi_task_batch_inputs, executors):
             x = multi_task_batch_inputs["x"].float()
-            y = graphs["encoder"].run(x=x)["y"]
+            y = executors["encoder"].run(x=x)["y"]
             x.add_(100.0)
-            return graphs["head"].run(z=y)
+            return executors["head"].run(z=y)
 
         with self.assertRaisesRegex(ValueError, r"after the graphs ran: \{'encoder': \['x'\]\}"):
             _run(forward)
@@ -242,13 +242,13 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         """Test that the recorded graph inputs are the tensors the function passed."""
         seen = {}
 
-        def forward(multi_task_batch_inputs, graphs):
-            y = graphs["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
+        def forward(multi_task_batch_inputs, executors):
+            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
             seen["z"] = y + 0.5
-            return graphs["head"].run(z=seen["z"])
+            return executors["head"].run(z=seen["z"])
 
-        run = _run(forward)
-        (head_input,) = run.graph_inputs["head"]
+        result = _run(forward)
+        (head_input,) = result.graph_inputs["head"]
         self.assertIs(head_input, seen["z"])
 
 
@@ -269,13 +269,13 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
 
     def _run_on_copying_runners(self, forward=_toy_forward):
         runners = {graph.name: _CopyingRunner(graph) for graph in _toy_graphs()}
-        run = run_deployment(
+        result = run_deployment(
             DeploymentDeclaration(tuple(runners[name].graph for name in runners), forward),
             lambda graph: runners[graph.name],
             {"x": torch.tensor([1.0])},
             torch.device("cpu"),
         )
-        return run, runners
+        return result, runners
 
     def test_graph_inputs_are_the_logical_inputs_not_the_bound_copies(self) -> None:
         """
@@ -284,26 +284,26 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
         """
         seen = {}
 
-        def forward(multi_task_batch_inputs, graphs):
+        def forward(multi_task_batch_inputs, executors):
             seen["x"] = multi_task_batch_inputs["x"]
-            y = graphs["encoder"].run(x=seen["x"])["y"]
-            return graphs["head"].run(z=y)
+            y = executors["encoder"].run(x=seen["x"])["y"]
+            return executors["head"].run(z=y)
 
-        run, runners = self._run_on_copying_runners(forward)
-        (encoder_input,) = run.graph_inputs["encoder"]
+        result, runners = self._run_on_copying_runners(forward)
+        (encoder_input,) = result.graph_inputs["encoder"]
         self.assertIs(encoder_input, seen["x"])
         (bound,) = runners["encoder"].bound
         self.assertIsNot(bound, seen["x"])
-        self.assertTrue(torch.equal(run.outputs["plus"], torch.tensor([3.0])))
+        self.assertTrue(torch.equal(result.outputs["plus"], torch.tensor([3.0])))
 
     def test_an_input_modified_after_the_run_is_rejected_on_any_runner(self) -> None:
         """Test that the in-place check guards every backend, not only the PyTorch run."""
 
-        def forward(multi_task_batch_inputs, graphs):
+        def forward(multi_task_batch_inputs, executors):
             x = multi_task_batch_inputs["x"]
-            y = graphs["encoder"].run(x=x)["y"]
+            y = executors["encoder"].run(x=x)["y"]
             x.add_(100.0)
-            return graphs["head"].run(z=y)
+            return executors["head"].run(z=y)
 
         with self.assertRaisesRegex(ValueError, r"after the graphs ran: \{'encoder': \['x'\]\}"):
             self._run_on_copying_runners(forward)
@@ -315,10 +315,10 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
         """
         seen = {}
 
-        def forward(multi_task_batch_inputs, graphs):
-            seen["encoder"] = graphs["encoder"]
-            y = graphs["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
-            return graphs["head"].run(z=y)
+        def forward(multi_task_batch_inputs, executors):
+            seen["encoder"] = executors["encoder"]
+            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
+            return executors["head"].run(z=y)
 
         self._run_on_copying_runners(forward)
         executor = seen["encoder"]

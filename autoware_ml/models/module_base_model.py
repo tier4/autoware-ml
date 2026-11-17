@@ -38,7 +38,7 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
-    Graphs,
+    GraphExecutors,
     DeploymentGraph,
     build_export_specs_from_deployment,
 )
@@ -443,17 +443,17 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         return None
 
     def deployment_forward(
-        self, multi_task_batch_inputs: ModelBatchInputs, graphs: Graphs
+        self, multi_task_batch_inputs: ModelBatchInputs, executors: GraphExecutors
     ) -> Mapping[str, Shaped[torch.Tensor, "*shape"]]:
         """Run the deployed inference: the glue in plain code, each graph called by name.
 
         ``graphs[name].run(**inputs)`` runs one declared graph and returns its outputs by name;
         every declared graph runs exactly once. Tensors the function creates go to
-        ``graphs.device``. The returned tensors are the model outputs.
+        ``executors.device``. The returned tensors are the model outputs.
 
         Args:
             multi_task_batch_inputs: The preprocessed batch, as :meth:`forward` takes it.
-            graphs: The declared graphs of this run.
+            executors: The executors of this run, one per declared graph.
 
         Returns:
             The model outputs by name.

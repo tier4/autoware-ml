@@ -92,10 +92,10 @@ class _GraphModel(_ToyModel):
             ),
         )
 
-    def deployment_forward(self, multi_task_batch_inputs, graphs):
+    def deployment_forward(self, multi_task_batch_inputs, executors):
         features = multi_task_batch_inputs["points"].float()
-        encoded = graphs["encoder"].run(features=features)["encoded"]
-        return graphs["head"].run(bev=encoded.sum(dim=0, keepdim=True))
+        encoded = executors["encoder"].run(features=features)["encoded"]
+        return executors["head"].run(bev=encoded.sum(dim=0, keepdim=True))
 
 
 class _PlainModel(_ToyModel):
@@ -136,7 +136,9 @@ def _identity_deployment(**axes) -> DeploymentDeclaration:
                 "g", module=nn.Identity(), input_names=("x",), output_names=("y",), **axes
             ),
         ),
-        lambda multi_task_batch_inputs, graphs: graphs["g"].run(x=multi_task_batch_inputs["x"]),
+        lambda multi_task_batch_inputs, executors: executors["g"].run(
+            x=multi_task_batch_inputs["x"]
+        ),
     )
 
 
@@ -199,7 +201,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
                     "sub", module=_Subtract(), input_names=("a", "b"), output_names=("diff",)
                 ),
             ),
-            lambda multi_task_batch_inputs, graphs: graphs["sub"].run(
+            lambda multi_task_batch_inputs, executors: executors["sub"].run(
                 b=torch.tensor([1.0]), a=torch.tensor([10.0])
             ),
         )
@@ -219,7 +221,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
 
         deployment = DeploymentDeclaration(
             graphs(),
-            lambda multi_task_batch_inputs, graphs: graphs["g"].run(x=torch.ones(2)),
+            lambda multi_task_batch_inputs, executors: executors["g"].run(x=torch.ones(2)),
         )
         self.assertEqual(
             list(build_export_specs_from_deployment(deployment, None, torch.device("cpu"))),
@@ -234,7 +236,9 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
                     "g", module=nn.Identity(), input_names=("typo",), output_names=("y",)
                 ),
             ),
-            lambda multi_task_batch_inputs, graphs: graphs["g"].run(x=multi_task_batch_inputs["x"]),
+            lambda multi_task_batch_inputs, executors: executors["g"].run(
+                x=multi_task_batch_inputs["x"]
+            ),
         )
         with self.assertRaisesRegex(TypeError, r"'g' takes \['typo'\], got \['x'\]"):
             build_export_specs_from_deployment(
@@ -246,9 +250,9 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
 
         # nn.Identity returns the tensor it got: in place, the function would rewrite g's
         # trace input.
-        def forward(multi_task_batch_inputs, graphs):
-            y = graphs["g"].run(x=torch.ones(2))["y"]
-            return graphs["h"].run(z=y.mul_(3.0))
+        def forward(multi_task_batch_inputs, executors):
+            y = executors["g"].run(x=torch.ones(2))["y"]
+            return executors["h"].run(z=y.mul_(3.0))
 
         deployment = DeploymentDeclaration(
             (
@@ -288,7 +292,7 @@ class TestExportEvalMode(unittest.TestCase):
                     "wrapped", module=_Wrapper(shared), input_names=("x",), output_names=("y",)
                 ),
             ),
-            lambda multi_task_batch_inputs, graphs: graphs["wrapped"].run(
+            lambda multi_task_batch_inputs, executors: executors["wrapped"].run(
                 x=multi_task_batch_inputs["x"]
             ),
         )

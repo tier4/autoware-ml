@@ -220,9 +220,9 @@ A model whose deployment splits into several exported graphs with PyTorch glue
 between them can declare that split instead, with two methods: `deployment_graphs()`
 returns its `DeploymentGraph`s (one exported module each, named after the graph, with
 the tensor names it takes and returns), and
-`deployment_forward(multi_task_batch_inputs, graphs)` runs the deployed inference on
+`deployment_forward(multi_task_batch_inputs, executors)` runs the deployed inference on
 the preprocessed batch `forward()` takes, the glue in plain code and each graph run as
-`graphs[name].run(input_name=tensor)`. `build_export_specs()` then runs that function
+`executors[name].run(input_name=tensor)`. `build_export_specs()` then runs that function
 once on the example batch in eval mode and returns one export spec per
 `DeploymentGraph`, traced on the tensors the function passed it. Every declared graph
 runs exactly once, and a graph's inputs must not be modified in place after
