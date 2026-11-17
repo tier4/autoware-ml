@@ -165,14 +165,14 @@ def test_point_suite_serves_both_taxonomies_from_one_cache() -> None:
     ) == pytest.approx(0.0)
 
 
-def test_point_suite_requires_grouped_components_with_class_groups() -> None:
-    with pytest.raises(ValueError, match="come together"):
+def test_point_suite_requires_class_groups_with_grouped_components() -> None:
+    with pytest.raises(ValueError, match="class_groups defines"):
         Segmentation3DPointCloudMetricSuite(
             components=[ErrorClusters(stages=["test"])],
+            grouped_components=[ErrorClusters(stages=["test"])],
             num_classes=4,
             class_names=NAMES,
             ranges=(),
-            class_groups=GROUPS,
         )
 
 

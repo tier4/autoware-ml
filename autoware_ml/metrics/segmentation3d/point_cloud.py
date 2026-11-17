@@ -146,8 +146,8 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             ignore_index: Target label excluded from every metric.
             class_names: Ordered class names for metric keys, or ``None``.
             ranges: Radial windows every key is also emitted for.
-            class_groups: Group name to member class names defining the folded view. Comes
-                together with ``grouped_components``.
+            class_groups: Group name to member class names defining the folded view. Unused
+                without ``grouped_components``.
             grouped_components: Metrics reading the behaviour-group view under the
                 ``grouped/`` key prefix.
             **kwargs: Forwarded to :class:`MetricSuite`.
@@ -163,16 +163,12 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         # (which need the full softmax) are reduced at update alongside the
         # per-class ones. grouped_components read that view under grouped/.
         self._grouped_components = list(grouped_components) if grouped_components else []
-        # A suite emptied by point_components=[] still receives the shared class_groups.
-        if not self.components and not self._grouped_components:
-            class_groups = None
-        if (class_groups is None) != (not self._grouped_components):
-            raise ValueError(
-                "class_groups and grouped_components come together: the groups define "
-                "the folded view, the components read it."
-            )
+        if self._grouped_components and class_groups is None:
+            raise ValueError("grouped_components read the view that class_groups defines.")
         self._group_lut, self._grouped_names = (
-            resolve_class_groups(self.class_names, class_groups) if class_groups else (None, None)
+            resolve_class_groups(self.class_names, class_groups)
+            if self._grouped_components
+            else (None, None)
         )
         if self._group_lut is not None:
             if len(self._grouped_names) < 2:
