@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 import torch
@@ -100,6 +101,96 @@ class TestAgentTracksSample(unittest.TestCase):
         self.assertEqual(tracks.sizes.shape, (tracks.num_agents, 3))
         self.assertEqual(tracks.sizes.dtype, torch.float32)
         self.assertIsNone(tracks._replace(sizes=None).sizes)
+
+
+class TestMotionGTSampleTransformed(unittest.TestCase):
+    """The ground truth of a scenario moves with a transform of its frame."""
+
+    @staticmethod
+    def _matrix(yaw: float, scale: float, translation: tuple[float, float, float]) -> torch.Tensor:
+        """Rotation about z, uniform scale and translation as one 4x4 transform."""
+        cos, sin = math.cos(yaw), math.sin(yaw)
+        matrix = torch.eye(4)
+        matrix[:3, :3] = scale * torch.tensor([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]])
+        matrix[:3, 3] = torch.tensor(translation)
+        return matrix
+
+    def test_rotation_moves_positions_headings_velocities_and_scales_sizes(self) -> None:
+        """
+        Input: one agent at (1, 0, 0) heading along x at 2 m/s, its second step unobserved,
+        transformed by a quarter turn, a 1.1 scale and a (5, 0, 1) shift.
+        Expected: the observed step moves to (5, 1.1, 1) heading along y at 2.2 m/s along y, the
+        size grows by 1.1, the unobserved step keeps its zeros.
+        Check: positions, headings, velocities, sizes.
+        """
+        tracks = _tracks(
+            num_agents=1,
+            num_steps=2,
+            positions=torch.tensor([[[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]]),
+            velocities=torch.tensor([[[2.0, 0.0], [0.0, 0.0]]]),
+            valid=torch.tensor([[True, False]]),
+            current_step_index=0,
+            sizes=torch.tensor([[4.0, 2.0, 1.5]]),
+        )
+
+        moved = tracks.transformed(self._matrix(math.pi / 2, 1.1, (5.0, 0.0, 1.0)))
+
+        torch.testing.assert_close(moved.positions[0, 0], torch.tensor([5.0, 1.1, 1.0]))
+        torch.testing.assert_close(moved.headings[0, 0], torch.tensor(math.pi / 2))
+        torch.testing.assert_close(moved.velocities[0, 0], torch.tensor([0.0, 2.2]))
+        torch.testing.assert_close(moved.sizes, torch.tensor([[4.4, 2.2, 1.65]]))
+        self.assertTrue(bool((moved.positions[0, 1] == 0).all()))
+        self.assertEqual(float(moved.headings[0, 1]), 0.0)
+
+    def test_flip_mirrors_headings_and_velocities(self) -> None:
+        """
+        Input: an agent heading 30 degrees left at (1, 1) m/s, mirrored across the x axis.
+        Expected: the heading turns to 30 degrees right, the velocity to (1, -1).
+        Check: headings and velocities.
+        """
+        tracks = _tracks(
+            num_agents=1,
+            num_steps=1,
+            headings=torch.tensor([[math.pi / 6]]),
+            velocities=torch.tensor([[[1.0, 1.0]]]),
+            current_step_index=0,
+        )
+
+        moved = tracks.transformed(torch.diag(torch.tensor([1.0, -1.0, 1.0, 1.0])))
+
+        torch.testing.assert_close(moved.headings, torch.tensor([[-math.pi / 6]]))
+        torch.testing.assert_close(moved.velocities, torch.tensor([[[1.0, -1.0]]]))
+
+    def test_the_tracks_move_without_a_map(self) -> None:
+        """
+        Input: a sample without a map, shifted by (1, 2, 3).
+        Expected: the positions of the tracks shift by the same offset.
+        """
+        positions = torch.tensor([[[1.0, -2.0, 0.5]] * 5])
+        sample = _sample(num_agents=1, num_polylines=None, positions=positions)
+
+        moved = sample.transformed(self._matrix(0.0, 1.0, (1.0, 2.0, 3.0)))
+
+        offset = torch.tensor([1.0, 2.0, 3.0])
+        torch.testing.assert_close(moved.agents.positions, sample.agents.positions + offset)
+        self.assertIsNone(moved.map_polylines)
+
+    def test_the_map_moves_with_the_tracks(self) -> None:
+        """
+        Input: a sample with a vector map whose last point is unset, shifted by (1, 2, 3).
+        Expected: the set points of the polylines shift by the offset, the unset one stays zero.
+        """
+        sample = _sample(num_agents=1, num_polylines=2)
+        valid = sample.map_polylines.valid.clone()
+        valid[-1, -1] = False
+        sample = sample._replace(map_polylines=sample.map_polylines._replace(valid=valid))
+
+        moved = sample.transformed(self._matrix(0.0, 1.0, (1.0, 2.0, 3.0)))
+
+        expected = sample.map_polylines.points + torch.tensor([1.0, 2.0, 3.0])
+        expected[-1, -1] = 0.0
+        torch.testing.assert_close(moved.map_polylines.points, expected)
+        self.assertEqual(moved.map_polylines.element_ids, sample.map_polylines.element_ids)
 
 
 class TestAgentTracksBatch(unittest.TestCase):

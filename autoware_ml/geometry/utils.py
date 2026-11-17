@@ -20,7 +20,7 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d
 """
 
 import numpy as np
-from jaxtyping import Float32
+from jaxtyping import Float, Float32
 from torch import Tensor
 import torch
 
@@ -133,3 +133,18 @@ def points_in_rotated_box(coord: np.ndarray, box: np.ndarray) -> np.ndarray:
         & (np.abs(local_y) <= half[1])
         & (np.abs(offset[:, 2]) <= half[2])
     )
+
+
+def transform_points(
+    points: Float[Tensor, "*#batch 3"], matrix: Float[Tensor, "*#batch 4 4"]
+) -> Float[Tensor, "*#batch 3"]:
+    """Apply 4x4 transforms to 3D points.
+
+    Args:
+        points: Points ``(..., 3)``.
+        matrix: Transforms ``(..., 4, 4)``, their leading dims broadcast against the points.
+
+    Returns:
+        The transformed points ``(..., 3)``.
+    """
+    return (matrix[..., :3, :3] * points.unsqueeze(-2)).sum(-1) + matrix[..., :3, 3]

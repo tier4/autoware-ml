@@ -27,11 +27,14 @@ import torch
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
+from autoware_ml.dataclasses.batch.motion import AgentTracksSample, MotionGTSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.datamodule.t4dataset import dataset as dataset_module
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
+from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider, T4LaneletMapResolver
+from autoware_ml.types.geometry import Box3DCenterCoordinateType, Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
 _SCENE = "db_test_v1/0a1b2c3d-0000-4000-8000-000000000000/0"
@@ -439,3 +442,101 @@ def test_binding_summarises_the_tasks_on_rank_zero_only(
         )
 
     assert _LoggingTask.calls == expected_calls
+
+
+def _empty_sample() -> ModelGTSample:
+    """A sample without any annotation."""
+    return ModelGTSample(
+        lidar_point_cloud_samples=None,
+        image_samples=None,
+        point_cloud_data=None,
+        camera_image_data=None,
+        detection3d_gt_bboxes_3d=None,
+        segmentation3d_gt_sample=None,
+    )
+
+
+_BOXES = LidarBBoxes3D.from_numpy(
+    bbox_params=np.zeros((1, len(Box3DFieldIndex)), dtype=np.float32),
+    bbox_labels=np.zeros(1, dtype=np.int32),
+    bbox_center_coordinate_type=Box3DCenterCoordinateType.GRAVITY_CENTER,
+    bbox_label_names=["car"],
+    bbox_num_lidar_points=np.ones(1, dtype=np.int32),
+    bbox_instance_ids=np.zeros(1, dtype=np.int64),
+    bbox_attributes=[[]],
+)
+_TRACKS = MotionGTSample(
+    agents=AgentTracksSample(
+        positions=torch.zeros(1, 3, 3),
+        headings=torch.zeros(1, 3),
+        velocities=torch.zeros(1, 3, 2),
+        valid=torch.ones(1, 3, dtype=torch.bool),
+        agent_types=torch.zeros(1, dtype=torch.int64),
+        agent_roles=torch.zeros(1, dtype=torch.int64),
+        track_ids=["car"],
+        current_step_index=0,
+        step_seconds=0.5,
+        ignore_index=-1,
+    )
+)
+
+
+class _BoxesTask(BaseDatasetTask):
+    """A detection task serving the same box for every record."""
+
+    def hash_repr(self) -> str:
+        return "_BoxesTask()"
+
+    def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+        return dataset_records_dataframe
+
+    def get_data_sample(self, idx: int) -> ModelGTSample:
+        return _empty_sample()._replace(detection3d_gt_bboxes_3d=_BOXES)
+
+
+class _TracksTask(BaseDatasetTask):
+    """A motion task serving the same tracks for every record."""
+
+    def hash_repr(self) -> str:
+        return "_TracksTask()"
+
+    def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
+        return dataset_records_dataframe
+
+    def get_data_sample(self, idx: int) -> ModelGTSample:
+        return _empty_sample()._replace(motion_gt_sample=_TRACKS)
+
+
+def test_the_motion_task_serves_the_tracks_next_to_the_boxes(tmp_path: Path) -> None:
+    """
+    Input: a dataset over one record with a detection and a motion task.
+    Expected: the sample of the record carries the boxes of the detection task and the agent
+        tracks of the motion task.
+    """
+    records = pl.DataFrame(
+        {
+            DatasetTableSchema.LIDAR_FRAMES.name: [[_lidar_frame(_SCENE)]],
+            DatasetTableSchema.IMAGE_FRAMES.name: [[]],
+            DatasetTableSchema.TIMESTAMP_SECONDS.name: [12.5],
+        },
+        schema={
+            DatasetTableSchema.LIDAR_FRAMES.name: DatasetTableSchema.LIDAR_FRAMES.dtype,
+            DatasetTableSchema.IMAGE_FRAMES.name: DatasetTableSchema.IMAGE_FRAMES.dtype,
+            DatasetTableSchema.TIMESTAMP_SECONDS.name: DatasetTableSchema.TIMESTAMP_SECONDS.dtype,
+        },
+    )
+    dataset = T4Dataset(
+        lidar_intensity_scale=255.0,
+        database_root_path=str(tmp_path),
+        max_num_3d_gt_bboxes=4,
+        dataset_records_dataframe=records,
+        transforms=None,
+        dataset_tasks=MappingProxyType({"detection3d": _BoxesTask, "motion": _TracksTask}),
+        det3d_supervised=True,
+        seg3d_supervised=True,
+    )
+
+    sample = dataset.get_data_sample(0)
+
+    assert sample.detection3d_gt_bboxes_3d is _BOXES
+    assert sample.motion_gt_sample is _TRACKS

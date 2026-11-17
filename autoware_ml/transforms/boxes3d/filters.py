@@ -23,7 +23,7 @@ import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.points.base_points import BasePoints
-from autoware_ml.geometry.bbox_3d.physical import physical_shape_mask
+from autoware_ml.geometry.bbox_3d.physical import physical_shape_mask, zero_unannotated_velocity
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.types.geometry import Box3DFieldIndex
@@ -287,9 +287,7 @@ class BBoxesPhysicalFilter(BaseTransform):
             return model_gt_sample
 
         if self.zero_non_finite_velocity:
-            # The velocity columns are a view of the parameters, so the write lands in the boxes.
-            velocity = detection3d_gt_bboxes_3d.bbox_params[:, Box3DFieldIndex.VELOCITY_X :]
-            velocity[~torch.isfinite(velocity)] = 0.0
+            zero_unannotated_velocity(detection3d_gt_bboxes_3d.bbox_params)
 
         params = detection3d_gt_bboxes_3d.bbox_params
         velocity = params[:, Box3DFieldIndex.VELOCITY_X :]

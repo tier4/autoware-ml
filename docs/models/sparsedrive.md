@@ -52,6 +52,7 @@ The `lidar_encoder` and `seg3d_head` graphs are the PTv3 ones, see [PointTransfo
 | `autoware_ml/anchors/`                            | Anchor recipes of the Sparse4D head                       |
 | `autoware_ml/ops/deformable_aggregation/`         | Sparse4D keypoint sampling export operators               |
 | `autoware_ml/datamodule/streaming_data_module.py` | Datamodule streaming the frames of every scenario         |
+| `autoware_ml/datamodule/common/motion.py`         | Agent tracks of a record                                  |
 | `autoware_ml/configs/tasks/multi/sparsedrive/`    | SparseDrive experiment configurations                     |
 
 ## Acknowledgment

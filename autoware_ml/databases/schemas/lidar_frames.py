@@ -34,6 +34,26 @@ from autoware_ml.databases.schemas.utils import check_relative_path
 from autoware_ml.databases.t4pack.t4pack_frame import T4PackFrame, T4PackFrameDatasetSchema
 
 
+def points_to_global_matrix(
+    ego_pose_to_global: Float64[np.ndarray, "*batch 4 4"],
+    sensor_to_ego: Float64[np.ndarray, "*batch 4 4"],
+) -> Float64[np.ndarray, "*batch 4 4"]:
+    """
+    Transform from the frame of a lidar frame's points to the global frame.
+
+    The points and the boxes of a record live in the frame of its lidar sensor, so the transform
+    composes the sensor mounting with the ego pose of the frame.
+
+    Args:
+      ego_pose_to_global: Ego pose of the frame in the global frame.
+      sensor_to_ego: Mounting of the lidar sensor on the ego.
+
+    Returns:
+      The transform from the points to the global frame.
+    """
+    return ego_pose_to_global @ sensor_to_ego
+
+
 @dataclass(frozen=True)
 class LidarFrameDatasetSchema(BaseFieldSchema):
     """

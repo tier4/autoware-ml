@@ -25,9 +25,10 @@ from collections.abc import Sequence
 from typing import NamedTuple
 
 import torch
-from jaxtyping import Bool, Float32, Int64, Shaped
+from jaxtyping import Bool, Float, Float32, Int64, Shaped
 from torch import Tensor
 
+from autoware_ml.geometry.utils import transform_points
 from autoware_ml.types.dataset import DatasetFormat
 
 # Role of a padded agent slot and type of a padded polyline slot, outside every enum value
@@ -37,7 +38,8 @@ PADDED_INDEX = -1
 class AgentTracksSample(NamedTuple):
     """
     Named tuple to represent the agent tracks of one scenario over its time window, in the
-    coordinate frame of the source (the city frame for Argoverse 2).
+    coordinate frame of the source: the city frame for Argoverse 2, the point cloud frame of
+    the current record for T4Dataset, which follows the lidar augmentation of the sample.
 
     Every tensor is indexed by agent first and by step second. A step an agent was not observed
     at is marked invalid and carries zeros.
@@ -84,6 +86,40 @@ class AgentTracksSample(NamedTuple):
         """Number of steps in the window."""
         return self.positions.shape[1]
 
+    def transformed(self, transformation_matrix: Float[Tensor, "4 4"]) -> AgentTracksSample:
+        """
+        Move the tracks into another frame, such as the frame of a lidar augmentation.
+
+        The positions take the whole transform, the headings and the velocities its planar
+        part, so a flip mirrors them. The sizes take its scale. Unobserved steps keep their
+        zeros.
+
+        Args:
+          transformation_matrix: Transform from the frame of the tracks to the new one, a
+            rotation, a flip, a uniform scale and a translation.
+
+        Returns:
+          AgentTracksSample: The tracks in the new frame.
+        """
+
+        matrix = transformation_matrix.to(self.positions)
+        planar = matrix[:2, :2]
+        directions = torch.stack([self.headings.cos(), self.headings.sin()], dim=-1) @ planar.T
+        positions = transform_points(self.positions, matrix)
+        headings = torch.atan2(directions[..., 1], directions[..., 0])
+        velocities = self.velocities @ planar.T
+        observed = self.valid[..., None]
+        return self._replace(
+            positions=torch.where(observed, positions, 0.0),
+            headings=torch.where(self.valid, headings, 0.0),
+            velocities=torch.where(observed, velocities, 0.0),
+            sizes=(
+                self.sizes * torch.linalg.det(matrix[:3, :3]).abs().pow(1.0 / 3.0)
+                if self.sizes is not None
+                else None
+            ),
+        )
+
 
 class MapPolylinesSample(NamedTuple):
     """
@@ -106,6 +142,20 @@ class MapPolylinesSample(NamedTuple):
     def num_polylines(self) -> int:
         """Number of polylines in the map."""
         return self.points.shape[0]
+
+    def transformed(self, transformation_matrix: Float[Tensor, "4 4"]) -> MapPolylinesSample:
+        """
+        Move the polylines into another frame.
+
+        Args:
+          transformation_matrix: Transform from the frame of the polylines to the new one.
+
+        Returns:
+          MapPolylinesSample: The polylines in the new frame, unset points kept at zero.
+        """
+
+        points = transform_points(self.points, transformation_matrix.to(self.points))
+        return self._replace(points=torch.where(self.valid[..., None], points, 0.0))
 
     @property
     def num_points_per_polyline(self) -> int:
@@ -149,6 +199,27 @@ class MotionGTSample(NamedTuple):
     agents: AgentTracksSample
     # The vector map of the scenario, None when it was not loaded or the scenario has none
     map_polylines: MapPolylinesSample | None = None
+
+    def transformed(self, transformation_matrix: Float[Tensor, "4 4"]) -> MotionGTSample:
+        """
+        Move the agent tracks and the vector map into another frame.
+
+        Args:
+          transformation_matrix: Transform from the frame of the scenario to the new one, see
+            AgentTracksSample.transformed.
+
+        Returns:
+          MotionGTSample: The ground truth in the new frame.
+        """
+
+        return MotionGTSample(
+            agents=self.agents.transformed(transformation_matrix),
+            map_polylines=(
+                self.map_polylines.transformed(transformation_matrix)
+                if self.map_polylines is not None
+                else None
+            ),
+        )
 
 
 def _pad_rows(
