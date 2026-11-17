@@ -36,7 +36,6 @@ from autoware_ml.ops.indexing.operators import argsort
 from autoware_ml.ops.segment.segment_csr import segment_csr
 from autoware_ml.ops.spconv.sparse_conv import ExportableSubMConv3d
 from autoware_ml.ops.submanifold_conv import SubMConv3d
-from autoware_ml.utils.point_cloud.batching import offset_to_bincount
 from autoware_ml.utils.point_cloud.structures import Point, pooled_sparse_shape
 
 
@@ -571,8 +570,7 @@ class SerializedAttention(PointModule):
         self.channels = channels
         self.num_heads = num_heads
         self.enable_flash = enable_flash
-        self.patch_size_max = patch_size
-        self.patch_size = patch_size if enable_flash else 0
+        self.patch_size = patch_size
         self.scale = qk_scale or (channels // num_heads) ** -0.5
         self.order_index = order_index
         self.upcast_attention = upcast_attention
@@ -610,9 +608,12 @@ class SerializedAttention(PointModule):
         start = padded_start = 0
         for end in point.offset.tolist():
             order = torch.arange(start, end, device=device)
-            # A sample below one window keeps its own shorter window instead of being padded.
+            # With flash attention a sample below one window keeps its own shorter window;
+            # without it every window has the same size, so the sample is filled cyclically.
             padded = (
-                build_patch_order(order[None], patch_size)[0] if end - start > patch_size else order
+                build_patch_order(order[None], patch_size)[0]
+                if end - start > patch_size or not self.enable_flash
+                else order
             )
             pads.append(padded)
             unpads.append(torch.arange(padded_start, padded_start + end - start, device=device))
@@ -632,7 +633,6 @@ class SerializedAttention(PointModule):
     def disable_flash(self) -> None:
         """Disable flash attention for export-oriented execution paths."""
         self.enable_flash = False
-        self.patch_size = 0
         self.flash_attn = None
 
     def forward(self, point: Point) -> Point:
@@ -645,15 +645,6 @@ class SerializedAttention(PointModule):
             Point container with updated features.
         """
         head_count = self.num_heads
-        if not self.enable_flash:
-            # Export keeps the window static so no shape depends on the voxel count;
-            # samples smaller than one window are handled by the cyclic fill in
-            # `build_patch_order` rather than by shrinking the window.
-            self.patch_size = (
-                self.patch_size_max
-                if self.export_mode
-                else int(offset_to_bincount(point.offset).min().item())
-            )
         patch_size = self.patch_size
         channel_count = self.channels
         if self.export_mode:

@@ -192,7 +192,7 @@ def test_prepare_for_export_disables_flash_attention_without_mutating_live_encod
     assert attention.patch_size == 4
     assert export_attention.enable_flash is False
     assert export_attention.flash_attn is None
-    assert export_attention.patch_size == 0
+    assert export_attention.patch_size == 4
     assert encoder.shuffle_orders is True
     assert export_encoder.shuffle_orders is False
 
@@ -278,7 +278,8 @@ def test_serialized_attention_export_mode_keeps_a_static_window_below_capacity()
     assert torch.isfinite(output.feat).all()
 
 
-def test_serialized_attention_non_export_mode_adapts_patch_size() -> None:
+def test_serialized_attention_without_flash_matches_export_below_one_window() -> None:
+    """Without flash attention the window keeps its size and the fill matches export."""
     attention = SerializedAttention(
         channels=32,
         num_heads=4,
@@ -294,20 +295,28 @@ def test_serialized_attention_non_export_mode_adapts_patch_size() -> None:
         upcast_softmax=False,
     )
     attention.disable_flash()
-    point = Point(
-        {
-            "feat": torch.randn(3, 32),
-            "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
-            "serialized_order": torch.arange(3).reshape(1, 3),
-            "serialized_inverse": torch.arange(3).reshape(1, 3),
-            "offset": torch.tensor([3], dtype=torch.long),
-        }
-    )
+    feat = torch.randn(3, 32)
+    serialized_order = torch.arange(3).reshape(1, 3)
 
-    output = attention(point)
+    def make_point() -> Point:
+        return Point(
+            {
+                "feat": feat,
+                "grid_coord": torch.randint(0, 8, (3, 3), dtype=torch.int32),
+                "serialized_order": serialized_order,
+                "serialized_inverse": torch.arange(3).reshape(1, 3),
+                "patch_order": build_patch_order(serialized_order, patch_size=4),
+                "offset": torch.tensor([3], dtype=torch.long),
+            }
+        )
 
-    assert output.feat.shape == (3, 32)
-    assert attention.patch_size == 3
+    output = attention(make_point()).feat
+    attention.export_mode = True
+    export_output = attention(make_point()).feat
+
+    assert output.shape == (3, 32)
+    assert attention.patch_size == 4
+    torch.testing.assert_close(output, export_output)
 
 
 def test_serialized_attention_export_padding_matches_batched_branch() -> None:
@@ -327,7 +336,6 @@ def test_serialized_attention_export_padding_matches_batched_branch() -> None:
         upcast_softmax=False,
     )
     attention.disable_flash()
-    attention.patch_size = attention.patch_size_max
 
     def make_point(num_points: int) -> Point:
         return Point(
@@ -1199,10 +1207,16 @@ def _export_fill(num_points: int, patch_size: int) -> torch.Tensor:
 def _reference_training_padding(
     offset: torch.Tensor, patch_size: int, enable_flash: bool
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-    """PTv3's original per-sample slice-copy padding, kept as the training-path oracle."""
+    """PTv3's original per-sample slice-copy padding, kept as the training-path oracle.
+
+    Without flash attention a sample below one window is filled cyclically, as in export.
+    """
     bincount = torch.diff(offset, prepend=offset.new_zeros(1))
+    fill_short = (bincount > 0) & (bincount < patch_size) & (not enable_flash)
     padded_bincount = torch.where(
-        bincount > patch_size, (bincount + patch_size - 1) // patch_size * patch_size, bincount
+        (bincount > patch_size) | fill_short,
+        (bincount + patch_size - 1) // patch_size * patch_size,
+        bincount,
     )
     starts = nn.functional.pad(offset, (1, 0))
     padded_starts = nn.functional.pad(torch.cumsum(padded_bincount, dim=0), (1, 0))
@@ -1212,7 +1226,11 @@ def _reference_training_padding(
     for index in range(offset.numel()):
         unpad[starts[index] : starts[index + 1]] += padded_starts[index] - starts[index]
         end = padded_starts[index + 1]
-        if bincount[index] != padded_bincount[index]:
+        if fill_short[index]:
+            slots = torch.arange(int(bincount[index]), patch_size)
+            fill = (slots - patch_size) % bincount[index]
+            pad[padded_starts[index] + slots] = padded_starts[index] + fill
+        elif bincount[index] != padded_bincount[index]:
             tail = end - patch_size + bincount[index] % patch_size
             pad[tail:end] = pad[tail - patch_size : end - patch_size]
         pad[padded_starts[index] : end] -= padded_starts[index] - starts[index]
@@ -1247,7 +1265,8 @@ def test_export_fill_reproduces_the_training_fill_above_one_window(patch_size: i
 def test_training_padding_matches_the_reference_loop(patch_size: int, enable_flash: bool) -> None:
     """Two-sample batches with empty, sub-window, exact and padded samples."""
     attention = _build_attention(patch_size)
-    attention.enable_flash = enable_flash  # only selects whether `cu_seqlens` is returned
+    # Selects whether `cu_seqlens` is returned and whether a sample below one window is filled.
+    attention.enable_flash = enable_flash
     for counts in itertools.product(range(3 * patch_size + 2), repeat=2):
         offset = torch.tensor(list(itertools.accumulate(counts)))
         actual = attention._get_padding_and_inverse(Point(offset=offset))
