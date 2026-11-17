@@ -163,6 +163,9 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         # (which need the full softmax) are reduced at update alongside the
         # per-class ones. grouped_components read that view under grouped/.
         self._grouped_components = list(grouped_components) if grouped_components else []
+        # A suite emptied by point_components=[] still receives the shared class_groups.
+        if not self.components and not self._grouped_components:
+            class_groups = None
         if (class_groups is None) != (not self._grouped_components):
             raise ValueError(
                 "class_groups and grouped_components come together: the groups define "

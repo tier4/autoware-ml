@@ -176,6 +176,19 @@ def test_point_suite_requires_grouped_components_with_class_groups() -> None:
         )
 
 
+def test_point_suite_without_components_accepts_class_groups() -> None:
+    # point_components=[] empties both views while class_groups stays set.
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[],
+        grouped_components=[],
+        num_classes=4,
+        class_names=NAMES,
+        ranges=(),
+        class_groups=GROUPS,
+    )
+    assert not suite.runs_at(EvalStage.TEST)
+
+
 def test_point_suite_grouped_confidence_is_the_predicted_groups_mass() -> None:
     suite = Segmentation3DPointCloudMetricSuite(
         components=[ErrorClusters(stages=["test"])],
