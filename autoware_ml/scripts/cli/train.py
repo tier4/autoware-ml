@@ -38,8 +38,6 @@ from autoware_ml.builders.model_builder import (
     resolve_weights_paths,
 )
 from autoware_ml.builders.logger_builder import build_trainer_logger
-from autoware_ml.datamodule.data_module import DataModule
-from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.mlflow_helpers import MlflowRunContext
 from autoware_ml.utils.runtime import (
     configure_torch_runtime,
@@ -60,8 +58,8 @@ CONFIG_NAME_PREFIX = "tasks/"
 
 def fit_model(
     cfg: DictConfig,
-    model: ModuleBaseModel,
-    datamodule: DataModule,
+    model: L.LightningModule,
+    datamodule: L.LightningDataModule,
     run_context: MlflowRunContext | None,
     config_name: str,
     *,
@@ -77,8 +75,8 @@ def fit_model(
 
     Args:
         cfg: Fully composed Hydra configuration.
-        model: The model to train.
-        datamodule: The data module.
+        model: The model to train, e.g. a ``ModuleBaseModel``.
+        datamodule: The data module, e.g. a ``DataModule``.
         run_context: The MLflow run, or ``None`` without a tracker.
         config_name: User-facing config name, for the trainer logger.
         stage: Stage name recorded by the logger.
