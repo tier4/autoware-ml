@@ -248,6 +248,11 @@ class T4Dataset(BaseDataset):
             if TaskType.SEGMENTATION3D in data_samples
             else None
         )
+        motion_gt_sample = (
+            data_samples[TaskType.MOTION].motion_gt_sample
+            if TaskType.MOTION in data_samples
+            else None
+        )
         # The mask of a merged cloud labels the points of every source in file order
         if segmentation3d_gt_sample is not None and source_view is not None:
             end = source_view.point_index_begin + source_view.num_points
@@ -280,6 +285,7 @@ class T4Dataset(BaseDataset):
             detection3d_traffic_cone_barrier_bbox_status=(
                 detection3d_traffic_cone_barrier_bbox_status
             ),
+            motion_gt_sample=motion_gt_sample,
         )
 
     def get_lidar_source_view(self, idx: int, channel_name: str) -> LidarSourceView:

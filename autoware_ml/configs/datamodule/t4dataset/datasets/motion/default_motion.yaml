@@ -1,0 +1,10 @@
+_target_: autoware_ml.datamodule.common.motion.MotionTask
+_convert_: all
+_partial_: true
+
+taxonomy: ${taxonomy.detection3d}
+agent_steps: 12
+step_seconds: 0.5
+time_tolerance_seconds: 0.03
+max_speed: 50.0
+sparse_key_frames: false
