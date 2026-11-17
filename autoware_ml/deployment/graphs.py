@@ -189,6 +189,7 @@ class GraphExecutor:
         self._runner = runner
         self._device = device
         self._record = record
+        self._output_name_set = frozenset(graph.output_names)
 
     def run(self, **inputs: GraphTensor) -> dict[str, GraphTensor]:
         """Run the graph on exactly its declared inputs and return its declared outputs.
@@ -197,7 +198,10 @@ class GraphExecutor:
             RuntimeError: On a second run in one deployment run; a graph is one artifact,
                 run once.
             TypeError: When the keyword names are not the declared ``input_names``, or a
-                value is not a tensor.
+                value is not a tensor; when the runner returns something other than a
+                mapping of tensors.
+            ValueError: When the runner's output names are not exactly the declared
+                ``output_names``: the artifact does not match the declaration.
         """
         name = self.name
         if self._record.args is not None:
@@ -219,7 +223,35 @@ class GraphExecutor:
         args = tuple(inputs[key].to(self._device) for key in self.input_names)
         self._record.args = args
         self._record.versions = tuple(arg._version for arg in args)
-        produced = self._runner(args)
+        return self._check_outputs(self._runner(args))
+
+    def _check_outputs(self, produced: Mapping[str, GraphTensor]) -> dict[str, GraphTensor]:
+        """Return the runner's outputs in ``output_names`` order, refusing any other contract.
+
+        A runner that misses a declared output, or returns one the graph does not declare,
+        runs an artifact that does not match the declaration; the mismatch is named here, on
+        every backend, instead of surfacing as a bare ``KeyError`` or being dropped.
+        """
+        name = self.name
+        if not isinstance(produced, Mapping):
+            raise TypeError(
+                f"Graph {name!r}: the runner returned {type(produced).__name__}, not a mapping "
+                "of output name -> tensor."
+            )
+        if set(produced) != self._output_name_set:
+            raise ValueError(
+                f"Graph {name!r} declares the outputs {list(self.output_names)}, the runner "
+                f"returned {sorted(produced)}: missing "
+                f"{sorted(self._output_name_set - set(produced))}, unknown "
+                f"{sorted(set(produced) - self._output_name_set)}."
+            )
+        others = {
+            key: type(value).__name__
+            for key, value in produced.items()
+            if not torch.is_tensor(value)
+        }
+        if others:
+            raise TypeError(f"Graph {name!r} returned outputs that are not tensors: {others}.")
         return {key: produced[key] for key in self.output_names}
 
 

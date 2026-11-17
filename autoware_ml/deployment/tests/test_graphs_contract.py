@@ -264,6 +264,17 @@ class _CopyingRunner:
         return run_graph_module(self.graph, self.bound)
 
 
+class _RewritingRunner(_CopyingRunner):
+    """A backend runner whose outputs are rewritten, as a stale artifact's would be."""
+
+    def __init__(self, graph: DeploymentGraph, rewrite) -> None:
+        super().__init__(graph)
+        self.rewrite = rewrite
+
+    def __call__(self, args: tuple[torch.Tensor, ...]):
+        return self.rewrite(super().__call__(args))
+
+
 class TestRunDeploymentOnARunner(unittest.TestCase):
     """Unit tests for a run on a backend runner, the seam the artifact runners implement."""
 
@@ -276,6 +287,56 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
             torch.device("cpu"),
         )
         return result, runners
+
+    def _run_with_encoder_outputs(self, rewrite):
+        """Run the toy deployment with the encoder runner's outputs passed through ``rewrite``."""
+        encoder, head = _toy_graphs()
+        runners = {"encoder": _RewritingRunner(encoder, rewrite), "head": _CopyingRunner(head)}
+        return run_deployment(
+            DeploymentDeclaration((encoder, head), _toy_forward),
+            lambda graph: runners[graph.name],
+            {"x": torch.tensor([1.0])},
+            torch.device("cpu"),
+        )
+
+    def test_a_runner_missing_a_declared_output_is_named(self) -> None:
+        """Test that a runner returning fewer outputs than declared is refused by name."""
+        with self.assertRaisesRegex(
+            ValueError, r"Graph 'encoder' declares the outputs \['y'\].*missing \['y'\]"
+        ):
+            self._run_with_encoder_outputs(lambda outputs: {})
+
+    def test_a_runner_returning_an_undeclared_output_is_refused(self) -> None:
+        """Test that an output the graph does not declare is refused instead of dropped."""
+        with self.assertRaisesRegex(ValueError, r"unknown \['stale'\]"):
+            self._run_with_encoder_outputs(lambda outputs: {**outputs, "stale": outputs["y"]})
+
+    def test_a_runner_returning_no_mapping_is_refused(self) -> None:
+        """Test that a runner has to return its outputs by name."""
+        with self.assertRaisesRegex(TypeError, r"Graph 'encoder': the runner returned tuple"):
+            self._run_with_encoder_outputs(lambda outputs: tuple(outputs.values()))
+
+    def test_a_runner_returning_a_non_tensor_output_is_refused(self) -> None:
+        """Test that a non-tensor output is refused where it is produced, not where it is used."""
+        with self.assertRaisesRegex(
+            TypeError, r"Graph 'encoder' returned outputs that are not tensors: \{'y': 'list'\}"
+        ):
+            self._run_with_encoder_outputs(lambda outputs: {"y": [outputs["y"]]})
+
+    def test_outputs_come_back_in_the_declared_order(self) -> None:
+        """Test that a runner's output order does not leak: the executor orders by ``output_names``."""
+        _, head = _toy_graphs()
+        runners = {
+            "encoder": _CopyingRunner(_toy_graphs()[0]),
+            "head": _RewritingRunner(head, lambda outputs: dict(reversed(list(outputs.items())))),
+        }
+        result = run_deployment(
+            DeploymentDeclaration((runners["encoder"].graph, head), _toy_forward),
+            lambda graph: runners[graph.name],
+            {"x": torch.tensor([1.0])},
+            torch.device("cpu"),
+        )
+        self.assertEqual(list(result.outputs), ["plus", "minus"])
 
     def test_graph_inputs_are_the_logical_inputs_not_the_bound_copies(self) -> None:
         """
