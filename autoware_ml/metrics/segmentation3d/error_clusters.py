@@ -41,7 +41,7 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
     class_token,
     valid_point_mask,
 )
-from autoware_ml.metrics.segmentation3d.spatial import cluster_sizes
+from autoware_ml.metrics.segmentation3d.spatial import cluster_counts
 
 
 class ErrorClusters(Metric[PointCloudSeg3DState]):
@@ -92,9 +92,9 @@ class ErrorClusters(Metric[PointCloudSeg3DState]):
         # wrong when its predicted class differs from its target.
         num_classes = state.num_classes
         wrong_points = scored_points = clusters = frames_seen = 0
-        wrong_per_class = [0] * num_classes
-        scored_per_class = [0] * num_classes
-        clusters_per_class = [0] * num_classes
+        wrong_per_class = np.zeros(num_classes, dtype=np.int64)
+        scored_per_class = np.zeros(num_classes, dtype=np.int64)
+        clusters_per_class = np.zeros(num_classes, dtype=np.int64)
         for frame in state.frames:
             valid = valid_point_mask(frame, num_classes, state.ignore_index)
             if not valid.any():
@@ -102,15 +102,21 @@ class ErrorClusters(Metric[PointCloudSeg3DState]):
             frames_seen += 1
             coord, pred, target = frame.coord[valid], frame.pred[valid], frame.target[valid]
             wrong = pred != target
+            wrong_target = target[wrong]
             scored_points += int(valid.sum())
             wrong_points += int(wrong.sum())
-            clusters += self._clusters(coord[wrong])
-            for class_index in range(num_classes):
-                is_class = target == class_index
-                scored_per_class[class_index] += int(is_class.sum())
-                wrong_class = wrong & is_class
-                wrong_per_class[class_index] += int(wrong_class.sum())
-                clusters_per_class[class_index] += self._clusters(coord[wrong_class])
+            scored_per_class += np.bincount(target, minlength=num_classes)
+            wrong_per_class += np.bincount(wrong_target, minlength=num_classes)
+            # One neighbour search serves the whole-scene count and every class's.
+            frame_clusters, frame_clusters_per_class = cluster_counts(
+                coord[wrong],
+                wrong_target,
+                num_classes,
+                self.cluster_radius,
+                self.min_cluster_points,
+            )
+            clusters += frame_clusters
+            clusters_per_class += frame_clusters_per_class
 
         report = MetricReport()
         report.record(
@@ -124,13 +130,9 @@ class ErrorClusters(Metric[PointCloudSeg3DState]):
             name = class_token(class_index, state.class_names)
             report.record(
                 f"error_rate_{name}",
-                wrong_per_class[class_index] / scored_per_class[class_index]
+                int(wrong_per_class[class_index]) / int(scored_per_class[class_index])
                 if scored_per_class[class_index]
                 else float("nan"),
             )
             report.record(f"error_cluster_count_{name}", float(clusters_per_class[class_index]))
         return report
-
-    def _clusters(self, coord: np.ndarray) -> int:
-        sizes = cluster_sizes(coord, self.cluster_radius)
-        return int(np.sum(sizes >= self.min_cluster_points))

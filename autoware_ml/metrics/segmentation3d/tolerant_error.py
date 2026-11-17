@@ -29,6 +29,8 @@ per-class values become per-group and intra-group confusion counts as correct.
 
 from __future__ import annotations
 
+import numpy as np
+
 from autoware_ml.metrics.base import EvalStage, Metric
 from autoware_ml.metrics.report import MetricReport
 from autoware_ml.metrics.segmentation3d.point_cloud import (
@@ -75,22 +77,20 @@ class NeighbourhoodTolerantErrorRate(Metric[PointCloudSeg3DState]):
         # wrong when the neighbourhood rescue still leaves it disagreeing with its target.
         num_classes = state.num_classes
         wrong_points = scored_points = 0
-        wrong_per_class = [0] * num_classes
-        scored_per_class = [0] * num_classes
+        wrong_per_class = np.zeros(num_classes, dtype=np.int64)
+        scored_per_class = np.zeros(num_classes, dtype=np.int64)
         for frame in state.frames:
             valid = valid_point_mask(frame, num_classes, state.ignore_index)
             if not valid.any():
                 continue
             coord, pred, target = frame.coord[valid], frame.pred[valid], frame.target[valid]
             # The neighbourhood rescue uses every valid point's prediction, so the
-            # mask is computed once over the whole frame and then sliced per class.
+            # mask is computed once over the whole frame and then counted per class.
             errors = tolerant_error_mask(coord, pred, target, self.radius)
             scored_points += int(valid.sum())
             wrong_points += int(errors.sum())
-            for class_index in range(num_classes):
-                is_class = target == class_index
-                scored_per_class[class_index] += int(is_class.sum())
-                wrong_per_class[class_index] += int((errors & is_class).sum())
+            scored_per_class += np.bincount(target, minlength=num_classes)
+            wrong_per_class += np.bincount(target[errors], minlength=num_classes)
 
         report = MetricReport()
         report.record(
@@ -101,7 +101,7 @@ class NeighbourhoodTolerantErrorRate(Metric[PointCloudSeg3DState]):
             name = class_token(class_index, state.class_names)
             report.record(
                 f"tolerant_error_rate_{name}",
-                wrong_per_class[class_index] / scored_per_class[class_index]
+                int(wrong_per_class[class_index]) / int(scored_per_class[class_index])
                 if scored_per_class[class_index]
                 else float("nan"),
             )

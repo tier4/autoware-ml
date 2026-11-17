@@ -21,6 +21,8 @@ pinned without a model or GPU.
 
 from __future__ import annotations
 
+import unittest
+
 import numpy as np
 import pytest
 from scipy.stats import rankdata
@@ -41,7 +43,11 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
     confidence,
     normalized_entropy,
 )
-from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
+from autoware_ml.metrics.segmentation3d.spatial import (
+    cluster_counts,
+    cluster_sizes,
+    tolerant_error_mask,
+)
 from autoware_ml.metrics.report import MetricKey
 from autoware_ml.metrics.tests.eval_output_fixtures import (
     segmentation_eval_output,
@@ -455,6 +461,76 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
         np.testing.assert_array_equal(
             tolerant_error_mask(coord, pred, target, radius), _reference(radius)
         )
+
+
+class TestTolerantErrorMask(unittest.TestCase):
+    """Tests the neighbourhood rescue at its radius and on a frame with a stray point."""
+
+    def test_rescues_at_exactly_the_radius(self) -> None:
+        """Test that a correct-class point at the radius rescues, and one a step beyond not."""
+        # Each point is the other's only candidate.
+        target = np.array([0, 1])
+        pred = np.array([1, 0])
+        at_radius = np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]])
+        beyond = np.array([[0.0, 0.0, 0.0], [np.nextafter(0.25, 1.0), 0.0, 0.0]])
+
+        np.testing.assert_array_equal(
+            tolerant_error_mask(at_radius, pred, target, 0.25), [False, False]
+        )
+        np.testing.assert_array_equal(tolerant_error_mask(beyond, pred, target, 0.25), [True, True])
+
+    def test_ignores_a_point_far_from_the_scene(self) -> None:
+        """Test that a stray point, which rules the candidate grid out, changes no other point."""
+        rng = np.random.default_rng(11)
+        coord = rng.uniform(-5, 5, (600, 3))
+        target = rng.integers(0, 4, 600)
+        pred = np.where(rng.random(600) < 0.3, rng.integers(0, 4, 600), target)
+        expected = tolerant_error_mask(coord, pred, target, 0.6)
+        self.assertTrue(expected.any() and not expected.all())
+
+        # the stray point is correct and of a class no other point has, so it rescues no one
+        far = np.vstack([coord, [[1.0e9, 0.0, 0.0]]])
+        mask = tolerant_error_mask(far, np.append(pred, 9), np.append(target, 9), 0.6)
+
+        np.testing.assert_array_equal(mask[:600], expected)
+        self.assertFalse(mask[600])
+
+
+class TestClusterCounts(unittest.TestCase):
+    """Tests the cluster counts that share one neighbour search."""
+
+    def test_equal_clustering_each_class_on_its_own(self) -> None:
+        """Test that one search gives the counts of a search over all points and one per class."""
+        for seed in range(3):
+            for min_points in (1, 3):
+                with self.subTest(seed=seed, min_points=min_points):
+                    rng = np.random.default_rng(seed)
+                    centres = rng.uniform(-15, 15, (40, 3))
+                    coord = centres[rng.integers(0, 40, 1500)] + rng.normal(0, 0.4, (1500, 3))
+                    coord = coord.astype(np.float32)
+                    labels = rng.integers(0, 5, 1500)
+
+                    whole, per_class = cluster_counts(
+                        coord, labels, 6, radius=0.5, min_points=min_points
+                    )
+
+                    self.assertEqual(whole, int(np.sum(cluster_sizes(coord, 0.5) >= min_points)))
+                    expected = [
+                        int(np.sum(cluster_sizes(coord[labels == c], 0.5) >= min_points))
+                        for c in range(6)
+                    ]
+                    self.assertEqual(per_class.tolist(), expected)
+                    self.assertEqual(expected[5], 0)  # a class without points has no cluster
+
+    def test_without_points_or_links(self) -> None:
+        """Test that no points give no cluster and unlinked points one cluster each."""
+        whole, per_class = cluster_counts(np.zeros((0, 3)), np.zeros((0,), dtype=np.int64), 3, 0.5)
+        self.assertEqual((whole, per_class.tolist()), (0, [0, 0, 0]))
+
+        apart = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
+        whole, per_class = cluster_counts(apart, np.array([0, 0, 2]), 3, 0.5)
+        self.assertEqual((whole, per_class.tolist()), (3, [2, 0, 1]))
+        self.assertEqual(cluster_sizes(apart, 0.5).tolist(), [1, 1, 1])
 
 
 def test_entropy_auroc_binned_matches_rankdata_reference() -> None:
