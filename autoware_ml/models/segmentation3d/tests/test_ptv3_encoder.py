@@ -69,9 +69,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
-    build_ptv3_export_context,
     export_patch_sizes,
-    prepare_ptv3_export_inputs,
     require_single_sample_export_batch,
     validate_serialization_geometry,
 )
@@ -1351,7 +1349,7 @@ def test_export_attention_matches_training_on_a_non_identity_second_order(
     torch.testing.assert_close(export_feat, training_feat, atol=1e-5, rtol=1e-5)
 
 
-def test_export_input_builders_reject_a_multi_sample_batch() -> None:
+def test_export_rejects_a_multi_sample_batch() -> None:
     """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
     model = build_seg3d_model().eval()
     single = build_inputs().voxels_data
@@ -1366,9 +1364,8 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
         ).multi_task_gt_batch,
         is_training=True,
     )
-    for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
-        with pytest.raises(ValueError, match="single-sample"):
-            builder(model, double)
+    with pytest.raises(ValueError, match="single-sample"):
+        model.build_export_specs(double)
 
 
 def _jitter_affine_parameters(model: nn.Module) -> None:

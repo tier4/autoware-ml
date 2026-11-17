@@ -38,7 +38,7 @@ from autoware_ml.datamodule.base_dataset import ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
-    prepare_ptv3_export_inputs,
+    serialize_points,
 )
 from autoware_ml.types.dataset import SplitType
 from autoware_ml.utils.deploy import validate_cuda_available
@@ -60,8 +60,14 @@ def measure_frame_neighbors(model: PTv3BaseModel, batch: ModelGTBatch) -> list[f
             f"The voxelizer dropped {num_dropped_voxels} occupied voxels of a train frame. "
             "Increase 'max_voxels' of the data preprocessing so every voxel is kept."
         )
-    inputs = prepare_ptv3_export_inputs(model, batch_inputs)
-    stages = [inputs.grid_coord, *(meta.grid_coord for meta in inputs.pooling_metadata)]
+    tensors = serialize_points(model, batch_inputs, model.device)
+    stages = [
+        tensors["grid_coord"],
+        *(
+            tensors[f"serialized_pooling_{index}_grid_coord"]
+            for index in range(len(model.encoder.stride))
+        ),
+    ]
     return [mean_neighbors(stage) for stage in stages]
 
 
