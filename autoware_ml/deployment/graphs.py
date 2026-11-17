@@ -15,22 +15,18 @@
 """Deployment declared as graphs plus one function.
 
 A model declares the graphs it exports (:class:`DeploymentGraph`) and writes its deployed
-inference as one function, ``deployment_forward(multi_task_batch_inputs, executors)``: the glue is
-plain code in that function, and each graph is run by name. ``multi_task_batch_inputs`` is
-the preprocessed batch ``forward()`` takes. The framework hands the function its graphs as
-executors (:class:`GraphExecutors`, ``executors[name].run(**inputs)``), so one function serves
-export and every later run, and the model outputs are what the function returns.
-:func:`build_export_specs_from_deployment` derives the export specs from one PyTorch run of
-that function.
+inference as one function, ``deployment_forward(multi_task_batch_inputs, executors)``, on the
+preprocessed batch ``forward()`` takes: the glue is plain code and each graph runs as
+``executors[name].run(**inputs)``. The same function serves export
+(:func:`build_export_specs_from_deployment` traces each graph on the tensors one PyTorch run
+passed it) and every later run on a backend.
 
-The vocabulary, by lifetime: ``Deployment*`` / ``deployment_*`` is what the model declares
-(:class:`DeploymentGraph`, :class:`DeploymentDeclaration`, ``deployment_graphs()``,
-``deployment_forward()``); :class:`GraphExecutors`, :class:`GraphExecutor` and
-:class:`DeploymentResult` belong to one run of it; :class:`~autoware_ml.utils.deploy.ExportSpec`
-is the export artifact derived from both.
-Two things run a graph: a :class:`GraphExecutor` is what the deployed function calls (inputs
-by name, checked and recorded), and a :data:`BackendGraphRunner` is what a backend provides to it
-(positional tensors in, named tensors out; :func:`run_graph_module` is the PyTorch one).
+By lifetime: :class:`DeploymentGraph` and :class:`DeploymentDeclaration` are what the model
+declares; :class:`GraphExecutors`, :class:`GraphExecutor` and :class:`DeploymentResult` belong
+to one run; :class:`~autoware_ml.utils.deploy.ExportSpec` is derived from both. A
+:class:`GraphExecutor` is what the function calls (named, checked, recorded); a
+:data:`BackendGraphRunner` is what a backend provides to it (positional tensors in, named out;
+:func:`run_graph_module` is the PyTorch one).
 """
 
 from __future__ import annotations
@@ -226,11 +222,8 @@ class GraphExecutor:
         return self._check_outputs(self._runner(args))
 
     def _check_outputs(self, produced: Mapping[str, GraphTensor]) -> dict[str, GraphTensor]:
-        """Return the runner's outputs in ``output_names`` order, refusing any other contract.
-
-        A runner that misses a declared output, or returns one the graph does not declare,
-        runs an artifact that does not match the declaration; the mismatch is named here, on
-        every backend, instead of surfacing as a bare ``KeyError`` or being dropped.
+        """Return the runner's outputs in ``output_names`` order; any other set of names, or a
+        non-tensor, means the artifact does not match the declaration and is refused by name.
         """
         name = self.name
         if not isinstance(produced, Mapping):
@@ -258,8 +251,7 @@ class GraphExecutor:
 class GraphExecutors(Mapping[str, GraphExecutor]):
     """The executors of one run, by graph name, and the device they run on.
 
-    This is what the deployed function receives: ``executors[name].run(**inputs)`` runs one
-    graph. It holds nothing else; the function has no other view of the run.
+    What the deployed function receives: ``executors[name].run(**inputs)`` runs one graph.
 
     Attributes:
         device: Device every executor runs on; the function moves the tensors it makes there.

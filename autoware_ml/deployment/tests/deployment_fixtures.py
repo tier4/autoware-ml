@@ -48,10 +48,9 @@ def assert_deployment_reproduces_forward(
 ) -> DeploymentForwardCheck:
     """Run ``forward()`` and the deployed function on one batch and compare every model output.
 
-    ``forward()`` and ``deployment_forward()`` compose the same modules twice, once for training
-    and once for deployment, and nothing but this check keeps the two compositions equal.
-    Both runs share the weights, so only kernel-selection noise remains; a wrong dataflow is
-    off by O(1).
+    ``forward()`` and ``deployment_forward()`` compose the same modules twice; this check is
+    what keeps the two compositions equal. The runs share the weights, so the tolerances only
+    have to cover kernel-selection noise.
 
     Args:
         model: Model in eval mode declaring ``deployment_graphs()`` and ``deployment_forward()``;
