@@ -22,7 +22,7 @@ import torch
 from torch import nn
 
 from autoware_ml.deployment.graphs import DeploymentDeclaration, DeploymentGraph, GraphExecutors
-from autoware_ml.deployment.tests.deployment_fixtures import assert_deployment_reproduces_forward
+from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
 
 
 class _TwoStepModel(nn.Module):
@@ -73,9 +73,9 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
 
         Input: the two-step model whose deployment scales by the same 2.0 as ``forward()``,
             on a (4, 3) batch.
-        Expected: the check returns the one ``linear`` graph, (4, 2) forward outputs and the
-            (4, 3) tensor the graph ran on.
-        Check: the graph names and both shapes.
+        Expected: the check returns the (4, 2) forward outputs and the (4, 3) tensor the
+            ``linear`` graph ran on.
+        Check: both shapes.
         """
         model = _TwoStepModel().eval()
         check = assert_deployment_reproduces_forward(
@@ -86,9 +86,8 @@ class TestAssertDeploymentReproducesForward(unittest.TestCase):
             rtol=1e-6,
             atol=1e-6,
         )
-        self.assertEqual([graph.name for graph in check.graphs], ["linear"])
         self.assertEqual(tuple(check.forward_outputs.shape), (4, 2))
-        (scaled,) = check.result.graph_inputs["linear"]
+        (scaled,) = check.deployment_result.graph_inputs["linear"]
         self.assertEqual(tuple(scaled.shape), (4, 3))
 
     def test_fails_when_the_glue_differs_from_forward(self) -> None:

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The check every deployed model's tests run: the deployment reproduces ``forward()``."""
+"""Assertions the deployed models' tests share: the deployment reproduces ``forward()``."""
 
 from __future__ import annotations
 
@@ -25,16 +25,20 @@ import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
-from autoware_ml.deployment.graphs import DeploymentGraph, DeploymentResult, run_deployment_in_torch
+from autoware_ml.deployment.graphs import DeploymentResult, run_deployment_in_torch
 from autoware_ml.models.module_base_model import ModuleBaseModel
 
 
 class DeploymentForwardCheck(NamedTuple):
-    """What :func:`assert_deployment_reproduces_forward` ran, for checks beyond the outputs."""
+    """What :func:`assert_deployment_reproduces_forward` ran, for checks beyond the outputs.
 
-    graphs: tuple[DeploymentGraph, ...]
+    Attributes:
+        forward_outputs: What ``forward()`` returned on the batch.
+        deployment_result: The deployment run on the same batch, in PyTorch.
+    """
+
     forward_outputs: ModelOutputs
-    result: DeploymentResult
+    deployment_result: DeploymentResult
 
 
 def assert_deployment_reproduces_forward(
@@ -63,7 +67,7 @@ def assert_deployment_reproduces_forward(
         atol: Absolute tolerance of :func:`torch.testing.assert_close`.
 
     Returns:
-        The graphs, what ``forward()`` returned and the deployment run.
+        What ``forward()`` returned and the deployment run.
 
     Raises:
         AssertionError: When the model declares no graphs, ``forward_tensors`` does not name
@@ -77,9 +81,10 @@ def assert_deployment_reproduces_forward(
     reference = forward_tensors(forward_outputs)
     result = run_deployment_in_torch(deployment, multi_task_batch_inputs, device)
     case.assertEqual(
-        set(reference),
-        set(result.outputs),
-        "forward_tensors must name exactly the model outputs of the deployed function.",
+        sorted(reference),
+        sorted(result.outputs),
+        "forward_tensors must name exactly the model outputs of the deployed function: "
+        f"reference {sorted(reference)}, deployed {sorted(result.outputs)}.",
     )
     for name, tensor in result.outputs.items():
         torch.testing.assert_close(
@@ -89,4 +94,4 @@ def assert_deployment_reproduces_forward(
             atol=atol,
             msg=lambda detail, name=name: f"Model output {name!r} differs from forward(): {detail}",
         )
-    return DeploymentForwardCheck(deployment.graphs, forward_outputs, result)
+    return DeploymentForwardCheck(forward_outputs, result)
