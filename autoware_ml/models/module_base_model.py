@@ -447,7 +447,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     ) -> Mapping[str, Shaped[torch.Tensor, "*shape"]]:
         """Run the deployed inference: the glue in plain code, each graph called by name.
 
-        ``graphs[name].run(**inputs)`` runs one declared graph and returns its outputs by name;
+        ``executors[name].run(**inputs)`` runs one declared graph and returns its outputs by name;
         every declared graph runs exactly once. Tensors the function creates go to
         ``executors.device``. The returned tensors are the model outputs.
 

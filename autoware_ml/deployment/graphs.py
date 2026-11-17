@@ -18,7 +18,7 @@ A model declares the graphs it exports (:class:`DeploymentGraph`) and writes its
 inference as one function, ``deployment_forward(multi_task_batch_inputs, executors)``: the glue is
 plain code in that function, and each graph is run by name. ``multi_task_batch_inputs`` is
 the preprocessed batch ``forward()`` takes. The framework hands the function its graphs as
-executors (:class:`GraphExecutor`, ``graphs[name].run(**inputs)``), so one function serves
+executors (:class:`GraphExecutors`, ``executors[name].run(**inputs)``), so one function serves
 export and every later run, and the model outputs are what the function returns.
 :func:`build_export_specs_from_deployment` derives the export specs from one PyTorch run of
 that function.
@@ -369,7 +369,13 @@ def run_deployment(
         raise TypeError(
             f"deployment_forward returned model outputs that are not tensors: {others}."
         )
-    uncalled = [name for name, record in records.items() if record.args is None]
+    graph_inputs: dict[str, tuple[GraphTensor, ...]] = {}
+    uncalled: list[str] = []
+    for name, record in records.items():
+        if record.args is None:
+            uncalled.append(name)
+        else:
+            graph_inputs[name] = record.args
     if uncalled:
         raise RuntimeError(
             f"deployment_forward did not run the declared graphs {uncalled}; every declared "
@@ -385,7 +391,7 @@ def run_deployment(
             f"deployment_forward modified graph inputs in place after the graphs ran: "
             f"{modified}; export traces each graph on the tensors it ran on."
         )
-    return DeploymentResult(dict(outputs), {name: record.args for name, record in records.items()})
+    return DeploymentResult(dict(outputs), graph_inputs)
 
 
 def run_deployment_in_torch(
