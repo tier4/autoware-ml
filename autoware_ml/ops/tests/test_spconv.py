@@ -182,3 +182,10 @@ class TestSparseConv3d:
 
             assert {"GetIndicePairs", "GetIndicePairsImplicitGemm"} & op_types
             assert {"IndiceConv", "ImplicitGemm"} & op_types
+            attribute_names = {
+                node.op_type: {attribute.name for attribute in node.attribute}
+                for node in onnx_model.graph.node
+                if node.domain == "autoware"
+            }
+            assert "do_sort" in attribute_names["GetIndicePairsImplicitGemm"]
+            assert "act_type" in attribute_names["ImplicitGemm"]

@@ -429,6 +429,7 @@ class GetIndicePairsImplicitGemm(Function):
             transpose_i=transpose,
             is_train_i=is_train,
             outputs=5,
+            do_sort_i=int(SPCONV_DO_SORT),
         )
         indices_shape = _get_tensor_sizes(indices)
         if indices_shape is not None:
@@ -605,6 +606,7 @@ class ImplicitGemm(Function):
             fp32_accum_i=fp32_accum,
             act_alpha_f=act_alpha,
             act_beta_f=act_beta,
+            act_type_i=act_type.value,
             output_scale_f=output_scale,
             output_add_scale_f=output_add_scale,
             outputs=1,
