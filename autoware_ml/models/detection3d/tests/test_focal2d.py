@@ -139,6 +139,31 @@ class TestFocalHead2D(unittest.TestCase):
             outputs.centers_2d[0, token], torch.stack([expected_x, torch.tensor(0.25)])
         )
 
+    def test_forward_centers_the_last_token_of_a_ceil_grid_inside_the_image(self) -> None:
+        """Test that the last token of a side the stride does not divide stays inside the image.
+
+        Input: the prediction convs zeroed so every token predicts a zero center offset, and
+        the 7 x 11 ceil grid of a 100 x 168 image at stride 16, whose last row covers the
+        4 pixels from 96 to 100 and whose last column covers the 8 pixels from 160 to 168.
+        Expected: the last row is centered on pixel 98 and the last column on pixel 164, so
+        the decoded center of the last token is (164 / 168, 98 / 100) and no location reaches
+        the edge, where the inverse sigmoid would clamp it and the center offset would get
+        almost no gradient; the full tokens keep the pixel center of a stride-16 token, so the
+        first token decodes to (8 / 168, 8 / 100).
+        Check: the decoded centers of the first and the last token, and every center of the
+        last row and column strictly below 1.
+        """
+        with torch.no_grad():
+            self.head.center2d.weight.zero_()
+            self.head.center2d.bias.zero_()
+        outputs = self.head(torch.randn(1, 1, 32, 7, 11), image_height=100, image_width=168)
+
+        centers = outputs.centers_2d[0].detach().view(7, 11, 2)
+        torch.testing.assert_close(centers[0, 0], torch.tensor([8 / 168, 8 / 100]))
+        torch.testing.assert_close(centers[6, 10], torch.tensor([164 / 168, 98 / 100]))
+        self.assertLess(float(centers[6, :, 1].max()), 1.0)
+        self.assertLess(float(centers[:, 10, 0].max()), 1.0)
+
     def test_forward_refuses_a_token_grid_that_is_not_the_image_at_the_stride(self) -> None:
         """Test that a token grid the image size cannot give at the stride is refused.
 
@@ -555,21 +580,45 @@ class TestFocalHead2D(unittest.TestCase):
                 padding_mask=torch.tensor([False]),
             )
 
-    def test_loss_refuses_a_box_or_center_that_is_not_finite(self) -> None:
-        """Test that a non-finite box or center is refused before it reaches a loss.
+    def test_loss_refuses_a_box_or_center_that_is_not_finite_or_outside_the_image(self) -> None:
+        """Test that a non-finite box or center, or one outside the image, is refused up front.
 
-        Input: the predictions of one sample with a center holding a NaN coordinate, then a
-        box holding an infinite edge.
-        Expected: a non-finite target would turn a loss NaN or fail inside the heatmap, far
-        from the cause, so the batch is refused up front naming the transform.
-        Check: a ValueError naming the annotation transform in both cases.
+        Input: the predictions of one sample of a 96 x 160 image with a center holding a NaN
+        coordinate, a box holding an infinite edge, a center at x = -20, and a box whose
+        bottom edge is at y = 97; then a box and center on the edges of the image.
+        Expected: a non-finite target would turn a loss NaN or fail inside the heatmap, and a
+        finite one outside the image names a heatmap cell off the grid where no peak is drawn,
+        both far from the cause, so the batch is refused up front naming the transform; the
+        edges are inside the image, as the annotation transform clamps to them.
+        Check: a ValueError naming the annotation transform in the four cases, and the five
+        losses finite on the edges.
         """
         outputs = self.head(torch.randn(1, 2, 32, 6, 10), image_height=96, image_width=160)
 
-        with self.assertRaisesRegex(ValueError, "annotation transform"):
-            self._loss(outputs, [False], center=torch.tensor([[35.0, math.nan]]))
-        with self.assertRaisesRegex(ValueError, "annotation transform"):
-            self._loss(outputs, [False], box=torch.tensor([[10.0, 10.0, math.inf, 60.0]]))
+        for center, box in (
+            ([[35.0, math.nan]], None),
+            (None, [[10.0, 10.0, math.inf, 60.0]]),
+            ([[-20.0, 30.0]], None),
+            (None, [[10.0, 10.0, 60.0, 97.0]]),
+        ):
+            with (
+                self.subTest(center=center, box=box),
+                self.assertRaisesRegex(ValueError, "annotation transform"),
+            ):
+                self._loss(
+                    outputs,
+                    [False],
+                    center=None if center is None else torch.tensor(center),
+                    box=None if box is None else torch.tensor(box),
+                )
+        losses = self._loss(
+            outputs,
+            [False],
+            box=torch.tensor([[0.0, 0.0, 160.0, 96.0]]),
+            center=torch.tensor([[160.0, 96.0]]),
+        )
+        for key in LOSS_KEYS:
+            self.assertTrue(torch.isfinite(losses[key]), key)
 
     def test_embed_dims_must_split_into_the_group_norm_groups(self) -> None:
         """Test that the hidden channels must be a multiple of the 32 GroupNorm groups.

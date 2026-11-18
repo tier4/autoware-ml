@@ -50,19 +50,27 @@ def _token_locations(
 ) -> Float32[torch.Tensor, "feature_height feature_width 2"]:
     """Build normalized pixel-center locations for every feature-map token.
 
+    A token covers ``stride`` pixels from its start; the last token of a side the stride does
+    not divide covers only the pixels left inside the image, and its location is the center of
+    those, so every location is strictly inside the image. A location at or beyond the edge
+    would be clamped by the inverse sigmoid of the center decoding and leave its token's
+    center offset almost without gradient.
+
     Returns:
         Locations with shape ``(feature_height, feature_width, 2)`` as
         ``(x, y)`` normalized by the padded image size.
     """
-    shifts_x = (
-        torch.arange(0, stride * feature_width, step=stride, dtype=torch.float32, device=device)
-        + stride // 2
-    ) / image_width
-    shifts_y = (
-        torch.arange(0, stride * feature_height, step=stride, dtype=torch.float32, device=device)
-        + stride // 2
-    ) / image_height
-    shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x, indexing="ij")
+
+    def centers(num_tokens: int, image_size: int) -> Float32[torch.Tensor, " num_tokens"]:
+        starts = torch.arange(
+            0, stride * num_tokens, step=stride, dtype=torch.float32, device=device
+        )
+        extents = (starts + stride).clamp(max=image_size) - starts
+        return (starts + torch.div(extents, 2, rounding_mode="floor")) / image_size
+
+    shift_y, shift_x = torch.meshgrid(
+        centers(feature_height, image_height), centers(feature_width, image_width), indexing="ij"
+    )
     return torch.stack((shift_x, shift_y), dim=-1)
 
 
@@ -473,11 +481,20 @@ class FocalHead2D(nn.Module):
             [torch.cat([boxes, centers], dim=1) for boxes, _, centers in ground_truth], dim=0
         ).cpu()
         host_labels = torch.cat([labels for _, labels, _ in ground_truth], dim=0).cpu()
-        # A non-finite target would fail far from the cause.
-        if not bool(torch.isfinite(host_boxes_and_centers).all()):
+        # A non-finite target would fail far from the cause, and a finite one outside the image
+        # would name a heatmap cell off the grid, where no peak is drawn.
+        image_extent = host_boxes_and_centers.new_tensor([image_width, image_height]).repeat(3)
+        if not bool(
+            (
+                torch.isfinite(host_boxes_and_centers)
+                & (host_boxes_and_centers >= 0.0)
+                & (host_boxes_and_centers <= image_extent)
+            ).all()
+        ):
             raise ValueError(
-                "The 2D boxes or centers hold a non-finite value; the annotation transform must "
-                "drop the boxes it cannot project."
+                "The 2D boxes or centers hold a non-finite value or one outside the "
+                f"{image_width} x {image_height} image; the annotation transform must drop the "
+                "boxes it cannot project and clip the rest to the image."
             )
         host_cls_scores, host_bbox_preds, host_pred_centers2d = (
             torch.cat([cls_scores, bbox_preds, pred_centers2d], dim=-1)
