@@ -38,7 +38,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
 )
-from autoware_ml.models.detection3d.heads.focal2d import FocalHead2D
+from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
 from autoware_ml.models.detection3d.task_modules.bbox_coders import NMSFreeBBoxCoder3D
@@ -325,9 +325,9 @@ def _head_2d_loss(
     module = head.module if isinstance(head, DistributedDataParallel) else head
     losses = module.loss(
         outputs,
-        gt_bboxes_2d=[[boxes] for _, boxes, _ in images],
-        gt_labels_2d=[[labels] for *_, labels in images],
-        gt_centers_2d=[[boxes[:, :2] + 15.0] for _, boxes, _ in images],
+        gt_bboxes_2d=[boxes for _, boxes, _ in images],
+        gt_labels_2d=[labels for *_, labels in images],
+        gt_centers_2d=[boxes[:, :2] + 15.0 for _, boxes, _ in images],
         padding_mask=torch.zeros(len(images), dtype=torch.bool),
     )
     return sum(losses.values())
@@ -340,7 +340,7 @@ def _build_head_2d() -> FocalHead2D:
 
 def _head_2d_whole_batch_gradients(
     box_counts: tuple[int, ...],
-) -> list[Float32[torch.Tensor, "..."]]:
+) -> list[Float32[torch.Tensor, "*shape"]]:
     """Gradients of the 2D head over the whole batch on one process, without a process group."""
     head = _build_head_2d()
     _head_2d_loss(head, box_counts, range(len(box_counts))).backward()
@@ -351,7 +351,7 @@ def _head_2d_gradient_worker(
     rank: int,
     world_size: int,
     box_counts: tuple[int, ...],
-    whole_gradients: list[Float32[torch.Tensor, "..."]],
+    whole_gradients: list[Float32[torch.Tensor, "*shape"]],
 ) -> None:
     head = _build_head_2d()
     # The wrapper must outlive the backward pass, which its hooks average over the ranks.

@@ -399,6 +399,10 @@ class TestStreamPETRHeadOutputs(unittest.TestCase):
 class TestFocalHead2DOutputs(unittest.TestCase):
     """Unit tests for the dense outputs of the auxiliary 2D head."""
 
+    def setUp(self) -> None:
+        """Build the outputs of 4 images of 6 tokens on a 2 x 3 grid and 3 classes."""
+        self.outputs = self.build()
+
     def build(
         self,
         num_tokens_of_boxes: int = 6,
@@ -406,6 +410,7 @@ class TestFocalHead2DOutputs(unittest.TestCase):
         feature_width: int = 3,
         heatmap_channels: int = 3,
     ) -> FocalHead2DOutputs:
+        """The outputs of 4 images of 6 tokens, with one field changed from the valid ones."""
         return FocalHead2DOutputs(
             cls_scores=torch.zeros(4, 6, 3),
             bbox_preds=torch.zeros(4, num_tokens_of_boxes, 4),

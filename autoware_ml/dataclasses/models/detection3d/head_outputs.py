@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from jaxtyping import Bool, Float, Int64
+from jaxtyping import Bool, Float, Float32, Int64
 from pydantic import BaseModel, ConfigDict, model_validator
 
 import torch
@@ -291,10 +291,10 @@ class FocalHead2DOutputs(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    cls_scores: Float[torch.Tensor, "num_images num_tokens num_classes"]
-    bbox_preds: Float[torch.Tensor, "num_images num_tokens 4"]
-    centers_2d: Float[torch.Tensor, "num_images num_tokens 2"]
-    heatmap: Float[torch.Tensor, "num_images num_tokens num_classes"]
+    cls_scores: Float32[torch.Tensor, "num_images num_tokens num_classes"]
+    bbox_preds: Float32[torch.Tensor, "num_images num_tokens 4"]
+    centers_2d: Float32[torch.Tensor, "num_images num_tokens 2"]
+    heatmap: Float32[torch.Tensor, "num_images num_tokens num_classes"]
     feature_height: int
     feature_width: int
     image_height: int

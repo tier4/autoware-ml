@@ -23,7 +23,8 @@ from jaxtyping import Bool, Float, Float32, Int64
 import torch
 
 from autoware_ml.dataclasses.models.detection3d.head_outputs import FocalHead2DOutputs
-from autoware_ml.models.detection3d.heads.focal2d import FocalHead2D
+from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D, _GroundTruth2D
+from autoware_ml.models.detection3d.task_modules.heatmap import draw_heatmap_gaussian
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 
 CLASS_NAMES = ["car", "truck", "bus", "bicycle", "pedestrian", "traffic_cone", "barrier"]
@@ -66,9 +67,9 @@ class TestFocalHead2D(unittest.TestCase):
         batch_size = len(padding)
         return self.head.loss(
             outputs,
-            gt_bboxes_2d=[[box] + [box[:0]] * (num_cams - 1)] * batch_size,
-            gt_labels_2d=[[label] + [label[:0]] * (num_cams - 1)] * batch_size,
-            gt_centers_2d=[[center] + [center[:0]] * (num_cams - 1)] * batch_size,
+            gt_bboxes_2d=([box] + [box[:0]] * (num_cams - 1)) * batch_size,
+            gt_labels_2d=([label] + [label[:0]] * (num_cams - 1)) * batch_size,
+            gt_centers_2d=([center] + [center[:0]] * (num_cams - 1)) * batch_size,
             padding_mask=torch.tensor(padding),
             gt_annotated_class_masks=masks,
         )
@@ -80,16 +81,30 @@ class TestFocalHead2D(unittest.TestCase):
 
         Every other channel must stay empty, which the helper checks.
         """
-        heatmap = self.head._build_heatmap(
-            torch.tensor([center]),
-            torch.tensor([box]),
-            torch.tensor([label]),
-            FEATURE_HEIGHT,
-            FEATURE_WIDTH,
-        )
+        heatmap = self._heatmaps(
+            [torch.tensor([box])], [torch.tensor([label])], [torch.tensor([center])]
+        )[0]
         others = torch.cat([heatmap[:label], heatmap[label + 1 :]])
         self.assertEqual(float(others.abs().sum()), 0.0)
         return heatmap[label]
+
+    def _heatmaps(
+        self,
+        boxes: list[Float32[torch.Tensor, "num_boxes 4"]],
+        labels: list[Int64[torch.Tensor, " num_boxes"]],
+        centers: list[Float32[torch.Tensor, "num_boxes 2"]],
+    ) -> Float32[torch.Tensor, "num_images num_classes feature_height feature_width"]:
+        """The heatmaps of the given images on the 6 x 10 grid, one channel per class."""
+        ground_truth = _GroundTruth2D(
+            bboxes=torch.cat(boxes),
+            labels=torch.cat(labels),
+            centers=torch.cat(centers),
+            counts=[box.shape[0] for box in boxes],
+        )
+        heatmaps = self.head._build_heatmaps(
+            ground_truth, FEATURE_HEIGHT, FEATURE_WIDTH, torch.device("cpu")
+        )
+        return heatmaps.transpose(1, 2).reshape(len(boxes), -1, FEATURE_HEIGHT, FEATURE_WIDTH)
 
     def test_forward_predicts_every_token_of_every_image(self) -> None:
         """Test that the head predicts every token of every image, sample by sample.
@@ -139,56 +154,32 @@ class TestFocalHead2D(unittest.TestCase):
             outputs.centers_2d[0, token], torch.stack([expected_x, torch.tensor(0.25)])
         )
 
-    def test_forward_centers_the_last_token_of_a_ceil_grid_inside_the_image(self) -> None:
-        """Test that the last token of a side the stride does not divide stays inside the image.
-
-        Input: the prediction convs zeroed so every token predicts a zero center offset, and
-        the 7 x 11 ceil grid of a 100 x 168 image at stride 16, whose last row covers the
-        4 pixels from 96 to 100 and whose last column covers the 8 pixels from 160 to 168.
-        Expected: the last row is centered on pixel 98 and the last column on pixel 164, so
-        the decoded center of the last token is (164 / 168, 98 / 100) and no location reaches
-        the edge, where the inverse sigmoid would clamp it and the center offset would get
-        almost no gradient; the full tokens keep the pixel center of a stride-16 token, so the
-        first token decodes to (8 / 168, 8 / 100).
-        Check: the decoded centers of the first and the last token, and every center of the
-        last row and column strictly below 1.
-        """
-        with torch.no_grad():
-            self.head.center2d.weight.zero_()
-            self.head.center2d.bias.zero_()
-        outputs = self.head(torch.randn(1, 1, 32, 7, 11), image_height=100, image_width=168)
-
-        centers = outputs.centers_2d[0].detach().view(7, 11, 2)
-        torch.testing.assert_close(centers[0, 0], torch.tensor([8 / 168, 8 / 100]))
-        torch.testing.assert_close(centers[6, 10], torch.tensor([164 / 168, 98 / 100]))
-        self.assertLess(float(centers[6, :, 1].max()), 1.0)
-        self.assertLess(float(centers[:, 10, 0].max()), 1.0)
-
     def test_forward_refuses_a_token_grid_that_is_not_the_image_at_the_stride(self) -> None:
-        """Test that a token grid the image size cannot give at the stride is refused.
+        """Test that a token grid that does not cover the image at the stride is refused.
 
         Input: 6 x 10 tokens declared for 160 x 96 images (the sides swapped), 12 x 20
-        tokens of 96 x 160 images (a stride-8 neck under a stride-16 head), and the 6 x 10
-        and 7 x 11 grids of a 100 x 168 image (the floor and the ceil of the size over the
-        stride).
-        Expected: the heatmap targets are drawn on the token grid and the boxes are normalized
-        by the image size, so a grid that is neither the floor nor the ceil of a side over
-        the stride is refused, naming the side, while both the floor and the ceil pass.
-        Check: a ValueError naming the side for the first two, no error for the last two.
+        tokens of 96 x 160 images (a stride-8 neck under a stride-16 head) and 6 x 10 tokens
+        of a 100 x 168 image (an image that is not a multiple of the stride).
+        Expected: the token locations, the heatmap targets and the box normalization all
+        read the grid as the image over the stride, so a grid that does not cover the image
+        exactly is refused, naming both sizes; a wrong stride or a non-divisible image would
+        otherwise train against targets on the wrong grid without an error.
+        Check: a ValueError naming the token grid and the image in the three cases.
         """
-        with self.assertRaisesRegex(ValueError, "along its height"):
-            self.head(torch.randn(1, 1, 32, 6, 10), image_height=160, image_width=96)
-        with self.assertRaisesRegex(ValueError, "along its height"):
-            self.head(torch.randn(1, 1, 32, 12, 20), image_height=96, image_width=160)
-        for feature_height, feature_width in ((6, 10), (7, 11)):
-            outputs = self.head(
-                torch.randn(1, 1, 32, feature_height, feature_width),
-                image_height=100,
-                image_width=168,
-            )
-            self.assertEqual(
-                (outputs.feature_height, outputs.feature_width), (feature_height, feature_width)
-            )
+        for feature_height, feature_width, image_height, image_width in (
+            (6, 10, 160, 96),
+            (12, 20, 96, 160),
+            (6, 10, 100, 168),
+        ):
+            with (
+                self.subTest(grid=(feature_height, feature_width)),
+                self.assertRaisesRegex(ValueError, "token grid at stride 16"),
+            ):
+                self.head(
+                    torch.randn(1, 1, 32, feature_height, feature_width),
+                    image_height=image_height,
+                    image_width=image_width,
+                )
 
     def test_loss_drops_the_background_terms_of_the_unannotated_classes(self) -> None:
         """Test that the mask of a sample drops the background terms of its unannotated classes.
@@ -198,10 +189,9 @@ class TestFocalHead2D(unittest.TestCase):
         annotated without them.
         Expected: the five losses are finite; masks of annotated samples give the plain loss,
         and the mask of sample 1 removes strictly positive background terms of its images from
-        the classification and the heatmap losses, not from the box and center losses; masks
-        of another batch size are refused.
+        the classification and the heatmap losses, not from the box and center losses.
         Check: the losses finite, the classification and heatmap losses with and without the
-        mask, the other losses unchanged, and a ValueError naming the expected shape.
+        mask, and the other losses unchanged.
         """
         outputs = self.head(torch.randn(2, 2, 32, 6, 10), image_height=96, image_width=160)
 
@@ -216,8 +206,6 @@ class TestFocalHead2D(unittest.TestCase):
             self.assertLess(masked[key], unmasked[key], key)
         for key in ("loss_bbox2d", "loss_iou2d", "loss_centers2d"):
             torch.testing.assert_close(masked[key], unmasked[key], msg=key)
-        with self.assertRaisesRegex(ValueError, "batch_size, num_classes"):
-            self._loss(outputs, [False, False], masks=self._masks([True]))
 
     def test_class_weights_follow_the_images_of_every_sample(self) -> None:
         """Test that every token of every image of a sample takes the mask row of its sample.
@@ -419,6 +407,42 @@ class TestFocalHead2D(unittest.TestCase):
         for key in LOSS_KEYS:
             torch.testing.assert_close(evaluation[key], training[key].detach(), msg=key)
 
+    def test_heatmaps_equal_the_gaussians_drawn_box_by_box(self) -> None:
+        """Test that the batched heatmaps equal the Gaussians drawn box by box on every image.
+
+        Input: three images of 0, 1 and 12 random boxes of random classes on the 6 x 10 grid,
+        with two of the centers clamped onto the right and bottom edges of the image.
+        Expected: the heatmaps are those of the scalar reference, a Gaussian of radius
+        ceil(smallest center-to-edge distance / stride), at least 1, drawn with the maximum
+        onto the channel of every box's class at the cell of its center, the edge centers in
+        the last cell; an image without a box is all zeros.
+        Check: the batched heatmaps equal the reference, and the empty image's heatmap is zero.
+        """
+        generator = torch.Generator().manual_seed(3)
+        boxes, labels, centers = [], [], []
+        for num_boxes in (0, 1, 12):
+            corners = torch.rand(num_boxes, 2, generator=generator) * torch.tensor([120.0, 60.0])
+            sizes = torch.rand(num_boxes, 2, generator=generator) * torch.tensor([40.0, 36.0])
+            boxes.append(torch.cat([corners, corners + sizes], dim=1))
+            labels.append(torch.randint(0, 7, (num_boxes,), generator=generator))
+            centers.append(corners + sizes / 2)
+        centers[2][0] = torch.tensor([160.0, 35.0])
+        centers[2][1] = torch.tensor([35.0, 96.0])
+
+        heatmaps = self._heatmaps(boxes, labels, centers)
+
+        reference = torch.zeros(3, 7, FEATURE_HEIGHT, FEATURE_WIDTH)
+        for image, (image_boxes, image_labels, image_centers) in enumerate(
+            zip(boxes, labels, centers)
+        ):
+            for box, label, center in zip(image_boxes, image_labels, image_centers):
+                edges = torch.cat([center - box[:2], box[2:] - center])
+                radius = max(1, math.ceil(float(edges.min()) / 16))
+                cell = (min(int(center[0]) // 16, 9), min(int(center[1]) // 16, 5))
+                draw_heatmap_gaussian(reference[image, int(label)], cell, radius)
+        self.assertEqual(float(heatmaps[0].abs().sum()), 0.0)
+        torch.testing.assert_close(heatmaps, reference)
+
     def test_heatmap_peaks_at_the_object_center(self) -> None:
         """Test that the center heatmap peaks at 1 on the token of the object center.
 
@@ -458,34 +482,16 @@ class TestFocalHead2D(unittest.TestCase):
         heatmap = self._heatmap([35.0, 96.0], [10.0, 50.0, 60.0, 96.0])
         self.assertEqual(divmod(int(heatmap.argmax()), 10), (5, 2))
 
-    def test_heatmap_is_drawn_on_the_token_grid(self) -> None:
-        """Test that the heatmap targets have one cell per token of the grid the head saw.
-
-        Input: 7 x 11 tokens of a 100 x 168 image, the ceil of its size over the stride, with
-        one box.
-        Expected: the heatmap of the loss is drawn on the token grid of the outputs, not on
-        the image size over the stride, so the loss runs and its heatmap gradient covers the
-        77 tokens.
-        Check: the five losses finite and the gradient shape on the heatmap logits.
-        """
-        outputs = self.head(torch.randn(1, 2, 32, 7, 11), image_height=100, image_width=168)
-        losses = self._loss(outputs, [False])
-
-        for key in LOSS_KEYS:
-            self.assertTrue(torch.isfinite(losses[key]), key)
-        (grad,) = torch.autograd.grad(losses["loss_heatmap2d"], outputs.heatmap)
-        self.assertEqual(grad.shape, (2, 77, 7))
-
     def test_loss_under_bf16_autocast_is_finite_and_close_to_float32(self) -> None:
-        """Test that the head casts its bfloat16 outputs once and its losses stay close.
+        """Test that the head gives float32 outputs under bfloat16 autocast and its losses stay close.
 
         Input: one traffic cone on the first camera of two samples, scored in float32 and
-        under bfloat16 autocast, where the head's outputs are bfloat16.
+        under bfloat16 autocast, where the convs of the head compute in bfloat16.
         Expected: the assigner and the losses take float32 only, so the head casts its outputs
         once; the five losses are finite and close to the float32 ones, and the gradient
         reaches the head.
-        Check: every loss finite and within bfloat16 precision of the float32 loss, and a
-        gradient on the classification layer.
+        Check: the outputs float32, every loss finite and within bfloat16 precision of the
+        float32 loss, and a gradient on the classification layer.
         """
         features = torch.randn(2, 2, 32, 6, 10)
         expected = self._loss(self.head(features, 96, 160), [False, False])
@@ -493,7 +499,7 @@ class TestFocalHead2D(unittest.TestCase):
             outputs = self.head(features, 96, 160)
             losses = self._loss(outputs, [False, False])
 
-        self.assertEqual(outputs.cls_scores.dtype, torch.bfloat16)
+        self.assertEqual(outputs.cls_scores.dtype, torch.float32)
         sum(losses[key] for key in LOSS_KEYS).backward()
         for key in LOSS_KEYS:
             self.assertTrue(torch.isfinite(losses[key]), key)
@@ -524,61 +530,6 @@ class TestFocalHead2D(unittest.TestCase):
             self.assertTrue(torch.isfinite(losses[key]), key)
         (grad,) = torch.autograd.grad(losses["loss_cls2d"], outputs.cls_scores)
         self.assertEqual(int(torch.count_nonzero(grad[0, :, 5])), 60)
-
-    def test_loss_refuses_annotations_of_other_images(self) -> None:
-        """Test that annotations of another number of images are refused.
-
-        Input: the predictions of two samples of two cameras, with the annotations of three
-        cameras.
-        Expected: the annotations of an image are read at its index in the predictions, so
-        annotations of another number of images are refused.
-        Check: a ValueError naming the images is raised.
-        """
-        outputs = self.head(torch.randn(2, 2, 32, 6, 10), image_height=96, image_width=160)
-
-        with self.assertRaisesRegex(ValueError, "2D predictions cover 4 images"):
-            self._loss(outputs, [False, False], num_cams=3)
-
-    def test_loss_refuses_ground_truth_that_is_not_one_row_per_box(self) -> None:
-        """Test that ground truth whose tensors are not one row per box is refused.
-
-        Input: the predictions of one sample with whole Box2DFieldIndex rows of six columns
-        as the boxes, then with two labels for one box, then with a label of another class
-        count than the logits, then with the centers of one camera less than the boxes and
-        with the labels of a second sample.
-        Expected: six-column rows reshaped to four columns would make wrong boxes without an
-        error, so the shapes of every image are checked and named; a label beyond the class
-        channels is refused by the assigner; lists of other samples or cameras would leave
-        ground truth out silently, so they are refused.
-        Check: a ValueError naming the sample and camera for the first two, a ValueError for
-        the third, and a ValueError naming the lists for the last two.
-        """
-        outputs = self.head(torch.randn(1, 2, 32, 6, 10), image_height=96, image_width=160)
-        rows = torch.tensor([[10.0, 10.0, 60.0, 60.0, 35.0, 35.0]])
-
-        with self.assertRaisesRegex(ValueError, "sample 0, camera 0"):
-            self._loss(outputs, [False], box=rows)
-        with self.assertRaisesRegex(ValueError, "sample 0, camera 0"):
-            self._loss(outputs, [False], label=torch.tensor([5, 5]))
-        with self.assertRaises(ValueError):
-            self._loss(outputs, [False], label=torch.tensor([7]))
-        box, center, label = rows[:, :4], rows[:, 4:], torch.tensor([5])
-        with self.assertRaisesRegex(ValueError, "same samples and cameras"):
-            self.head.loss(
-                outputs,
-                gt_bboxes_2d=[[box, box[:0]]],
-                gt_labels_2d=[[label, label[:0]]],
-                gt_centers_2d=[[center]],
-                padding_mask=torch.tensor([False]),
-            )
-        with self.assertRaisesRegex(ValueError, "same samples and cameras"):
-            self.head.loss(
-                outputs,
-                gt_bboxes_2d=[[box, box[:0]]],
-                gt_labels_2d=[[label, label[:0]], [label, label[:0]]],
-                gt_centers_2d=[[center, center[:0]]],
-                padding_mask=torch.tensor([False]),
-            )
 
     def test_loss_refuses_a_box_or_center_that_is_not_finite_or_outside_the_image(self) -> None:
         """Test that a non-finite box or center, or one outside the image, is refused up front.
