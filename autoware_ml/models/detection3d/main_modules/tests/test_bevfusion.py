@@ -611,9 +611,12 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         self.assertTrue(torch.all((score >= 0.0) & (score <= 1.0)))
 
     def test_deployment_keeps_the_runtime_module_and_falls_back_on_onnx(self) -> None:
-        """
-        Test that the lidar-only declaration keeps the runtime's graph name and I/O, and that
-        only ONNX Runtime falls back to PyTorch.
+        """Test that the lidar-only declaration keeps the runtime's graph name and I/O.
+
+        Input: the lidar-only model's deployment declaration.
+        Expected: one DeploymentGraph named ``bevfusion_lidar`` with the runtime's input and
+            output names and the voxel count dynamic on every input.
+        Check: the graph type, name, input and output names and dynamic axes.
         """
         graphs = self.model.deployment_declaration().graphs
 
@@ -628,14 +631,24 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         )
 
     def test_deployment_refuses_a_multi_sample_batch(self) -> None:
-        """Test that a multi-sample batch is refused instead of exporting only its first sample."""
+        """Test that a multi-sample batch is refused instead of exporting only its first sample.
+
+        Input: the two-sample batch of the fixture.
+        Expected: build_export_specs() refuses it and names the batch size to deploy with.
+        Check: a ValueError whose message holds ``batch_size=1``.
+        """
         self.model.eval()
 
         with self.assertRaisesRegex(ValueError, "batch_size=1"):
             self.model.build_export_specs(self.batch_inputs)
 
     def test_camera_lidar_models_keep_their_hand_written_export_specs(self) -> None:
-        """Test that a model with a camera branch declares no deployment graphs."""
+        """Test that a model with a camera branch declares no deployment graphs.
+
+        Input: a camera-lidar model with a fuser.
+        Expected: it keeps the hand-written export specs, so it declares no graphs.
+        Check: deployment_graphs() returns ``None``.
+        """
         model = self._build_model(
             lidar_network=self._build_lidar_network(with_fuser=True),
             camera_network=self._build_camera_network(),
@@ -643,11 +656,17 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         self.assertIsNone(model.deployment_graphs())
 
     def test_deployment_reproduces_the_export_wrapper(self) -> None:
-        """Test that the deployment run in PyTorch reproduces the export wrapper's tensors."""
+        """Test that the deployment run in PyTorch reproduces the export wrapper's tensors.
+
+        Input: a single-sample batch, the deployment declaration and the export specs.
+        Expected: the deployed outputs are the three runtime outputs, equal to what the export
+            wrapper computes on the spec's args.
+        Check: the output names in order and each tensor against the wrapper's.
+        """
         self.model.eval()
         batch_inputs = self._build_single_sample_batch_inputs()
         deployment = self.model.deployment_declaration()
-        assert deployment is not None
+        self.assertIsNotNone(deployment)
 
         outputs = run_deployment_in_torch(deployment, batch_inputs, self.device)
         self.assertEqual(list(outputs), ["bbox_pred", "score", "label_pred"])
