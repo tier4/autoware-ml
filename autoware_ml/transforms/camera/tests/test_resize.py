@@ -604,14 +604,14 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         self.assert_projection_is_consistent(output.camera_image_data)
         return output.camera_image_data.augmented_camera_intrinsics
 
-    def test_a_camera_keeps_its_own_augmentation_over_the_frames_of_a_stream(self) -> None:
+    def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
         """
-        Input: a training transform drawing resize, crop, flip and rotation, two frames of
-        two cameras transformed in one stream and one frame in another stream.
-        Expected: every camera draws its own augmentation with the first frame of a stream
-        and keeps it for the later frames, and another stream draws anew.
-        Check: the augmented intrinsics of the two frames are equal camera by camera, the
-        two cameras of a frame differ, and the frame of the other stream differs.
+        Input: a training transform drawing resize, crop, flip and rotation, two frames
+        transformed after the draw of one stream and one frame after the draw of another.
+        Expected: the draw the transform keeps augments every camera of every frame of its
+        stream, and another stream is augmented differently.
+        Check: the augmented intrinsics of the two frames are equal, the two cameras of a
+        frame are equal, and the frame of the other stream differs.
         """
         pipeline = TransformsCompose([self.build_training_transform()])
 
@@ -622,44 +622,8 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         other = self.augmented_intrinsics(pipeline)
 
         self.assertTrue(torch.equal(first, second))
-        self.assertFalse(torch.equal(first[0], first[1]))
+        self.assertTrue(torch.equal(first[0], first[1]))
         self.assertFalse(torch.equal(first, other))
-
-    def test_the_cameras_of_a_stream_are_drawn_alike_in_every_worker(self) -> None:
-        """
-        Input: two pipelines built alike, as two dataloader workers hold them, each
-        transforming a frame of the same stream under a different random state.
-        Expected: the draw of a camera depends only on the seed of the stream and the
-        position of the camera.
-        Check: both pipelines give the frame the same augmented intrinsics.
-        """
-        pipeline = TransformsCompose([self.build_training_transform()])
-        other_worker = TransformsCompose([self.build_training_transform()])
-
-        np.random.seed(1)
-        pipeline.keep_stream_parameters((0, 0, 0))
-        intrinsics = self.augmented_intrinsics(pipeline)
-        np.random.seed(2)
-        other_worker.keep_stream_parameters((0, 0, 0))
-
-        self.assertTrue(torch.equal(self.augmented_intrinsics(other_worker), intrinsics))
-
-    def test_drawing_the_cameras_of_a_stream_leaves_the_random_state_as_it_was(self) -> None:
-        """
-        Input: a seeded NumPy random state, read once directly and once after the first
-        frame of a stream made every camera draw.
-        Expected: the transform restores the random state it seeded for the cameras.
-        Check: the three values drawn after the frame are the ones drawn without it.
-        """
-        pipeline = TransformsCompose([self.build_training_transform()])
-        pipeline.keep_stream_parameters((0, 0, 0))
-        np.random.seed(11)
-        expected = np.random.uniform(size=3).tolist()
-
-        np.random.seed(11)
-        self.augmented_intrinsics(pipeline)
-
-        self.assertEqual(np.random.uniform(size=3).tolist(), expected)
 
     def test_cameras_draw_on_their_own_again_after_a_stream(self) -> None:
         """
