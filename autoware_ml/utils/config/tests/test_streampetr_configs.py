@@ -41,7 +41,7 @@ class TestStreamPETRConfigs(unittest.TestCase):
 
     @staticmethod
     def _step_names(config: DictConfig) -> list[str]:
-        """Return the class names of the steps of a transform pipeline.
+        """Return the class names of the steps of a pipeline or of the preprocessing modules.
 
         Args:
             config: The list of ``_target_`` blocks.
@@ -161,3 +161,28 @@ class TestStreamPETRConfigs(unittest.TestCase):
         """
         stage = next(stage for stage in STAGES if "/nuscenes/" in stage)
         self.assertIsNone(self.configs[stage].model.partial_annotations)
+
+    def test_every_pipeline_loads_unit_range_images_for_the_normalization(self) -> None:
+        """Test that every stage normalizes images that its pipelines load in the unit range.
+
+        Input: the preprocessing modules and the training and test pipelines of every stage.
+        Expected: BatchNormalizeImages holds unit-range statistics and does not check the
+        images, so 0-255 pixels would train without an error; it is the first preprocessing
+        module, and every pipeline loads its images once, with the unit-range default of
+        LoadImagesFromFile.
+        Check: the first preprocessing module, and the one LoadImagesFromFile of every pipeline
+        with normalize_to_unit unset or True.
+        """
+        for stage, cfg in self.configs.items():
+            modules = self._step_names(cfg.data_preprocessor.preprocessor_modules)
+            with self.subTest(stage=stage):
+                self.assertEqual(modules[0], "BatchNormalizeImages")
+            for split in ("train", "test"):
+                with self.subTest(stage=stage, split=split):
+                    loaders = [
+                        step
+                        for step in cfg.datasets[split].transforms.pipeline
+                        if step["_target_"].endswith("LoadImagesFromFile")
+                    ]
+                    self.assertEqual(len(loaders), 1)
+                    self.assertIs(loaders[0].get("normalize_to_unit", True), True)
