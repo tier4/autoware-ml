@@ -607,8 +607,13 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
 
     def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
         """
-        Test that the parameters of one stream augment every camera of every frame alike,
-        another stream differently, and that they survive the pickling to a dataloader worker.
+        Input: a training transform drawing resize, crop, flip and rotation, the parameters
+        of two streams drawn from it, the first pickled as for a dataloader worker, and two
+        frames of the first stream and one of the second.
+        Expected: one draw augments every camera of every frame of its stream, and another
+        stream is augmented differently.
+        Check: the augmented intrinsics of the two frames are equal, the two cameras of a
+        frame are equal, and the frame of the other stream differs.
         """
         np.random.seed(0)
         pipeline = TransformsCompose([self.build_training_transform()])
@@ -624,7 +629,14 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         self.assertFalse(torch.equal(first, self.augmented_intrinsics(pipeline, other_stream)))
 
     def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
-        """Test that the pixel values of a camera are built from the draw of the stream."""
+        """
+        Input: a 32 x 48 image, a resize range of 0.5 to 1.5, a target of 16 x 24 and a draw
+        a quarter into the resize range, dropping a quarter at the bottom, with the crop in
+        the middle of the free width, a flip and a rotation of 3 degrees.
+        Expected: the pixel values of the camera are built from the draw and the image size.
+        Check: the image is resized to 24 x 36 and cropped at row 2 and column 6, with the
+        flip and the rotation of the draw.
+        """
         transform = self.build_training_transform()
         draw = ImageAugmentationDraw(
             resize_fraction=0.25,
@@ -653,8 +665,12 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
 
     def test_a_stream_in_validation_draws_nothing_and_matches_a_single_frame(self) -> None:
         """
-        Test that the validation parameters of a stream leave the random state alone and
-        augment a frame as the transform does on its own.
+        Input: a validation transform, the parameters of a stream drawn from it under a
+        seeded random state, and one frame with and one without those parameters.
+        Expected: validation draws nothing for a stream and augments its frames as it
+        augments a single frame.
+        Check: the values drawn after the stream parameters are the ones drawn without
+        them, and both frames get the same augmented intrinsics.
         """
         pipeline = TransformsCompose(
             [

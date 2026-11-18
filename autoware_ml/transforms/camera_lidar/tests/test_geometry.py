@@ -1266,8 +1266,12 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
     def test_frames_of_a_stream_get_the_same_augmentation(self) -> None:
         """
-        Test that every frame transformed with the parameters of one stream is moved by the
-        same matrix, another stream by another one, and frames outside a stream each by their own.
+        Input: a pipeline of a global rotation, scale and translation and a BEV flip, the
+        parameters of two streams drawn from it, and frames with either or without parameters.
+        Expected: the frames of a stream are moved alike, another stream differently, and a
+        frame outside a stream draws for itself.
+        Check: two frames of one stream get the same transformation matrix, the frame of the
+        other stream another one, and two frames without parameters differ.
         """
         stream = self.pipeline.sample_stream_parameters()
         other_stream = self.pipeline.sample_stream_parameters()
@@ -1280,8 +1284,12 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
     def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
         """
-        Test that the matrix applied to a frame is built from the drawn yaw, scale and
-        translation, and that the parameters survive the pickling to a dataloader worker.
+        Input: the parameters of a stream, pickled as for a dataloader worker, and one frame
+        transformed with them.
+        Expected: the frame is moved by the drawn yaw, scale and translation, then flipped
+        along the drawn axes.
+        Check: the transformation matrix of the frame equals the one built here from the
+        drawn values.
         """
         stream = pickle.loads(pickle.dumps(self.pipeline.sample_stream_parameters()))
         yaw, scale, translation = stream[0].values
@@ -1302,7 +1310,11 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
     def test_a_stream_skips_a_transform_in_every_frame(self) -> None:
         """
-        Test that a rotation the stream did not draw, by its probability, moves no frame of it.
+        Input: a rotation with a probability of zero, the parameters of a stream drawn from
+        it, and one frame transformed with them.
+        Expected: the stream skips the rotation in its frames.
+        Check: the stream parameters are apply False and the frame records no lidar
+        transformation.
         """
         rotate = RandomRotateTargetAngle(probability=0.0, yaw_angle_ratios=[0.5])
         stream = TransformsCompose([rotate]).sample_stream_parameters()
