@@ -1653,7 +1653,13 @@ class TestTransFusionHead(unittest.TestCase):
             self._build_transfusion_head(coder_class_names=list(reversed(self.class_names)))
 
     def test_export_output_names_follow_the_output_fields(self) -> None:
-        """Test that the export output names are the output fields, vel only for velocity heads."""
+        """Test that the export output names are the output fields, vel only for velocity heads.
+
+        Input: a head with velocity and one without.
+        Expected: the names of the TransFusionHeadOutputs fields in order, ending in ``vel``
+            with velocity and in ``rot`` without.
+        Check: the full name tuple of the velocity head and the last name of the other.
+        """
         self.assertEqual(
             self._build_transfusion_head(use_velocity=True).export_output_names,
             (
