@@ -241,7 +241,6 @@ it. The rules the run enforces:
 - Every declared graph runs exactly once.
 - A graph's module returns its outputs as a tensor, a tuple in `output_names`
   order, or a mapping with the keys in that order.
-- The function returns a non-empty mapping of name to tensor.
 - A `DeploymentGraph` module is export-ready as declared (the live submodule or
   the copy its `prepare_for_export()` makes); the framework never alters it and
   declares the graphs again after replacing a module.

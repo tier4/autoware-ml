@@ -228,22 +228,6 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         ):
             _run(graphs=_toy_graphs(head=_ReversedHead()))
 
-    def test_graph_inputs_are_tensors(self) -> None:
-        """Test that a graph input that is not a tensor is rejected.
-
-        Input: a function passing ``head`` a list holding the encoder's output.
-        Expected: TypeError naming ``head`` and ``{'z': 'list'}``.
-        Check: the error message.
-        """
-
-        def forward(multi_task_batch_inputs, executors, device):
-            return executors["head"].run(
-                z=[executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]]
-            )
-
-        with self.assertRaisesRegex(TypeError, r"'head' binds tensors only; got \{'z': 'list'\}"):
-            _run(forward)
-
     def test_unknown_or_missing_input_names_are_named(self) -> None:
         """Test that a call with other keyword names than declared names both sides.
 
@@ -300,30 +284,6 @@ class TestRunDeploymentInTorch(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "'encoder' was run twice"):
             _run(forward)
-
-    def test_the_function_returns_named_tensors(self) -> None:
-        """Test that a function returning no mapping, or a non-tensor output, is rejected.
-
-        Input: a function returning the head's outputs as a tuple, then one adding a list
-            under ``extra`` to the mapping.
-        Expected: TypeError naming ``tuple``, then TypeError listing ``['extra']``.
-        Check: both error messages.
-        """
-
-        def as_tuple(multi_task_batch_inputs, executors, device):
-            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
-            return tuple(executors["head"].run(z=y).values())
-
-        def with_a_list(multi_task_batch_inputs, executors, device):
-            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
-            outputs = dict(executors["head"].run(z=y))
-            outputs["extra"] = [y]
-            return outputs
-
-        with self.assertRaisesRegex(TypeError, "non-empty mapping of name -> tensor, got tuple"):
-            _run(as_tuple)
-        with self.assertRaisesRegex(TypeError, r"not tensors: \['extra'\]"):
-            _run(with_a_list)
 
 
 class _CopyingRunner:
@@ -400,28 +360,6 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
         """
         with self.assertRaisesRegex(ValueError, r"unknown \['stale'\]"):
             self._run_with_encoder_outputs(lambda outputs: dict(outputs, stale=outputs["y"]))
-
-    def test_a_runner_returning_no_mapping_is_refused(self) -> None:
-        """Test that a runner has to return its outputs by name.
-
-        Input: an ``encoder`` runner returning its outputs as a tuple.
-        Expected: TypeError naming ``encoder`` and ``tuple``.
-        Check: the error message.
-        """
-        with self.assertRaisesRegex(TypeError, r"Graph 'encoder': the runner returned tuple"):
-            self._run_with_encoder_outputs(lambda outputs: tuple(outputs.values()))
-
-    def test_a_runner_returning_a_non_tensor_output_is_refused(self) -> None:
-        """Test that a non-tensor output is refused where it is produced, not where it is used.
-
-        Input: an ``encoder`` runner returning ``y`` wrapped in a list.
-        Expected: TypeError naming ``encoder`` and ``{'y': 'list'}``.
-        Check: the error message.
-        """
-        with self.assertRaisesRegex(
-            TypeError, r"Graph 'encoder' returned outputs that are not tensors: \{'y': 'list'\}"
-        ):
-            self._run_with_encoder_outputs(lambda outputs: {"y": [outputs["y"]]})
 
     def test_outputs_come_back_in_the_declared_order(self) -> None:
         """Test that a runner's output order does not leak: the executor orders by ``output_names``.

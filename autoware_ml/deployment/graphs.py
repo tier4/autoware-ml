@@ -147,9 +147,7 @@ class GraphExecutor:
         Raises:
             RuntimeError: On a second run in one deployment run; a graph is one artifact,
                 run once.
-            TypeError: When the keyword names are not the declared ``input_names``, or a
-                value is not a tensor; when the runner returns something other than a
-                mapping of tensors.
+            TypeError: When the keyword names are not the declared ``input_names``.
             ValueError: When the runner's output names are not exactly the declared
                 ``output_names``: the artifact does not match the declaration.
         """
@@ -162,28 +160,15 @@ class GraphExecutor:
                 f"{sorted(set(self.input_names) - set(inputs))}, unknown "
                 f"{sorted(set(inputs) - set(self.input_names))}."
             )
-        others = {
-            key: type(value).__name__ for key, value in inputs.items() if not torch.is_tensor(value)
-        }
-        if others:
-            raise TypeError(
-                f"Graph {name!r} binds tensors only; got {others}. The deployed function has "
-                "to pass each input as a tensor."
-            )
         args = tuple(inputs[key].to(self._device) for key in self.input_names)
         self._ran = True
         return self._check_outputs(self._runner(args))
 
     def _check_outputs(self, produced: Mapping[str, GraphTensor]) -> dict[str, GraphTensor]:
-        """Return the runner's outputs in ``output_names`` order; any other set of names, or a
-        non-tensor, means the artifact does not match the declaration and is refused by name.
+        """Return the runner's outputs in ``output_names`` order; any other set of names means
+        the artifact does not match the declaration and is refused by name.
         """
         name = self.name
-        if not isinstance(produced, Mapping):
-            raise TypeError(
-                f"Graph {name!r}: the runner returned {type(produced).__name__}, not a mapping "
-                "of output name -> tensor."
-            )
         if set(produced) != self._output_name_set:
             raise ValueError(
                 f"Graph {name!r} declares the outputs {list(self.output_names)}, the runner "
@@ -191,13 +176,6 @@ class GraphExecutor:
                 f"{sorted(self._output_name_set - set(produced))}, unknown "
                 f"{sorted(set(produced) - self._output_name_set)}."
             )
-        others = {
-            key: type(value).__name__
-            for key, value in produced.items()
-            if not torch.is_tensor(value)
-        }
-        if others:
-            raise TypeError(f"Graph {name!r} returned outputs that are not tensors: {others}.")
         return {key: produced[key] for key in self.output_names}
 
 
@@ -259,8 +237,6 @@ def run_deployment(
         The model outputs the deployed function returned, by name.
 
     Raises:
-        TypeError: When a graph gets a non-tensor input, or the function returns something
-            other than a non-empty mapping of tensors.
         RuntimeError: When the function skips a declared graph or runs one twice.
     """
     executors = {
@@ -268,16 +244,6 @@ def run_deployment(
     }
     with torch.no_grad():
         outputs = deployment.forward(multi_task_batch_inputs, executors, device)
-    if not isinstance(outputs, Mapping) or not outputs:
-        raise TypeError(
-            "deployment_forward returns the model outputs as a non-empty mapping of name -> "
-            f"tensor, got {type(outputs).__name__}."
-        )
-    others = sorted(name for name, value in outputs.items() if not torch.is_tensor(value))
-    if others:
-        raise TypeError(
-            f"deployment_forward returned model outputs that are not tensors: {others}."
-        )
     uncalled = [name for name, executor in executors.items() if not executor.ran]
     if uncalled:
         raise RuntimeError(
@@ -307,7 +273,7 @@ def run_deployment_in_torch(
     Raises:
         ValueError: When a graph's module returns another number of tensors than it
             declares, or a mapping in another order.
-        TypeError: As :func:`run_deployment`.
+        TypeError: When a graph is run with other keyword names than it declares.
         RuntimeError: As :func:`run_deployment`.
     """
     return run_deployment(
