@@ -359,9 +359,12 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
 
     def test_exported_graphs_keep_the_runtime_names_and_the_model_in_eval_mode(self) -> None:
-        """
-        Test that the exported graphs carry the runtime's input and output names in binding
-        order, and that exporting leaves the submodules the wrappers share in eval mode.
+        """Test that the exported graphs keep the runtime names and leave the model in eval mode.
+
+        Input: the two export specs of the default model, exported with the base config's
+            ONNX settings.
+        Expected: each ONNX carries the runtime's input and output names in binding order.
+        Check: the graph input and output names per spec, and that no submodule trains after.
         """
         self.centerpoint.eval()
         specs = self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
@@ -392,7 +395,14 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         )
 
     def test_deployment_reproduces_forward_and_names_the_deployed_modules(self) -> None:
-        """Test that the deployment reproduces forward() and carries the deployed names."""
+        """Test that the deployment reproduces forward() and carries the deployed names.
+
+        Input: the default model and a batch with voxels and ground truth.
+        Expected: two DeploymentGraphs named after the runtime modules; the deployed head
+            maps equal forward()'s up to CUDA kernel-selection noise.
+        Check: the graph types and names, assert_deployment_reproduces_forward(), the
+            output names in order.
+        """
         self.centerpoint.eval()
         multi_task_batch_inputs = self._build_multi_task_batch_inputs()
         graphs = self.centerpoint.deployment_graphs()
@@ -416,7 +426,12 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(list(check.deployment_outputs), names)
 
     def test_deployment_reproduces_forward_without_the_velocity_branch(self) -> None:
-        """Test that a head without velocity reproduces forward() with five model outputs."""
+        """Test that a head without velocity reproduces forward() with five model outputs.
+
+        Input: a model whose head has no velocity branch.
+        Expected: the deployment matches forward() and emits heatmap, reg, height, dim, rot.
+        Check: assert_deployment_reproduces_forward() and the output names in order.
+        """
         centerpoint = self._build_centerpoint(self._build_bbox_head(use_velocity=False)).eval()
         check = assert_deployment_reproduces_forward(
             centerpoint,
@@ -429,11 +444,16 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(list(check.deployment_outputs), ["heatmap", "reg", "height", "dim", "rot"])
 
     def test_deployment_runs_on_deployment_inputs_without_ground_truth(self) -> None:
-        """Test that voxels with an empty GT batch, as a runtime feeds them, trace both graphs."""
+        """Test that voxels with an empty GT batch, as a runtime feeds them, trace both graphs.
+
+        Input: the batch's voxels with a ModelGTBatch of no ground truth.
+        Expected: build_export_specs() traces both graphs on it.
+        Check: the head spec's example canvas has the batch size as its first axis.
+        """
         self.centerpoint.eval()
         batch_inputs = self._build_multi_task_batch_inputs()
         voxels_data = batch_inputs.voxels_data
-        assert voxels_data is not None
+        self.assertIsNotNone(voxels_data)
         inputs = ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(
                 point_cloud_gt_batch=None,
@@ -454,16 +474,21 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(spatial_features.shape[0], self.batch_size)
 
     def test_deployment_keeps_a_canvas_for_a_sample_without_voxels(self) -> None:
-        """
-        Test that the deployment matches forward() for a sample without voxels, whether it is
-        the last sample of a batch or the only one.
+        """Test that the deployment keeps a canvas for a sample without voxels.
+
+        Input: a batch whose last sample has no voxels, and a single-sample batch without
+            voxels.
+        Expected: the deployment matches forward() in both cases, so the canvas is sized by
+            the batch, not by the voxel batch indices.
+        Check: assert_deployment_reproduces_forward() per case.
         """
         self.centerpoint.eval()
         batch_inputs = self._build_multi_task_batch_inputs()
         voxels_data = batch_inputs.voxels_data
         gt_batch = batch_inputs.multi_task_gt_batch
         gt_boxes = gt_batch.detection3d_gt_batch
-        assert voxels_data is not None and gt_boxes is not None
+        self.assertIsNotNone(voxels_data)
+        self.assertIsNotNone(gt_boxes)
         first_sample_boxes = gt_boxes._replace(
             **{name: value[:1] for name, value in gt_boxes._asdict().items() if value is not None}
         )
