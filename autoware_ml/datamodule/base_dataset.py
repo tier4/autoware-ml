@@ -79,7 +79,7 @@ class StreamSlot(int):
         """Pickle the index together with its seed, a plain ``int`` would drop it."""
         return type(self), (int(self), self.stream_seed)
 
-    def at(self, index: int) -> "StreamSlot":
+    def at(self, index: int) -> StreamSlot:
         """The same slot on another index, for a dataset serving it from one of its sources."""
         return type(self)(index, self.stream_seed)
 
