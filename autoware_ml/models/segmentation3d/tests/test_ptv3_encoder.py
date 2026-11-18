@@ -1387,6 +1387,15 @@ def _jitter_affine_parameters(model: nn.Module) -> None:
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
 def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
+    """
+    Input: a small PTv3 segmentation model with every bias and normalization set to a
+    non-trivial value, exported with and without the CPE bias fold.
+    Expected: the fold changes no export output and no model parameter, and it removes the
+    bias of every CPE convolution in the encoder and the seg3d head.
+    Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
+    both export modules hold CPE blocks and none of their convolutions keeps a bias, and the
+    model's state_dict is unchanged.
+    """
     torch.manual_seed(0)
     device = torch.device("cuda")
     model = build_seg3d_model()
