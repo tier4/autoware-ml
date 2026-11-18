@@ -97,21 +97,18 @@ class TestMetricFilterInterface(unittest.TestCase):
             MetricSuite._filter_available(forgetful_filter, None)
         self.assertTrue(MetricSuite._filter_available(IDENTITY, None))
 
-    def test_empty_inputs_give_empty_masks_without_frame_metadata(self) -> None:
+    def test_empty_inputs_still_raise_without_frame_metadata(self) -> None:
         """
-        Input: no points and no boxes, a region filter, a frame without metadata.
-        Expected: nothing is tested against the map, so the metadata is never read.
-        Check: both masks are empty boolean arrays.
+        Input: no points and no boxes, a region filter and a collision filter, a frame without metadata.
+        Expected: missing metadata fails loud whatever the input size.
+        Check: keep_points and keep_boxes raise a ValueError naming the filter.
         """
-        region_filter = RegionFilter(["road"])
-
-        points_mask = region_filter.keep_points(np.zeros((0, 3)), None)
-        boxes_mask = region_filter.keep_boxes(np.zeros((0, 7)), None)
-
-        self.assertEqual(points_mask.shape, (0,))
-        self.assertEqual(boxes_mask.shape, (0,))
-        self.assertEqual(points_mask.dtype, bool)
-        self.assertEqual(boxes_mask.dtype, bool)
+        for map_filter in (RegionFilter(["road"]), CollisionFilter(vehicle=EGO)):
+            with self.subTest(filter=map_filter.name):
+                with self.assertRaisesRegex(ValueError, map_filter.name):
+                    map_filter.keep_points(np.zeros((0, 3)), None)
+                with self.assertRaisesRegex(ValueError, map_filter.name):
+                    map_filter.keep_boxes(np.zeros((0, 7)), None)
 
 
 if __name__ == "__main__":

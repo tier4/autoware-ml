@@ -258,9 +258,9 @@ class RegionFilter(MetricFilter):
             Boolean mask of the points in the region.
         """
         points = np.asarray(points, dtype=np.float64)
+        frame_meta = self.require_frame_meta(frame_meta)
         if points.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        frame_meta = self.require_frame_meta(frame_meta)
         lanelet_map = LaneletMap.from_osm(frame_meta.lanelet_map_path)
         map_xy = _to_map_xy(points, frame_meta.ego2global)
         return lanelet_map.contains(self.region, map_xy, self.margin)
@@ -283,9 +283,9 @@ class RegionFilter(MetricFilter):
             Boolean mask of the boxes in the region.
         """
         boxes = np.asarray(boxes, dtype=np.float64)
+        frame_meta = self.require_frame_meta(frame_meta)
         if boxes.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        frame_meta = self.require_frame_meta(frame_meta)
         lanelet_map = LaneletMap.from_osm(frame_meta.lanelet_map_path)
         footprints = box_footprints_map(boxes, frame_meta.ego2global)
         return lanelet_map.intersects(self.region, footprints, self.margin)
@@ -469,9 +469,9 @@ class CollisionFilter(MetricFilter):
             Boolean mask of the points inside the collision area.
         """
         points = np.asarray(points, dtype=np.float64)
+        frame_meta = self.require_frame_meta(frame_meta)
         if points.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        frame_meta = self.require_frame_meta(frame_meta)
         region = self._ego_region(frame_meta)
         if region.is_empty:
             return np.zeros(points.shape[0], dtype=bool)
@@ -495,9 +495,9 @@ class CollisionFilter(MetricFilter):
             Boolean mask of the boxes meeting the collision area.
         """
         boxes = np.asarray(boxes, dtype=np.float64)
+        frame_meta = self.require_frame_meta(frame_meta)
         if boxes.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
-        frame_meta = self.require_frame_meta(frame_meta)
         region = self._ego_region(frame_meta)
         if region.is_empty:
             return np.zeros(boxes.shape[0], dtype=bool)
