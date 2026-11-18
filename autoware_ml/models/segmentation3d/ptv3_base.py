@@ -22,11 +22,12 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float32, Int64
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor
+from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor, GraphTensor
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -231,8 +232,6 @@ class PTv3BaseModel(ModuleBaseModel):
     def voxel_inputs(batch_inputs: ModelBatchInputs) -> tuple[VoxelsData, int]:
         """Read the voxels and the time-lag column the encoder consumes from the typed batch.
 
-        Training and the deployment glue share this reader, so both see the batch alike.
-
         Args:
             batch_inputs: Model inputs holding the point cloud and its voxels.
 
@@ -297,14 +296,21 @@ class PTv3BaseModel(ModuleBaseModel):
         return self.encoder(self.build_encoder_inputs(voxels, num_points, voxel_coords))
 
     def validate_voxel_inputs(
-        self, voxels: torch.Tensor, num_dropped_voxels: torch.Tensor, time_lag_column: int
+        self,
+        voxels: Float32[torch.Tensor, "num_voxels max_points channels"],
+        num_dropped_voxels: Int64[torch.Tensor, ""],
+        time_lag_column: int,
     ) -> None:
-        """Refuse voxels the voxel encoder cannot read (see :meth:`encode` for the cases).
+        """Refuse voxels the voxel encoder cannot read.
 
         Args:
-            voxels: Padded voxel points ``(num_voxels, max_points, channels)``.
+            voxels: Padded voxel points.
             num_dropped_voxels: Occupied voxels the voxelizer discarded.
             time_lag_column: Point column holding the time lag.
+
+        Raises:
+            ValueError: If the points do not follow the layout the voxel encoder reads.
+            RuntimeError: If the voxelizer dropped occupied voxels.
         """
         self.voxel_encoder.check_points(voxels, time_lag_column)
         if int(num_dropped_voxels) > 0:
@@ -334,17 +340,21 @@ class PTv3BaseModel(ModuleBaseModel):
         multi_task_batch_inputs: ModelBatchInputs,
         executors: Mapping[str, GraphExecutor],
         device: torch.device,
-    ) -> Mapping[str, torch.Tensor]:
+    ) -> Mapping[str, GraphTensor]:
         """Serialize the points, run ``ptv3_encoder``, then every head graph the model declares.
 
-        Each graph takes the tensors its DeploymentGraph names, from the serialized points and the
-        encoder's features. The heads read the encoder but not each other, so the model outputs
-        are every head's outputs, in the order the heads are declared.
+        Args:
+            multi_task_batch_inputs: The preprocessed single-sample batch, holding the voxels.
+            executors: The executors of this run, one per declared graph, by graph name.
+            device: Device the graphs run on; the serialization runs there.
+
+        Returns:
+            Every head's outputs by name, in the order the heads are declared.
         """
         tensors = serialize_points(self, multi_task_batch_inputs, device)
         encoder = executors[ENCODER_GRAPH]
         tensors.update(encoder.run(**{name: tensors[name] for name in encoder.input_names}))
-        outputs: dict[str, torch.Tensor] = {}
+        outputs: dict[str, GraphTensor] = {}
         for name, head in executors.items():
             if name != ENCODER_GRAPH:
                 outputs.update(head.run(**{key: tensors[key] for key in head.input_names}))
@@ -815,11 +825,16 @@ def encoder_graph_input_names(num_poolings: int) -> list[str]:
 
 def serialize_points(
     model: PTv3BaseModel, batch: ModelBatchInputs, device: torch.device
-) -> dict[str, torch.Tensor]:
+) -> dict[str, GraphTensor]:
     """Serialize the voxel batch and precompute every pooling tensor, by name.
 
-    It reads the batch like :meth:`PTv3BaseModel.encode_batch` and returns the inputs of every
-    PTv3 graph, including heads the model does not have.
+    Args:
+        model: The PTv3 model whose encoder geometry and export order the serialization uses.
+        batch: The preprocessed single-sample batch, holding the voxels.
+        device: Device the serialization runs on.
+
+    Returns:
+        The inputs of every PTv3 graph by name, including the heads the model does not have.
     """
     num_poolings = len(model.encoder.stride)
     _, serialization_depth = model.compute_export_geometry(device)
@@ -837,7 +852,7 @@ def serialize_points(
         model.encoder.stride,
         patch_sizes,
     )
-    produced: dict[str, torch.Tensor] = {
+    produced: dict[str, GraphTensor] = {
         "voxels": voxels,
         "num_points_per_voxel": num_points,
         "grid_coord": encoder_inputs["grid_coord"],

@@ -52,6 +52,14 @@ class TestSeg3dDeployment(unittest.TestCase):
     """The segmentation model's deployment graphs and the export specs derived from them."""
 
     def test_seg3d_declaration_names_the_runtime_modules_and_is_name_covered(self) -> None:
+        """Test that the seg3d declaration names the runtime modules and every input is produced.
+
+        Input: the segmentation model's deployment declaration and one serialized batch.
+        Expected: the graphs are the encoder and the seg3d head, named and ordered as the
+            runtime binds them; every graph input is a serialized tensor or an encoder output.
+        Check: the graph names, the encoder's leading input names, the head's output names, and
+            the input names against the serialized tensors.
+        """
         model = build_seg3d_model().cuda().eval()
         graphs = model.deployment_declaration().graphs
         self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, SEG3D_HEAD_GRAPH])
@@ -67,6 +75,14 @@ class TestSeg3dDeployment(unittest.TestCase):
         self.assertLessEqual(set(head.input_names), set(tensors) | set(encoder.output_names))
 
     def test_seg3d_export_specs_are_derived_and_keep_the_split_contract(self) -> None:
+        """Test that the export specs derived from the graphs keep the split export contract.
+
+        Input: the segmentation model and one batch.
+        Expected: an encoder spec and a seg3d head spec whose inputs follow the encoder graph's
+            input names, with the voxel count dynamic, and whose modules run on their args.
+        Check: the spec names and input names, the dynamic axis of ``voxels``, and the shapes
+            of the level features and of the head's labels and probabilities.
+        """
         model = build_seg3d_model().cuda().eval()
         batch = build_inputs(device=torch.device("cuda"))
         specs = model.build_export_specs(batch)
@@ -89,6 +105,12 @@ class TestSeg3dDeployment(unittest.TestCase):
         self.assertEqual(pred_probs.shape[0], num_voxels)
 
     def test_derived_specs_export_onnx_with_the_declared_io_contract(self) -> None:
+        """Test that each derived spec exports an ONNX with the graph's declared names and axes.
+
+        Input: the segmentation model's specs, exported with the base config's ONNX settings.
+        Expected: each ONNX carries the graph's input and output names and its dynamic axes.
+        Check: the ONNX input and output names and the ``dim_param`` of every declared axis.
+        """
         # forward() is no numeric reference: it reshuffles the serialization orders and adapts
         # the attention windows, which the export copy pins.
         directory = tempfile.TemporaryDirectory()
@@ -116,6 +138,12 @@ class TestSeg3dDeployment(unittest.TestCase):
                 self.assertEqual({i: dims[i].dim_param for i in axes}, dict(axes), tensor.name)
 
     def test_seg3d_head_graph_emits_its_output_names(self) -> None:
+        """Test that the seg3d head graph declares the head's output names and their axes.
+
+        Input: the seg3d head graph of the segmentation model.
+        Expected: the outputs are ``pred_labels`` and ``pred_probs`` with dynamic axes.
+        Check: the graph's output names and the keys of its dynamic axes.
+        """
         model = build_seg3d_model().cuda().eval()
         graph = build_seg3d_head_graph(model, model.seg3d_head)
         self.assertEqual(graph.output_names, SEG3D_HEAD_OUTPUT_NAMES)
@@ -128,6 +156,13 @@ class TestDet3dDeployment(unittest.TestCase):
     """The detection model's deployment graphs and their specs."""
 
     def test_det3d_declaration_and_specs(self) -> None:
+        """Test that the detection model declares the encoder and the det3d head graphs.
+
+        Input: the detection model's deployment declaration and its export specs.
+        Expected: the graphs and the specs are the encoder and the det3d head, and the head
+            spec emits the configured export output names.
+        Check: the graph names, the spec names and the head spec's output names.
+        """
         model = build_trans_model().cuda().eval()
         graphs = model.deployment_declaration().graphs
         self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
