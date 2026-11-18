@@ -22,6 +22,7 @@ import unittest
 from jaxtyping import Bool, Float, Float32, Int64
 import torch
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import FocalHead2DOutputs
 from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.task_modules.heatmap import draw_heatmap_gaussian
@@ -65,14 +66,43 @@ class TestFocalHead2D(unittest.TestCase):
         center = torch.tensor([[35.0, 35.0]]) if center is None else center
         label = torch.tensor([5]) if label is None else label
         batch_size = len(padding)
+        images = [(box, label, center), (box[:0], label[:0], center[:0])]
+        images = images[:1] + images[1:] * (num_cams - 1)
         return self.head.loss(
             outputs,
-            gt_bboxes_2d=([box] + [box[:0]] * (num_cams - 1)) * batch_size,
-            gt_labels_2d=([label] + [label[:0]] * (num_cams - 1)) * batch_size,
-            gt_centers_2d=([center] + [center[:0]] * (num_cams - 1)) * batch_size,
+            self._batch(images * batch_size, batch_size),
             padding_mask=torch.tensor(padding),
             gt_annotated_class_masks=masks,
         )
+
+    def _batch(
+        self,
+        images: list[
+            tuple[
+                Float32[torch.Tensor, "num_boxes 4"],
+                Int64[torch.Tensor, " num_boxes"],
+                Float32[torch.Tensor, "num_boxes 2"],
+            ]
+        ],
+        batch_size: int = 1,
+    ) -> Detection2DGTBatch:
+        """Collate the boxes, labels and centers of the images, camera by camera of every sample.
+
+        The images are padded to the largest count, zero boxes with label -1 past the valid
+        count, as the collate does.
+        """
+        max_num_boxes = max(boxes.shape[0] for boxes, _, _ in images)
+        num_cams = len(images) // batch_size
+        rows = torch.zeros(batch_size, num_cams, max_num_boxes, 6)
+        labels = torch.full((batch_size, num_cams, max_num_boxes), -1, dtype=torch.int32)
+        counts = torch.zeros(batch_size, num_cams, dtype=torch.int32)
+        for image, (boxes, image_labels, centers) in enumerate(images):
+            sample, camera = divmod(image, num_cams)
+            count = boxes.shape[0]
+            rows[sample, camera, :count] = torch.cat([boxes, centers], dim=1)
+            labels[sample, camera, :count] = image_labels.to(torch.int32)
+            counts[sample, camera] = count
+        return Detection2DGTBatch(gt_bboxes_2d=rows, gt_labels_2d=labels, gt_valid_bboxes_2d=counts)
 
     def _heatmap(
         self, center: list[float], box: list[float], label: int = 0
@@ -96,8 +126,10 @@ class TestFocalHead2D(unittest.TestCase):
     ) -> Float32[torch.Tensor, "num_images num_classes feature_height feature_width"]:
         """The heatmaps of the given images on the 6 x 10 grid, one channel per class."""
         outputs = self.head(torch.randn(1, 1, 32, 6, 10), IMAGE_HEIGHT, IMAGE_WIDTH)
-        ground_truth = self.head._padded_ground_truth(
-            outputs, boxes, labels, centers, torch.zeros(len(boxes), dtype=torch.bool)
+        ground_truth = self.head._ground_truth(
+            outputs,
+            self._batch(list(zip(boxes, labels, centers))),
+            torch.zeros(len(boxes), dtype=torch.bool),
         )
         heatmaps = self.head._build_heatmaps(ground_truth, FEATURE_HEIGHT, FEATURE_WIDTH)
         return heatmaps.transpose(1, 2).reshape(len(boxes), -1, FEATURE_HEIGHT, FEATURE_WIDTH)

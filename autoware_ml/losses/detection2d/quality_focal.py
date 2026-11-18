@@ -79,10 +79,11 @@ class QualityFocalLoss(nn.Module):
                     f"QualityFocalLoss takes float32 {name}, got {tensor.dtype}; cast them in "
                     "the head, under autocast its logits are half precision."
                 )
-        class_ids = torch.arange(logits.size(1), device=logits.device)
-        # A background label (num_classes or negative) matches no class, so its row is all 0.
-        # The quality is selected, not multiplied in, so a background query's value is never read.
-        targets = torch.where(labels.unsqueeze(1) == class_ids, quality_scores.unsqueeze(1), 0.0)
+        # The target of a query is its quality on the channel of its class and 0 elsewhere; a
+        # background query (label num_classes or negative) has no channel, so its row stays 0.
+        targets = torch.zeros_like(logits)
+        is_positive = (labels >= 0) & (labels < logits.size(1))
+        targets[is_positive, labels[is_positive]] = quality_scores[is_positive]
         loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none") * (
             targets - logits.sigmoid()
         ).abs().pow(self.beta)

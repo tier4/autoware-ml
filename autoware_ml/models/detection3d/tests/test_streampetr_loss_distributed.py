@@ -38,6 +38,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     StreamPETRDenoisingOutputs,
     StreamPETRHeadOutputs,
 )
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch
 from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.heads.streampetr import StreamPETRHead
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
@@ -323,11 +324,19 @@ def _head_2d_loss(
     images = [_image_2d(box_counts[rank], seed=90 + rank) for rank in ranks]
     outputs = head(torch.cat([features for features, _, _ in images]), 96, 160)
     module = head.module if isinstance(head, DistributedDataParallel) else head
+    max_num_boxes = max(boxes.shape[0] for _, boxes, _ in images)
+    rows = torch.zeros(len(images), 1, max_num_boxes, 6)
+    labels = torch.full((len(images), 1, max_num_boxes), -1, dtype=torch.int32)
+    for sample, (_, boxes, image_labels) in enumerate(images):
+        rows[sample, 0, : boxes.shape[0]] = torch.cat([boxes, boxes[:, :2] + 15.0], dim=1)
+        labels[sample, 0, : boxes.shape[0]] = image_labels.to(torch.int32)
     losses = module.loss(
         outputs,
-        gt_bboxes_2d=[boxes for _, boxes, _ in images],
-        gt_labels_2d=[labels for *_, labels in images],
-        gt_centers_2d=[boxes[:, :2] + 15.0 for _, boxes, _ in images],
+        Detection2DGTBatch(
+            gt_bboxes_2d=rows,
+            gt_labels_2d=labels,
+            gt_valid_bboxes_2d=torch.tensor([[boxes.shape[0]] for _, boxes, _ in images]).int(),
+        ),
         padding_mask=torch.zeros(len(images), dtype=torch.bool),
     )
     return sum(losses.values())

@@ -31,6 +31,7 @@ from jaxtyping import Bool, Float, Float32, Int64
 import torch
 import torch.nn as nn
 
+from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import FocalHead2DOutputs
 from autoware_ml.geometry.bbox_2d.base_bbox2d import BaseBBoxes2D
 from autoware_ml.losses.detection2d.quality_focal import QualityFocalLoss
@@ -38,6 +39,7 @@ from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner2D
 from autoware_ml.models.detection3d.task_modules.heatmap import create_gaussian_heatmaps
 from autoware_ml.models.detection3d.task_modules.streaming import inverse_sigmoid
+from autoware_ml.types.geometry import Box2DFieldIndex
 from autoware_ml.utils.distributed import reduce_mean_count
 
 
@@ -46,10 +48,11 @@ class _GroundTruth2D:
     """The 2D ground truth of every image of a batch, padded to the same number of boxes.
 
     Attributes:
-        bboxes: ``(x_min, y_min, x_max, y_max)`` of every box in pixels, zero on the padding.
+        bboxes: ``(x_min, y_min, x_max, y_max)`` of every box in pixels.
         labels: Class index of every box, -1 on the padding.
-        centers: Projected 3D center of every box in pixels, zero on the padding.
-        valid_masks: True on the real boxes, False on the padding.
+        centers: Projected 3D center of every box in pixels.
+        valid_masks: True on the real boxes, False on the padding and on every box of a
+            padding sample.
     """
 
     bboxes: Float32[torch.Tensor, "num_images max_num_boxes 4"]
@@ -94,7 +97,7 @@ class FocalHead2D(nn.Module):
         in_channels: int = 256,
         embed_dims: int = 256,
         stride: int = 16,
-        assigner: HungarianAssigner2D | None = None,
+        assigner: HungarianAssigner2D = HungarianAssigner2D(),
         loss_cls_weight: float = 2.0,
         loss_bbox_weight: float = 5.0,
         loss_iou_weight: float = 2.0,
@@ -109,7 +112,8 @@ class FocalHead2D(nn.Module):
             in_channels: Neck feature channels.
             embed_dims: Hidden channels of the shared conv towers.
             stride: Feature-map stride relative to the image, which must be a multiple of it.
-            assigner: Hungarian assigner for proposal-target matching.
+            assigner: Hungarian assigner for proposal-target matching; the default matches
+                with the reference cost weights.
             loss_cls_weight: Quality-focal classification loss weight.
             loss_bbox_weight: Normalized box L1 loss weight.
             loss_iou_weight: GIoU loss weight.
@@ -125,7 +129,7 @@ class FocalHead2D(nn.Module):
         self.class_names = list(class_names)
         self.num_classes = len(self.class_names)
         self.stride = stride
-        self.assigner = assigner if assigner is not None else HungarianAssigner2D()
+        self.assigner = assigner
 
         self.shared_cls = nn.Sequential(
             nn.Conv2d(in_channels, embed_dims, kernel_size=3, padding=1),
@@ -203,7 +207,7 @@ class FocalHead2D(nn.Module):
         center_offset = self.center2d(reg_feat).permute(0, 2, 3, 1).contiguous()
 
         locations = self._token_locations(
-            feature_height, feature_width, image_height, image_width, x.device
+            feature_height, feature_width, image_height, image_width
         ).unsqueeze(0)
         bbox_preds = self._decode_bbox_distances(locations, bbox_distances).view(x.shape[0], -1, 4)
         pred_centers2d = self._decode_center_offset(locations, center_offset).view(
@@ -228,20 +232,19 @@ class FocalHead2D(nn.Module):
         feature_width: int,
         image_height: int,
         image_width: int,
-        device: torch.device,
     ) -> Float32[torch.Tensor, "feature_height feature_width 2"]:
-        """Build the normalized pixel center of every token.
+        """Build the normalized pixel center of every token on the device of the head.
 
         Args:
             feature_height: Rows of the token grid.
             feature_width: Columns of the token grid.
             image_height: Image height in pixels.
             image_width: Image width in pixels.
-            device: Device of the locations.
 
         Returns:
             ``(x, y)`` of every token normalized by the image size.
         """
+        device = self.cls.weight.device
         shifts_x = (
             torch.arange(0, image_width, step=self.stride, dtype=torch.float32, device=device)
             + self.stride // 2
@@ -298,9 +301,7 @@ class FocalHead2D(nn.Module):
     def loss(
         self,
         outputs: FocalHead2DOutputs,
-        gt_bboxes_2d: list[Float32[torch.Tensor, "num_gts 4"]],
-        gt_labels_2d: list[Int64[torch.Tensor, " num_gts"]],
-        gt_centers_2d: list[Float32[torch.Tensor, "num_gts 2"]],
+        gt_detections_2d: Detection2DGTBatch,
         padding_mask: Bool[torch.Tensor, " batch_size"],
         gt_annotated_class_masks: Bool[torch.Tensor, "batch_size num_classes"] | None = None,
     ) -> dict[str, Float[torch.Tensor, ""]]:
@@ -308,12 +309,8 @@ class FocalHead2D(nn.Module):
 
         Args:
             outputs: Dense 2D predictions of the head.
-            gt_bboxes_2d: Per-image 2D boxes, in the order of the predictions: one unnormalized
-                ``(x_min, y_min, x_max, y_max)`` row per box in pixels, the edge columns of
-                the Box2DFieldIndex rows without the center.
-            gt_labels_2d: Per-image class labels.
-            gt_centers_2d: Per-image object centers, one ``(center_x, center_y)`` row per box
-                in pixels: the center columns of the Box2DFieldIndex rows.
+            gt_detections_2d: The collated 2D boxes of every camera of every sample, padded
+                per camera, in pixels of the images the predictions are normalized by.
             padding_mask: Flags the padding samples of a streaming batch (see
                 ``ModelGTBatch.padding_mask``). Their boxes are left out and every token of
                 their images gets a zero classification and heatmap weight, so they take no
@@ -338,12 +335,8 @@ class FocalHead2D(nn.Module):
             if gt_annotated_class_masks is None
             else gt_annotated_class_masks & real_samples
         )
-        ground_truth = self._padded_ground_truth(
-            outputs,
-            gt_bboxes_2d,
-            gt_labels_2d,
-            gt_centers_2d,
-            padding_mask.repeat_interleave(num_cams),
+        ground_truth = self._ground_truth(
+            outputs, gt_detections_2d, padding_mask.repeat_interleave(num_cams)
         )
         targets = self._build_targets(outputs, ground_truth)
         heatmap_targets = self._build_heatmaps(
@@ -370,77 +363,49 @@ class FocalHead2D(nn.Module):
         return losses
 
     @staticmethod
-    def _padded_ground_truth(
+    def _ground_truth(
         outputs: FocalHead2DOutputs,
-        gt_bboxes_2d: list[Float32[torch.Tensor, "num_gts 4"]],
-        gt_labels_2d: list[Int64[torch.Tensor, " num_gts"]],
-        gt_centers_2d: list[Float32[torch.Tensor, "num_gts 2"]],
+        gt_detections_2d: Detection2DGTBatch,
         padding_mask: Bool[torch.Tensor, " num_images"],
     ) -> _GroundTruth2D:
-        """Pad the ground truth of the real images to one tensor per field on the device.
+        """Lay the collated 2D boxes out one image after the other, as the predictions are.
 
         Args:
             outputs: Dense 2D predictions, for the device and the image size.
-            gt_bboxes_2d: Per-image 2D boxes in pixels.
-            gt_labels_2d: Per-image class labels.
-            gt_centers_2d: Per-image object centers in pixels.
+            gt_detections_2d: The collated 2D boxes of every camera of every sample.
             padding_mask: True on the images of the padding samples, whose boxes are left out.
 
         Returns:
-            The boxes, labels and centers padded to the largest count, with the valid mask.
+            The boxes, labels and centers of every image, cut to the largest valid count of
+            the batch, with the valid mask.
 
         Raises:
-            ValueError: If a box or center is not finite or lies outside the image.
+            ValueError: If a valid box or center is not finite or lies outside the image.
         """
         device = outputs.cls_scores.device
-        counts = [
-            0 if padding else boxes.shape[0]
-            for boxes, padding in zip(gt_bboxes_2d, padding_mask.tolist())
-        ]
-        num_images, max_num_boxes = len(counts), max(counts, default=0)
-        ground_truth = _GroundTruth2D(
-            bboxes=torch.zeros(num_images, max_num_boxes, 4, device=device),
-            labels=torch.full((num_images, max_num_boxes), -1, dtype=torch.long, device=device),
-            centers=torch.zeros(num_images, max_num_boxes, 2, device=device),
-            valid_masks=torch.zeros(num_images, max_num_boxes, dtype=torch.bool, device=device),
-        )
-        if max_num_boxes == 0:
-            return ground_truth
-        counts_tensor = torch.tensor(counts, device=device)
-        image_index = torch.repeat_interleave(
-            torch.arange(num_images, device=device), counts_tensor
-        )
-        box_index = torch.arange(int(counts_tensor.sum()), device=device) - torch.repeat_interleave(
-            counts_tensor.cumsum(0) - counts_tensor, counts_tensor
-        )
-        boxes_and_centers = torch.cat(
-            [
-                torch.cat([boxes[:count], centers[:count]], dim=1)
-                for boxes, centers, count in zip(gt_bboxes_2d, gt_centers_2d, counts)
-            ]
-        ).to(device=device, dtype=torch.float32)
-        image_extent = boxes_and_centers.new_tensor(
-            [outputs.image_width, outputs.image_height]
-        ).repeat(3)
-        if not bool(
-            (
-                torch.isfinite(boxes_and_centers)
-                & (boxes_and_centers >= 0.0)
-                & (boxes_and_centers <= image_extent)
-            ).all()
-        ):
+        rows = gt_detections_2d.gt_bboxes_2d.flatten(0, 1).to(device=device, dtype=torch.float32)
+        labels = gt_detections_2d.gt_labels_2d.flatten(0, 1).to(device=device, dtype=torch.long)
+        counts = gt_detections_2d.gt_valid_bboxes_2d.flatten().to(device)
+        counts = counts.masked_fill(padding_mask.to(device), 0)
+        max_num_boxes = int(counts.max()) if counts.numel() > 0 else 0
+        rows, labels = rows[:, :max_num_boxes], labels[:, :max_num_boxes]
+        valid_masks = torch.arange(max_num_boxes, device=device) < counts.unsqueeze(1)
+        edges = slice(Box2DFieldIndex.X_MIN, Box2DFieldIndex.Y_MAX + 1)
+        center = slice(Box2DFieldIndex.CENTER_X, Box2DFieldIndex.CENTER_Y + 1)
+        image_extent = rows.new_tensor([outputs.image_width, outputs.image_height]).repeat(3)
+        inside = torch.isfinite(rows) & (rows >= 0.0) & (rows <= image_extent)
+        if not bool(inside.all(dim=-1)[valid_masks].all()):
             raise ValueError(
                 "The 2D boxes or centers hold a non-finite value or one outside the "
                 f"{outputs.image_width} x {outputs.image_height} image; the annotation "
                 "transform must drop the boxes it cannot project and clip the rest to the image."
             )
-        ground_truth.bboxes[image_index, box_index] = boxes_and_centers[:, :4]
-        ground_truth.centers[image_index, box_index] = boxes_and_centers[:, 4:]
-        ground_truth.labels[image_index, box_index] = torch.cat(
-            [labels[:count] for labels, count in zip(gt_labels_2d, counts)]
-        ).to(device=device, dtype=torch.long)
-        ground_truth.valid_masks[image_index, box_index] = True
-        return ground_truth
+        return _GroundTruth2D(
+            bboxes=rows[..., edges],
+            labels=labels.masked_fill(~valid_masks, -1),
+            centers=rows[..., center],
+            valid_masks=valid_masks,
+        )
 
     def _build_targets(
         self, outputs: FocalHead2DOutputs, ground_truth: _GroundTruth2D
