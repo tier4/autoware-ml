@@ -20,53 +20,22 @@ pipelines and provides sequential composition helpers.
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Generic, NamedTuple, TypeVar
 
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
-@dataclass(frozen=True)
-class TransformParameters:
-    """Base of the values a transform draws for one sample or for every frame of a stream.
-
-    A transform that shares its augmentation between the frames of a stream declares its
-    parameters as a frozen dataclass deriving from this one, returns them from
-    :meth:`BaseTransform.sample_parameters` and reads them in
-    :meth:`BaseTransform.transform_with_parameters`. The parameters are drawn before any frame
-    is loaded and are pickled to the dataloader workers, so their fields are plain values,
-    floats, bools and tuples of them, that depend on no sample.
-    """
-
-
-ParametersT = TypeVar("ParametersT", bound=TransformParameters)
-
-
-class StreamParameters(NamedTuple, Generic[ParametersT]):
-    """Augmentation one transform applies to every frame of a stream.
-
-    A temporal model reads the frames of a stream one after another. The parameters are drawn
-    once for the stream, see :meth:`BaseTransform.sample_stream_parameters`, and handed to the
-    transform with every frame of it, so the frames are augmented alike.
-
-    Attributes:
-        apply: Whether the transform runs on the frames of the stream, the outcome of its
-            probability.
-        values: Parameters the transform drew, None for a transform the stream skips.
-    """
-
-    apply: bool
-    values: ParametersT | None
-
-
-class BaseTransform(ABC, Generic[ParametersT]):
+class BaseTransform(ABC):
     """Abstract base class for ModelGTSample data transformations.
 
-    A transform that shares its augmentation between the frames of a stream names the
-    ``TransformParameters`` it draws, ``BaseTransform[MyParameters]``. Any other transform
-    derives from the plain ``BaseTransform``.
+    A temporal model reads the frames of a stream one after another and needs some
+    augmentations alike in every frame, the global rotation or the flip. Such a transform
+    keeps the parameters it drew in an attribute of its own: :meth:`draw_parameters` draws
+    and keeps them, :meth:`clear_parameters` drops them, and :meth:`transform` applies the
+    kept parameters whenever there are some and draws for the sample alone otherwise.
+    ``TransformsCompose.draw_stream_parameters`` updates them when a frame of another stream
+    comes in.
 
     Class Attributes (override in subclasses):
         _required_keys: Fields of the sample that must be set before the transform runs.
@@ -82,12 +51,11 @@ class BaseTransform(ABC, Generic[ParametersT]):
                          Set to None if the transform should always run.
         """
         self._probability = probability
+        # Outcome of the probability kept for the frames of a stream, None to decide it for
+        # every sample alone.
+        self._stream_apply: bool | None = None
 
-    def __call__(
-        self,
-        model_gt_sample: ModelGTSample,
-        stream_parameters: StreamParameters[ParametersT] | None = None,
-    ) -> ModelGTSample:
+    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Execute transform with probability and key validation.
 
         Order of operations:
@@ -97,74 +65,50 @@ class BaseTransform(ABC, Generic[ParametersT]):
 
         Args:
             model_gt_sample: Dataclass to hold inputs for each sample.
-            stream_parameters: Augmentation drawn for the stream of the sample, which replaces
-                the probability and the draw of the transform. None draws for the sample alone.
 
         Returns:
             Updated ModelGTSample.
-
-        Raises:
-            ValueError: If the stream applies the transform but holds no parameters for it.
         """
         # 1. Validate required keys (raises error if any missing)
         self._validate_required_keys(model_gt_sample)
 
-        # 2. Check probability (skip if not triggered)
-        apply = self._should_apply() if stream_parameters is None else stream_parameters.apply
+        # 2. Check probability (skip if not triggered), decided once for the frames of a stream
+        apply = self._should_apply() if self._stream_apply is None else self._stream_apply
         if not apply:
             return self.on_skip(model_gt_sample)
 
         # 3. Execute the actual transform
-        if stream_parameters is None:
-            return self.transform(model_gt_sample)
-        if stream_parameters.values is None:
-            raise ValueError(
-                f"The stream applies {self.__class__.__name__} but holds no parameters for it."
-            )
-        return self.transform_with_parameters(model_gt_sample, stream_parameters.values)
+        return self.transform(model_gt_sample)
 
-    def sample_parameters(self) -> ParametersT | None:
-        """Draw the parameters the transform shares between the frames of a stream.
+    def draw_parameters(self) -> bool:
+        """Draw the parameters of the transform and keep them for the samples that follow.
 
-        Override it together with :meth:`transform_with_parameters` in a transform whose
-        augmentation a temporal model needs alike in every frame, the global rotation or the
-        flip. The parameters are drawn before any frame is loaded and are pickled to the
-        dataloader workers, so they are a ``TransformParameters`` of plain values that depend
-        on no sample.
+        Override it together with :meth:`clear_parameters` in a transform that keeps its
+        augmentation alike over the frames of a stream. The parameters are drawn from
+        ``np.random`` before a frame is loaded, so they depend on no sample.
 
         Returns:
-            The drawn parameters, None for a transform that draws for every sample alone.
+            Whether the transform keeps parameters, False for one that draws for every sample
+            alone.
         """
-        return None
+        return False
 
-    def sample_stream_parameters(self) -> StreamParameters[ParametersT] | None:
-        """Draw the augmentation of one stream: the probability, then the parameters.
+    def clear_parameters(self) -> None:
+        """Drop the kept parameters, so the transform draws for every sample alone again."""
 
-        Returns:
-            The augmentation every frame of the stream gets, None for a transform that draws
-            for every sample alone.
+    def draw_stream_parameters(self) -> None:
+        """Draw the augmentation of one stream and keep it: the probability, then the parameters.
+
+        A transform that keeps no parameters is left deciding its probability and drawing for
+        every sample alone.
         """
-        if type(self).sample_parameters is BaseTransform.sample_parameters:
-            return None
-        if not self._should_apply():
-            return StreamParameters(apply=False, values=None)
-        return StreamParameters(apply=True, values=self.sample_parameters())
+        apply = self._should_apply()
+        self._stream_apply = apply if self.draw_parameters() else None
 
-    def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: ParametersT
-    ) -> ModelGTSample:
-        """Transform one sample with the given parameters instead of drawing them.
-
-        Args:
-            model_gt_sample: ModelGTSample instance with its required fields set.
-            parameters: Parameters drawn by :meth:`sample_parameters`.
-
-        Returns:
-            Updated ModelGTSample, possibly the same instance modified in place.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} draws parameters for a stream but cannot apply them."
-        )
+    def clear_stream_parameters(self) -> None:
+        """Drop the augmentation of the stream, so every sample is augmented on its own again."""
+        self._stream_apply = None
+        self.clear_parameters()
 
     def _validate_required_keys(self, model_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when any required key is missing.
@@ -234,45 +178,54 @@ class TransformsCompose:
             pipeline: Ordered transforms applied to each sample.
         """
         self.pipeline = pipeline
+        # Seed of the stream whose augmentation the transforms keep, None while every sample
+        # is augmented on its own.
+        self._stream_seed: tuple[int, ...] | None = None
 
-    def __call__(
-        self,
-        model_gt_sample: ModelGTSample,
-        stream_parameters: Sequence[StreamParameters | None] | None = None,
-    ) -> ModelGTSample:
+    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Apply each transform in order.
 
         Args:
             model_gt_sample: ModelGTSample instance passed through the configured transforms.
-            stream_parameters: Augmentation of the stream of the sample, one entry per
-                transform as drawn by :meth:`sample_stream_parameters`. None draws every
-                augmentation for the sample alone.
 
         Returns:
             Transformed ModelGTSample instance after all pipeline stages have been applied.
-
-        Raises:
-            ValueError: If the stream parameters were drawn for a pipeline of another length.
         """
-        if stream_parameters is None:
-            stream_parameters = [None] * len(self.pipeline)
-        if len(stream_parameters) != len(self.pipeline):
-            raise ValueError(
-                f"Got the stream parameters of {len(stream_parameters)} transform(s) for a "
-                f"pipeline of {len(self.pipeline)}."
-            )
-        for transform, parameters in zip(self.pipeline, stream_parameters, strict=True):
-            model_gt_sample = transform(model_gt_sample, parameters)
+        for transform in self.pipeline:
+            model_gt_sample = transform(model_gt_sample)
 
         return model_gt_sample
 
-    def sample_stream_parameters(self) -> tuple[StreamParameters | None, ...]:
-        """Draw the augmentation of one stream, to hand to every frame of it.
+    def draw_stream_parameters(self, stream_seed: Sequence[int]) -> None:
+        """Make the transforms keep the augmentation of one stream.
 
-        Returns:
-            One entry per transform, None where the transform draws for every sample alone.
+        The parameters are drawn from ``np.random`` seeded by the stream, so every dataloader
+        worker and every rank draws the same values for the frames of one stream, and the
+        random state of NumPy is restored afterwards. They are drawn again only when the
+        seed differs from the one of the stream the transforms already keep.
+
+        Args:
+            stream_seed: Integers naming the stream, the same for every frame of it.
         """
-        return tuple(transform.sample_stream_parameters() for transform in self.pipeline)
+        stream_seed = tuple(stream_seed)
+        if stream_seed == self._stream_seed:
+            return
+        state = np.random.get_state()
+        np.random.seed(list(stream_seed))
+        try:
+            for transform in self.pipeline:
+                transform.draw_stream_parameters()
+        finally:
+            np.random.set_state(state)
+        self._stream_seed = stream_seed
+
+    def clear_stream_parameters(self) -> None:
+        """Make every transform draw its augmentation for every sample alone again."""
+        if self._stream_seed is None:
+            return
+        for transform in self.pipeline:
+            transform.clear_stream_parameters()
+        self._stream_seed = None
 
     def __repr__(self) -> str:
         """Return a formatted string representation of the composition.

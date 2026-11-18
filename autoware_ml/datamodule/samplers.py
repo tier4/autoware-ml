@@ -30,7 +30,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import torch
 import torch.distributed as dist
 from torch.utils.data import Dataset
@@ -46,7 +45,6 @@ from autoware_ml.datamodule.base_dataset import (
     StreamPaddingSlot,
     StreamSlot,
 )
-from autoware_ml.transforms.base import StreamParameters
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -337,11 +335,10 @@ class GroupStreamingSampler(DistributedSampler):
     ``num_lanes`` slots of an epoch are padding, and no frame is dropped or served twice as a
     real sample, in training, evaluation and prediction alike.
 
-    With ``consistent_augmentation`` the augmentation of a scene is drawn once, when the scene
-    comes in, and every frame of it is a ``StreamSlot`` carrying the drawn values, so a dataset
-    augments every frame of a scene alike, as Sparse4D keeps the augmentation of a sequence.
-    The next scene and the same scene in the next epoch draw anew. The draw depends only on
-    ``seed``, the epoch and the scene, so a run repeats it.
+    With ``consistent_augmentation`` every frame of a scene is a ``StreamSlot`` carrying the
+    seed of the scene, the run, the epoch and the scene, from which a dataset draws one
+    augmentation for the whole scene, as Sparse4D keeps the augmentation of a sequence. The
+    next scene and the same scene in the next epoch carry another seed.
 
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
@@ -360,14 +357,13 @@ class GroupStreamingSampler(DistributedSampler):
 
         Args:
             dataset: Dataset exposing ``scene_index_groups()``, the indices of
-                every scene in frame order, and with ``consistent_augmentation`` also
-                ``sample_stream_augmentation()``, the draw of the augmentation of a scene.
+                every scene in frame order.
             batch_size: Number of dataloader lanes fed in parallel. Must match
                 the dataloader batch size.
             shuffle: Whether to shuffle the scene order every epoch.
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
-            consistent_augmentation: Whether every frame of a scene carries the same
-                augmentation values, drawn once per scene and redrawn every epoch.
+            consistent_augmentation: Whether every frame of a scene carries the seed of its
+                scene, so a dataset augments the frames of a scene alike.
         """
         num_replicas, rank = _world_size_and_rank()
         # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
@@ -409,36 +405,16 @@ class GroupStreamingSampler(DistributedSampler):
         return torch.randperm(len(self.scene_groups), generator=generator).tolist()
 
     def _scene_frames(self, scene_index: int, epoch: int) -> Sequence[int]:
-        """Frames of one scene for an epoch, stream slots of one augmentation when it is kept."""
+        """Frames of one scene for an epoch, stream slots of one seed when it is augmented alike.
+
+        The seed is the run, the epoch and the scene, so every worker and rank and a resumed
+        run draw the same augmentation for the scene, and the next epoch draws another one.
+        """
         frames = self.scene_groups[scene_index]
         if not self.consistent_augmentation:
             return frames
-        augmentation = self._draw_augmentation(frames[0], scene_index, epoch)
-        return [StreamSlot(index, augmentation) for index in frames]
-
-    def _draw_augmentation(
-        self, first_frame: int, scene_index: int, epoch: int
-    ) -> tuple[StreamParameters | None, ...]:
-        """Draw the augmentation values of one scene for an epoch.
-
-        The pipeline of the dataset draws from ``np.random``, seeded here by the run, the epoch
-        and the scene, so every rank and a resumed run draw the same values for the scene. The
-        random state of NumPy is restored afterwards.
-
-        Args:
-            first_frame: Index of the first frame of the scene.
-            scene_index: Index of the scene in ``scene_groups``.
-            epoch: Epoch the scene is served in.
-
-        Returns:
-            The values every frame of the scene is augmented with.
-        """
-        state = np.random.get_state()
-        np.random.seed([self.seed, epoch, scene_index])
-        try:
-            return tuple(self.dataset.sample_stream_augmentation(first_frame))
-        finally:
-            np.random.set_state(state)
+        stream_seed = (self.seed, epoch, scene_index)
+        return [StreamSlot(index, stream_seed) for index in frames]
 
     def _cut_lanes(self, scene_order: Sequence[int], epoch: int = 0) -> Sequence[Sequence[int]]:
         """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length."""
@@ -453,7 +429,7 @@ class GroupStreamingSampler(DistributedSampler):
         """End a lane with padding slots holding its last frame, up to a length of ``rounds``."""
         last = lane[-1]
         padding = (
-            StreamPaddingSlot(last, last.augmentation)
+            StreamPaddingSlot(last, last.stream_seed)
             if isinstance(last, StreamSlot)
             else PaddingSlot(last)
         )

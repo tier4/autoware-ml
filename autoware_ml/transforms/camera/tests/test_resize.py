@@ -14,8 +14,6 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
-from collections.abc import Sequence
-import pickle
 import unittest
 
 from jaxtyping import Float32
@@ -25,7 +23,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.base import StreamParameters, TransformsCompose
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
     ImageAugmentationDraw,
@@ -598,38 +596,53 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         )
 
     def augmented_intrinsics(
-        self,
-        pipeline: TransformsCompose,
-        stream_parameters: Sequence[StreamParameters | None] | None,
+        self, pipeline: TransformsCompose
     ) -> Float32[Tensor, "num_cameras 3 3"]:
         """Augmented intrinsics the pipeline gives a fresh sample."""
-        output = pipeline(self.build_multi_task_gt_sample(), stream_parameters)
+        output = pipeline(self.build_multi_task_gt_sample())
         assert output.camera_image_data is not None
         self.assert_projection_is_consistent(output.camera_image_data)
         return output.camera_image_data.augmented_camera_intrinsics
 
     def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
         """
-        Input: a training transform drawing resize, crop, flip and rotation, the parameters
-        of two streams drawn from it, the first pickled as for a dataloader worker, and two
-        frames of the first stream and one of the second.
-        Expected: one draw augments every camera of every frame of its stream, and another
-        stream is augmented differently.
+        Input: a training transform drawing resize, crop, flip and rotation, two frames
+        transformed after the draw of one stream and one frame after the draw of another.
+        Expected: the draw the transform keeps augments every camera of every frame of its
+        stream, and another stream is augmented differently.
         Check: the augmented intrinsics of the two frames are equal, the two cameras of a
         frame are equal, and the frame of the other stream differs.
         """
-        np.random.seed(0)
         pipeline = TransformsCompose([self.build_training_transform()])
-        stream = pickle.loads(pickle.dumps(pipeline.sample_stream_parameters()))
-        other_stream = pipeline.sample_stream_parameters()
 
-        first = self.augmented_intrinsics(pipeline, stream)
-        second = self.augmented_intrinsics(pipeline, stream)
+        pipeline.draw_stream_parameters((0, 0, 0))
+        first = self.augmented_intrinsics(pipeline)
+        second = self.augmented_intrinsics(pipeline)
+        pipeline.draw_stream_parameters((0, 0, 1))
+        other = self.augmented_intrinsics(pipeline)
 
-        self.assertTrue(stream[0].apply)
         self.assertTrue(torch.equal(first, second))
         self.assertTrue(torch.equal(first[0], first[1]))
-        self.assertFalse(torch.equal(first, self.augmented_intrinsics(pipeline, other_stream)))
+        self.assertFalse(torch.equal(first, other))
+
+    def test_cameras_draw_on_their_own_again_after_a_stream(self) -> None:
+        """
+        Input: a training transform whose stream parameters were drawn and then cleared, and
+        one frame transformed afterwards.
+        Expected: without a kept draw every camera draws its own augmentation again.
+        Check: the transform keeps no parameters and the two cameras of the frame get
+        different augmented intrinsics.
+        """
+        np.random.seed(0)
+        transform = self.build_training_transform()
+        pipeline = TransformsCompose([transform])
+
+        pipeline.draw_stream_parameters((0, 0, 0))
+        pipeline.clear_stream_parameters()
+        intrinsics = self.augmented_intrinsics(pipeline)
+
+        self.assertIsNone(transform.parameters)
+        self.assertFalse(torch.equal(intrinsics[0], intrinsics[1]))
 
     def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
         """
@@ -666,14 +679,13 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
             ),
         )
 
-    def test_a_stream_in_validation_draws_nothing_and_matches_a_single_frame(self) -> None:
+    def test_a_stream_in_validation_is_augmented_as_a_single_frame(self) -> None:
         """
-        Input: a validation transform, the parameters of a stream drawn from it under a
-        seeded random state, and one frame with and one without those parameters.
-        Expected: validation draws nothing for a stream and augments its frames as it
-        augments a single frame.
-        Check: the values drawn after the stream parameters are the ones drawn without
-        them, and both frames get the same augmented intrinsics.
+        Input: a validation transform, one frame transformed on its own and one after the
+        draw of a stream.
+        Expected: validation keeps the middle of every range for a stream, the values it
+        applies to a single frame.
+        Check: both frames get the same augmented intrinsics.
         """
         pipeline = TransformsCompose(
             [
@@ -685,19 +697,11 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
                 )
             ]
         )
-        np.random.seed(3)
-        expected = np.random.uniform(size=3).tolist()
 
-        np.random.seed(3)
-        stream = pipeline.sample_stream_parameters()
+        single_frame = self.augmented_intrinsics(pipeline)
+        pipeline.draw_stream_parameters((0, 0, 0))
 
-        self.assertEqual(np.random.uniform(size=3).tolist(), expected)
-        self.assertTrue(
-            torch.equal(
-                self.augmented_intrinsics(pipeline, stream),
-                self.augmented_intrinsics(pipeline, None),
-            )
-        )
+        self.assertTrue(torch.equal(self.augmented_intrinsics(pipeline), single_frame))
 
     @staticmethod
     def intensity_centroid(

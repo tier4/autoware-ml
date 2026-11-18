@@ -45,10 +45,10 @@ from torchvision.transforms import v2
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
-from autoware_ml.transforms.base import BaseTransform, ParametersT, TransformParameters
+from autoware_ml.transforms.base import BaseTransform
 
 
-class ImageSpaceTransform(BaseTransform[ParametersT]):
+class ImageSpaceTransform(BaseTransform):
     """Base class of the transforms that only remap the pixels of the camera images.
 
     It holds the image-space affine builders and the composition of an image-space
@@ -195,7 +195,7 @@ class ImageAugmentationParameters(NamedTuple):
 
 
 @dataclass(frozen=True)
-class ImageAugmentationDraw(TransformParameters):
+class ImageAugmentationDraw:
     """Resize, crop, flip, and rotation drawn by ``ResizeCropFlipRotImage``, as plain values.
 
     The draw depends on no image size, so it can be made before a frame is loaded and shared
@@ -491,7 +491,7 @@ class PadMultiViewImage(ImageSpaceTransform):
         )
 
 
-class ResizeCropFlipRotImage(ImageSpaceTransform[ImageAugmentationDraw]):
+class ResizeCropFlipRotImage(ImageSpaceTransform):
     """Resize, crop, flip, and rotate every camera image to the target size.
 
     The source image is resized once, then a crop box sized as the target is cut out of it,
@@ -501,8 +501,8 @@ class ResizeCropFlipRotImage(ImageSpaceTransform[ImageAugmentationDraw]):
     centered along the width, and neither flip nor rotation is applied, so the transform is
     deterministic.
 
-    Given the parameters of a stream, see :meth:`sample_parameters`, one draw is applied to
-    every camera of every frame of the stream instead, as Sparse4D keeps the image
+    While the transform keeps the draw of a stream, see :meth:`draw_parameters`, that one
+    draw is applied to every camera of every frame instead, as Sparse4D keeps the image
     augmentation of a sequence.
     """
 
@@ -532,6 +532,8 @@ class ResizeCropFlipRotImage(ImageSpaceTransform[ImageAugmentationDraw]):
                 never rotate.
         """
         super().__init__(probability=None)
+        # Draw kept for the frames of a stream, None to draw for every camera of every sample
+        self.parameters: ImageAugmentationDraw | None = None
         self.target_size = tuple(target_size)
         self.resize_range = resize_range
         self.bottom_crop_ratio_range = bottom_crop_ratio_range
@@ -548,6 +550,10 @@ class ResizeCropFlipRotImage(ImageSpaceTransform[ImageAugmentationDraw]):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
+        # The kept draw of a stream is shared by the cameras, otherwise every camera draws
+        if self.parameters is not None:
+            return self.transform_with_parameters(model_gt_sample, self.parameters)
+
         # This is checked in the _validate_required_keys()
         camera_image_data: BaseImages = (
             model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
@@ -560,6 +566,19 @@ class ResizeCropFlipRotImage(ImageSpaceTransform[ImageAugmentationDraw]):
             model_gt_sample,
             [self.sample_augmentation(source_height, source_width) for _ in images],
         )
+
+    def draw_parameters(self) -> bool:
+        """Draw one augmentation for every camera and keep it for the samples that follow.
+
+        Returns:
+            True, the transform keeps its parameters.
+        """
+        self.parameters = self.sample_parameters()
+        return True
+
+    def clear_parameters(self) -> None:
+        """Drop the kept parameters, so every sample draws its own again."""
+        self.parameters = None
 
     def transform_with_parameters(
         self, model_gt_sample: ModelGTSample, parameters: ImageAugmentationDraw

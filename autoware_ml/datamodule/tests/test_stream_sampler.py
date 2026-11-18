@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the augmentation the streaming sampler draws once per scene."""
+"""Unit tests for the stream slots the streaming sampler hands the frames of a scene."""
 
 from __future__ import annotations
 
@@ -20,16 +20,12 @@ from collections.abc import Sequence
 import pickle
 import unittest
 
-import numpy as np
-
 from autoware_ml.datamodule.base_dataset import PaddingSlot, StreamPaddingSlot, StreamSlot
 from autoware_ml.datamodule.samplers import GroupStreamingSampler
-from autoware_ml.transforms.base import StreamParameters
-from autoware_ml.transforms.camera_lidar.geometry import BEVFlipParameters, RotScaleTransParameters
 
 
-class _AugmentedScenesDataset:
-    """Minimal dataset stub exposing its scenes and the draw of a stream augmentation."""
+class _ScenesDataset:
+    """Minimal dataset stub exposing scene_index_groups()."""
 
     def __init__(self, scene_lengths: Sequence[int]) -> None:
         self._groups = []
@@ -40,13 +36,6 @@ class _AugmentedScenesDataset:
 
     def scene_index_groups(self) -> Sequence[Sequence[int]]:
         return [list(group) for group in self._groups]
-
-    def sample_stream_augmentation(self, index: int) -> tuple[StreamParameters | None, ...]:
-        """The parameters of a pipeline of one rotation, drawn as a pipeline draws them."""
-        rotation = RotScaleTransParameters(
-            yaw=float(np.random.uniform()), scale=1.0, translation=(0.0, 0.0, 0.0)
-        )
-        return (StreamParameters(apply=True, values=rotation),)
 
     def __len__(self) -> int:
         return sum(len(group) for group in self._groups)
@@ -71,15 +60,15 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
         Args:
             scene_lengths: Number of frames of every scene.
             batch_size: Number of lanes of the sampler.
-            seed: Seed of the scene shuffle and of the augmentation draws.
+            seed: Seed of the scene shuffle and of the stream seeds.
             shuffle: Whether the scenes are shuffled every epoch.
-            consistent_augmentation: Whether a scene keeps one augmentation.
+            consistent_augmentation: Whether the frames of a scene carry the seed of it.
 
         Returns:
             The sampler over a stub dataset holding the scenes.
         """
         return GroupStreamingSampler(
-            _AugmentedScenesDataset(scene_lengths),
+            _ScenesDataset(scene_lengths),
             batch_size=batch_size,
             shuffle=shuffle,
             seed=seed,
@@ -91,99 +80,84 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
         indices = list(iter(sampler))
         return [indices[lane :: sampler.batch_size] for lane in range(sampler.batch_size)]
 
-    def drawn(
-        self, sampler: GroupStreamingSampler, epoch: int
-    ) -> Sequence[tuple[StreamParameters | None, ...]]:
-        """The augmentation carried by every slot of one epoch."""
+    def stream_seeds(self, sampler: GroupStreamingSampler, epoch: int) -> Sequence[tuple[int, ...]]:
+        """The stream seed carried by every slot of one epoch."""
         sampler.set_epoch(epoch)
-        return [slot.augmentation for slot in sampler]
+        return [slot.stream_seed for slot in sampler]
 
-    def drawn_per_scene(
+    def stream_seeds_per_scene(
         self, sampler: GroupStreamingSampler
-    ) -> dict[int, set[tuple[StreamParameters | None, ...]]]:
-        """The augmentations the slots of every scene carry in the current epoch."""
+    ) -> dict[int, set[tuple[int, ...]]]:
+        """The stream seeds the slots of every scene carry in the current epoch."""
         scene_of = {
             index: scene for scene, group in enumerate(sampler.scene_groups) for index in group
         }
-        drawn: dict[int, set[tuple[StreamParameters | None, ...]]] = {}
+        seeds: dict[int, set[tuple[int, ...]]] = {}
         for slot in sampler:
-            drawn.setdefault(scene_of[int(slot)], set()).add(slot.augmentation)
-        return drawn
+            seeds.setdefault(scene_of[int(slot)], set()).add(slot.stream_seed)
+        return seeds
 
-    def test_frames_of_a_scene_carry_one_augmentation_and_scenes_differ(self) -> None:
+    def test_frames_of_a_scene_carry_one_stream_seed_and_scenes_differ(self) -> None:
         """
         Input: scenes of 6, 3 and 3 frames through two lanes, with and without the consistent
         augmentation.
         Expected: the same frames in the same order either way, every frame a stream slot
-        whose augmentation is the one drawn for its scene.
-        Check: the indices match the plain sampler, every scene carries one augmentation
-        and the three scenes carry three different ones.
+        carrying the seed of its scene.
+        Check: the indices match the plain sampler, every scene carries one seed and the
+        three scenes carry three different ones.
         """
         sampler = self.build_stream_sampler([6, 3, 3], batch_size=2)
         plain = self.build_stream_sampler([6, 3, 3], batch_size=2, consistent_augmentation=False)
 
         indices = list(sampler)
-        drawn = self.drawn_per_scene(sampler)
+        seeds = self.stream_seeds_per_scene(sampler)
 
         self.assertEqual([int(index) for index in indices], list(plain))
         self.assertTrue(all(isinstance(index, StreamSlot) for index in indices))
-        self.assertEqual([len(drawn[scene]) for scene in range(3)], [1, 1, 1])
-        self.assertEqual(len(drawn[0] | drawn[1] | drawn[2]), 3)
+        self.assertFalse(any(isinstance(index, StreamSlot) for index in plain))
+        self.assertEqual([len(seeds[scene]) for scene in range(3)], [1, 1, 1])
+        self.assertEqual(len(seeds[0] | seeds[1] | seeds[2]), 3)
 
-    def test_a_scene_is_augmented_anew_every_epoch_and_alike_in_every_process(self) -> None:
+    def test_a_scene_gets_a_new_seed_every_epoch_and_the_same_in_every_process(self) -> None:
         """
         Input: two samplers built alike, as the ranks or a resumed run build them, and a
         third one with another seed.
-        Expected: the draw depends only on the seed, the epoch and the scene.
-        Check: the two samplers draw the same in epoch 0, and neither the next epoch nor
-        the other seed repeats any of those draws.
+        Expected: the stream seed depends only on the seed of the run, the epoch and the
+        scene.
+        Check: the two samplers carry the same seeds in epoch 0, and neither the next epoch
+        nor the other run repeats any of them.
         """
         first = self.build_stream_sampler([4, 4], batch_size=2)
         second = self.build_stream_sampler([4, 4], batch_size=2)
         other_run = self.build_stream_sampler([4, 4], batch_size=2, seed=1)
 
-        self.assertEqual(self.drawn(first, 0), self.drawn(second, 0))
-        self.assertTrue(set(self.drawn(first, 0)).isdisjoint(self.drawn(first, 1)))
-        self.assertTrue(set(self.drawn(first, 0)).isdisjoint(self.drawn(other_run, 0)))
+        self.assertEqual(self.stream_seeds(first, 0), self.stream_seeds(second, 0))
+        self.assertTrue(set(self.stream_seeds(first, 0)).isdisjoint(self.stream_seeds(first, 1)))
+        self.assertTrue(
+            set(self.stream_seeds(first, 0)).isdisjoint(self.stream_seeds(other_run, 0))
+        )
 
-    def test_drawing_the_augmentation_leaves_the_random_state_as_it_was(self) -> None:
-        """
-        Input: a seeded NumPy random state, read once directly and once after the sampler
-        drew the augmentation of an epoch.
-        Expected: the sampler restores the random state it seeded for its draws.
-        Check: the three values drawn after the epoch are the ones drawn without it.
-        """
-        sampler = self.build_stream_sampler([4, 4], batch_size=2)
-        np.random.seed(11)
-        expected = np.random.uniform(size=3).tolist()
-
-        np.random.seed(11)
-        list(sampler)
-
-        self.assertEqual(np.random.uniform(size=3).tolist(), expected)
-
-    def test_a_scene_keeps_its_augmentation_when_shuffled_and_cut_into_lanes(self) -> None:
+    def test_a_scene_keeps_its_stream_seed_when_shuffled_and_cut_into_lanes(self) -> None:
         """
         Input: scenes of 5, 4, 3 and 2 frames shuffled through three lanes, so scenes are
         cut across lanes.
-        Expected: a scene keeps one augmentation wherever its frames land.
-        Check: every one of the four scenes carries exactly one augmentation.
+        Expected: a scene keeps one seed wherever its frames land.
+        Check: every one of the four scenes carries exactly one seed.
         """
         sampler = self.build_stream_sampler([5, 4, 3, 2], batch_size=3, shuffle=True)
 
-        drawn = self.drawn_per_scene(sampler)
+        seeds = self.stream_seeds_per_scene(sampler)
 
-        self.assertEqual(sorted(drawn), [0, 1, 2, 3])
-        self.assertTrue(all(len(scene_drawn) == 1 for scene_drawn in drawn.values()))
+        self.assertEqual(sorted(seeds), [0, 1, 2, 3])
+        self.assertTrue(all(len(scene_seeds) == 1 for scene_seeds in seeds.values()))
 
-    def test_a_padding_slot_keeps_the_augmentation_of_the_frame_it_repeats(self) -> None:
+    def test_a_padding_slot_keeps_the_stream_seed_of_the_frame_it_repeats(self) -> None:
         """
         Input: scenes of 3 and 2 frames through two lanes, cut into lanes of two and three
         frames, so the shorter lane ends with a padding slot.
-        Expected: the padding slot repeats the last frame of its lane under the same
-        augmentation.
+        Expected: the padding slot repeats the last frame of its lane under the same seed.
         Check: the slot is a StreamPaddingSlot and a PaddingSlot, with the index and the
-        augmentation of the frame before it.
+        seed of the frame before it.
         """
         sampler = self.build_stream_sampler([3, 2], batch_size=2)
 
@@ -193,31 +167,24 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
         self.assertIsInstance(padding, StreamPaddingSlot)
         self.assertIsInstance(padding, PaddingSlot)
         self.assertEqual(padding, short_lane[-2])
-        self.assertEqual(padding.augmentation, short_lane[-2].augmentation)
+        self.assertEqual(padding.stream_seed, short_lane[-2].stream_seed)
 
-    def test_a_stream_slot_keeps_its_augmentation_through_a_worker_and_a_split(self) -> None:
+    def test_a_stream_slot_keeps_its_seed_through_a_worker_and_a_split(self) -> None:
         """
         Input: a stream slot and a stream padding slot, pickled as for a dataloader worker
         and moved to another index as a concatenated split does.
-        Expected: both keep their augmentation and their kind.
-        Check: the unpickled and the moved slots carry the augmentation, and the padding
-        slot stays a StreamPaddingSlot.
+        Expected: both keep their seed and their kind.
+        Check: the unpickled and the moved slots carry the seed, and the padding slot stays
+        a StreamPaddingSlot.
         """
-        augmentation = (
-            StreamParameters(
-                apply=True,
-                values=RotScaleTransParameters(yaw=0.1, scale=1.02, translation=(0.0, 0.1, 0.0)),
-            ),
-            StreamParameters(apply=True, values=BEVFlipParameters(horizontal=True, vertical=False)),
-            None,
-        )
-        slot = StreamSlot(3, augmentation)
-        padding = StreamPaddingSlot(3, augmentation)
+        stream_seed = (7, 2, 5)
+        slot = StreamSlot(3, stream_seed)
+        padding = StreamPaddingSlot(3, stream_seed)
 
-        self.assertEqual(pickle.loads(pickle.dumps(slot)).augmentation, augmentation)
+        self.assertEqual(pickle.loads(pickle.dumps(slot)).stream_seed, stream_seed)
         self.assertIsInstance(pickle.loads(pickle.dumps(padding)), StreamPaddingSlot)
         self.assertEqual(slot.at(1), 1)
-        self.assertEqual(slot.at(1).augmentation, augmentation)
+        self.assertEqual(slot.at(1).stream_seed, stream_seed)
         self.assertIsInstance(padding.at(1), StreamPaddingSlot)
 
 

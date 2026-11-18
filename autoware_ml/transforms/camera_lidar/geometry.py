@@ -39,7 +39,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
-from autoware_ml.transforms.base import BaseTransform, TransformParameters
+from autoware_ml.transforms.base import BaseTransform
 from autoware_ml.types.spatial import BEVDirection
 from autoware_ml.types.geometry import TransformationName
 
@@ -71,7 +71,7 @@ class RotationScaleTranslationData(BaseModel):
 
 
 @dataclass(frozen=True)
-class RotScaleTransParameters(TransformParameters):
+class RotScaleTransParameters:
     """Rotation, scale and translation drawn by ``GlobalRotScaleTrans``, as plain values.
 
     Attributes:
@@ -86,7 +86,7 @@ class RotScaleTransParameters(TransformParameters):
 
 
 @dataclass(frozen=True)
-class BEVFlipParameters(TransformParameters):
+class BEVFlipParameters:
     """Flips drawn by ``GlobalBEVRandomFlip``.
 
     Attributes:
@@ -144,7 +144,7 @@ def apply_lidar_transformation(
     )
 
 
-class GlobalRotScaleTrans(BaseTransform[RotScaleTransParameters]):
+class GlobalRotScaleTrans(BaseTransform):
     """Apply global rotation, scaling, and optional translation to points, bboxes and cameras.
 
     Optional keys:
@@ -174,6 +174,8 @@ class GlobalRotScaleTrans(BaseTransform[RotScaleTransParameters]):
             probability: Probability of applying the transform, None to always apply it.
         """
         super().__init__(probability=probability)
+        # Augmentation kept for the frames of a stream, None to draw it for every sample
+        self.parameters: RotScaleTransParameters | None = None
         self.yaw_rot_range = yaw_rot_range
         self.scale_ratio_range = scale_ratio_range
         self.translation_std = (
@@ -225,6 +227,19 @@ class GlobalRotScaleTrans(BaseTransform[RotScaleTransParameters]):
         x, y, z = self.sample_translation().flatten().tolist()
         return RotScaleTransParameters(yaw=yaw, scale=scale, translation=(x, y, z))
 
+    def draw_parameters(self) -> bool:
+        """Draw the rotation, the scale and the translation and keep it for the samples that follow.
+
+        Returns:
+            True, the transform keeps its parameters.
+        """
+        self.parameters = self.sample_parameters()
+        return True
+
+    def clear_parameters(self) -> None:
+        """Drop the kept parameters, so every sample draws its own again."""
+        self.parameters = None
+
     def sample_rot_scale_trans(
         self, parameters: RotScaleTransParameters | None = None
     ) -> tuple[LiDARTransformationSample, RotationScaleTranslationData]:
@@ -257,8 +272,13 @@ class GlobalRotScaleTrans(BaseTransform[RotScaleTransParameters]):
         return lidar_transformation_sample, rotation_scale_translation_data
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Rotate, scale, and translate the available modalities and the bboxes."""
-        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+        """Rotate, scale, and translate the available modalities and the bboxes.
+
+        The kept augmentation is applied when there is one, the one of the stream of the
+        sample. Otherwise it is drawn for the sample alone.
+        """
+        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
+        return self.transform_with_parameters(model_gt_sample, parameters)
 
     def transform_with_parameters(
         self, model_gt_sample: ModelGTSample, parameters: RotScaleTransParameters
@@ -321,7 +341,7 @@ class RandomRotateTargetAngle(GlobalRotScaleTrans):
         return float(np.random.choice(self.yaw_angle_ratios)) * float(np.pi)
 
 
-class GlobalBEVRandomFlip(BaseTransform[BEVFlipParameters]):
+class GlobalBEVRandomFlip(BaseTransform):
     """Globally and randomly flip points, bboxes and cameras along the BEV axes.
 
     Optional keys:
@@ -344,6 +364,8 @@ class GlobalBEVRandomFlip(BaseTransform[BEVFlipParameters]):
             vertical_flip_ratio: Ratio of flipping vertically.
         """
         super().__init__(probability=None)
+        # Flips kept for the frames of a stream, None to draw them for every sample
+        self.parameters: BEVFlipParameters | None = None
         self.horizontal_flip_ratio = horizontal_flip_ratio
         self.vertical_flip_ratio = vertical_flip_ratio
 
@@ -363,6 +385,19 @@ class GlobalBEVRandomFlip(BaseTransform[BEVFlipParameters]):
         """
         horizontal_flip, vertical_flip = self.sample_flip()
         return BEVFlipParameters(horizontal=horizontal_flip, vertical=vertical_flip)
+
+    def draw_parameters(self) -> bool:
+        """Draw the flips and keep it for the samples that follow.
+
+        Returns:
+            True, the transform keeps its parameters.
+        """
+        self.parameters = self.sample_parameters()
+        return True
+
+    def clear_parameters(self) -> None:
+        """Drop the kept parameters, so every sample draws its own again."""
+        self.parameters = None
 
     def apply_flip(
         self,
@@ -389,8 +424,13 @@ class GlobalBEVRandomFlip(BaseTransform[BEVFlipParameters]):
         return BEV_FLIP_MATRICES[bev_flip_direction] @ rotation_matrix
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Flip the available modalities and the bboxes along the sampled axes."""
-        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+        """Flip the available modalities and the bboxes along the sampled axes.
+
+        The kept flips are applied when there are some, the ones of the stream of the
+        sample. Otherwise they are drawn for the sample alone.
+        """
+        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
+        return self.transform_with_parameters(model_gt_sample, parameters)
 
     def transform_with_parameters(
         self, model_gt_sample: ModelGTSample, parameters: BEVFlipParameters

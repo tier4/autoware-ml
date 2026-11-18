@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import unittest
 from unittest import mock
 
@@ -31,33 +30,35 @@ from autoware_ml.datamodule.base_dataset import (
     StreamPaddingSlot,
     StreamSlot,
 )
-from autoware_ml.transforms.base import BaseTransform, TransformParameters, TransformsCompose
+from autoware_ml.transforms.base import BaseTransform, TransformsCompose
 
 
-@dataclass(frozen=True)
-class _Angle(TransformParameters):
-    """The angle drawn by ``_Rotate``."""
-
-    angle: float
-
-
-class _Rotate(BaseTransform[_Angle]):
-    """Record the angle applied to every sample, drawn per sample or handed in by its stream."""
+class _Rotate(BaseTransform):
+    """Record the angle applied to every sample, kept for its stream or drawn per sample."""
 
     def __init__(self) -> None:
         super().__init__()
+        self.parameters: float | None = None
         self.draws: list[float] = []
 
-    def sample_parameters(self) -> _Angle:
-        return _Angle(angle=float(np.random.uniform()))
+    def sample_parameters(self) -> float:
+        return float(np.random.uniform())
+
+    def draw_parameters(self) -> bool:
+        self.parameters = self.sample_parameters()
+        return True
+
+    def clear_parameters(self) -> None:
+        self.parameters = None
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
+        return self.transform_with_parameters(model_gt_sample, parameters)
 
     def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: _Angle
+        self, model_gt_sample: ModelGTSample, parameters: float
     ) -> ModelGTSample:
-        self.draws.append(parameters.angle)
+        self.draws.append(parameters)
         return model_gt_sample
 
 
@@ -91,41 +92,56 @@ class _AugmentedDataset(BaseDataset):
 class TestStreamSlot(unittest.TestCase):
     """The augmentation a dataset applies to the frames of a stream."""
 
+    STREAM = (0, 0, 0)
+    OTHER_STREAM = (0, 0, 1)
+
     def setUp(self) -> None:
         """Set up the dataset behind one random transform shared by the tests."""
         self.dataset = _AugmentedDataset()
 
     def test_frames_of_a_stream_are_augmented_alike_and_other_frames_on_their_own(self) -> None:
         """
-        Input: a dataset behind one random transform, two streams drawn from it, and frames
-        served as stream slots of either stream or as plain indices.
-        Expected: a stream slot is augmented by the draw of its stream, a plain index draws
-        for itself.
-        Check: the three frames of one stream record its draw, the other stream records
-        another one, and two plain reads of one frame record different draws.
+        Input: a dataset behind one random transform, read with stream slots of two streams
+        and then with plain indices.
+        Expected: the frames of a stream share one draw, another stream gets another one,
+        and a plain index draws for itself again.
+        Check: the three frames of one stream record one value, the other stream another
+        one, and two plain reads of one frame record different values.
         """
-        stream = self.dataset.sample_stream_augmentation(0)
-        other = self.dataset.sample_stream_augmentation(0)
-
-        in_stream = [self.dataset.draw(StreamSlot(index, stream)) for index in (0, 1, 0)]
-        other_stream = self.dataset.draw(StreamSlot(0, other))
+        in_stream = [self.dataset.draw(StreamSlot(index, self.STREAM)) for index in (0, 1, 0)]
+        other_stream = self.dataset.draw(StreamSlot(0, self.OTHER_STREAM))
         on_their_own = [self.dataset.draw(0), self.dataset.draw(0)]
 
-        self.assertEqual(set(in_stream), {stream[0].values.angle})
-        self.assertEqual(other_stream, other[0].values.angle)
+        self.assertEqual(len(set(in_stream)), 1)
         self.assertNotEqual(other_stream, in_stream[0])
         self.assertNotEqual(on_their_own[0], on_their_own[1])
 
-    def test_a_dataset_without_a_pipeline_draws_no_stream_augmentation(self) -> None:
+    def test_streams_read_in_turn_keep_their_own_augmentation(self) -> None:
         """
-        Input: a dataset without a transform pipeline.
-        Expected: there is nothing to draw for a stream, and a stream slot is still served.
-        Check: the stream augmentation is empty and the slot is served as a real frame.
+        Input: the frames of two streams read in turn, as a dataloader worker reads the
+        lanes of a batch.
+        Expected: the pipeline draws again whenever the stream changes, and a stream gets
+        the same values every time it comes back.
+        Check: the two reads of either stream record one value, and the streams differ.
+        """
+        first = self.dataset.draw(StreamSlot(0, self.STREAM))
+        other = self.dataset.draw(StreamSlot(1, self.OTHER_STREAM))
+        first_again = self.dataset.draw(StreamSlot(1, self.STREAM))
+        other_again = self.dataset.draw(StreamSlot(0, self.OTHER_STREAM))
+
+        self.assertEqual(first_again, first)
+        self.assertEqual(other_again, other)
+        self.assertNotEqual(first, other)
+
+    def test_a_dataset_without_a_pipeline_serves_a_stream_slot(self) -> None:
+        """
+        Input: a dataset without a transform pipeline, read with a stream slot.
+        Expected: there is no augmentation to draw, and the frame is still served.
+        Check: the slot is served as a real frame.
         """
         dataset = _AugmentedDataset(with_pipeline=False)
 
-        self.assertEqual(dataset.sample_stream_augmentation(0), ())
-        self.assertFalse(dataset[StreamSlot(1, ())].is_padding)
+        self.assertFalse(dataset[StreamSlot(1, self.STREAM)].is_padding)
 
     def test_a_stream_slot_is_served_as_the_frame_or_the_padding_it_stands_for(self) -> None:
         """
@@ -133,48 +149,45 @@ class TestStreamSlot(unittest.TestCase):
         Expected: only the padding slot is served as padding.
         Check: is_padding is False for the stream slot and True for the padding slot.
         """
-        stream = self.dataset.sample_stream_augmentation(0)
+        self.assertFalse(self.dataset[StreamSlot(1, self.STREAM)].is_padding)
+        self.assertTrue(self.dataset[StreamPaddingSlot(1, self.STREAM)].is_padding)
 
-        self.assertFalse(self.dataset[StreamSlot(1, stream)].is_padding)
-        self.assertTrue(self.dataset[StreamPaddingSlot(1, stream)].is_padding)
-
-    def test_a_split_hands_its_sources_the_augmentation_of_a_slot(self) -> None:
+    def test_a_split_hands_its_sources_the_stream_of_a_slot(self) -> None:
         """
-        Input: a split of two datasets of two samples, and stream slots on index 0 and 3,
-        one in each source.
-        Expected: the split forwards the augmentation of the slot to the source serving it.
-        Check: both sources record the one draw of the stream.
+        Input: a split of two datasets of two samples, and stream slots of one stream on
+        index 0 and 3, one in each source.
+        Expected: the split forwards the seed of the slot to the source serving it, so both
+        sources draw the augmentation of the stream.
+        Check: both sources record one and the same value.
         """
         second = _AugmentedDataset()
         split = ConcatDataset([self.dataset, second], repeats=[1, 1])
-        stream = split.sample_stream_augmentation(3)
 
-        split[StreamSlot(0, stream)]
-        split[StreamSlot(3, stream)]
+        split[StreamSlot(0, self.STREAM)]
+        split[StreamSlot(3, self.STREAM)]
 
-        self.assertEqual(self.dataset.rotate.draws, [stream[0].values.angle])
-        self.assertEqual(second.rotate.draws, [stream[0].values.angle])
+        self.assertEqual(len(self.dataset.rotate.draws), 1)
+        self.assertEqual(second.rotate.draws, self.dataset.rotate.draws)
 
     def test_a_split_hands_its_sources_the_padding_of_a_slot(self) -> None:
         """
         Input: a split of two datasets of two samples, read with a stream padding slot and a
         plain padding slot on index 3, the second sample of the second source.
         Expected: the source is handed a slot of the same kind on its own index.
-        Check: the source receives a StreamPaddingSlot on index 1 carrying the augmentation,
-        then a plain PaddingSlot.
+        Check: the source receives a StreamPaddingSlot on index 1 carrying the seed of the
+        stream, then a plain PaddingSlot.
         """
         split = ConcatDataset([self.dataset, _AugmentedDataset()], repeats=[1, 1])
-        stream = split.sample_stream_augmentation(3)
 
         served: list[int] = []
         with mock.patch.object(
             _AugmentedDataset, "__getitem__", lambda self, index: served.append(index)
         ):
-            split[StreamPaddingSlot(3, stream)]
+            split[StreamPaddingSlot(3, self.STREAM)]
             split[PaddingSlot(3)]
 
         self.assertIsInstance(served[0], StreamPaddingSlot)
-        self.assertEqual(served[0].augmentation, stream)
+        self.assertEqual(served[0].stream_seed, self.STREAM)
         self.assertEqual(served[0], 1)
         self.assertIs(type(served[1]), PaddingSlot)
 
