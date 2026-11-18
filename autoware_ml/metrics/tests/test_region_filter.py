@@ -225,22 +225,44 @@ def test_corridor_filter_keeps_overlapping_box_footprints() -> None:
     assert corridor_filter.keep_boxes(boxes, None).tolist() == [True, True, False, False, True]
 
 
-def test_filters_accept_tensor_metadata() -> None:
-    # Collation + Lightning device transfer deliver the frame metadata as
-    # tensors, not numpy arrays, filters must convert (cuda included).
-    region_filter = _region_filter(["road"], _road_map())
-    keep = region_filter.keep_points(
-        np.array([[10.0, 0.0, 0.0]]),
-        frame_meta(STUB_MAP_PATH),
+def test_filters_apply_a_rotated_and_translated_tensor_pose() -> None:
+    # Collation + Lightning device transfer deliver the pose as a tensor. Here the
+    # ego sits at map (40, 0) heading along map +y, on a road covering x in
+    # [0, 50], y in [-10, 10]. Each region expectation flips under the identity
+    # pose, so a filter that ignored the pose would fail.
+    ego2global = torch.tensor(
+        [
+            [0.0, -1.0, 0.0, 40.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
     )
-    assert keep.tolist() == [True]
+    meta = frame_meta(STUB_MAP_PATH, ego2global=ego2global)
+    xyz = np.array(
+        [
+            [15.0, 0.0, 0.0],  # map (40, 15), past the road edge -> drop
+            [0.0, 12.0, 0.0],  # map (28, 0), on the road -> keep
+        ]
+    )
+    boxes = np.array(
+        [
+            # [cx, cy, cz, dx, dy, dz, yaw]
+            [15.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0],  # map y in [13, 17] -> drop
+            [0.0, 12.0, 0.0, 4.0, 2.0, 1.5, 0.0],  # map x in [27, 29] -> keep
+        ]
+    )
 
+    region_filter = _region_filter(["road"], _road_map())
+    assert region_filter.keep_points(xyz, meta).tolist() == [False, True]
+    assert region_filter.keep_boxes(boxes, meta).tolist() == [False, True]
+
+    # The collision area follows the ego heading: 5 m ahead in base_link is map
+    # (40, 5), still on the road, while 15 m ahead has left it (under the
+    # identity pose that point would be on the road and reachable).
     collision_filter = _collision_filter(_road_map(), vehicle=EGO, region=["road"])
-    keep = collision_filter.keep_points(
-        np.array([[10.0, 0.0, 0.0]]),
-        frame_meta(STUB_MAP_PATH),
-    )
-    assert keep.tolist() == [True]
+    ahead = np.array([[5.0, 0.0, 0.0], [15.0, 0.0, 0.0]])
+    assert collision_filter.keep_points(ahead, meta).tolist() == [True, False]
 
 
 def test_region_filter_margin_erodes_outer_border_only() -> None:
