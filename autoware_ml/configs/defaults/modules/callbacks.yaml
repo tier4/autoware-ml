@@ -36,6 +36,12 @@ callbacks:
     # dynamic_validation callback skips.
     check_on_train_epoch_end: false
 
+  # On SIGUSR1, e.g. sent by a job scheduler on cancel or ahead of the time limit, save
+  # checkpoints/stopped.ckpt within check_every_n_steps optimizer steps and exit with code 75.
+  stop_on_signal:
+    _target_: autoware_ml.callbacks.stop_on_signal.StopOnSignal
+    check_every_n_steps: 50
+
   lr_monitor:
     _target_: lightning.pytorch.callbacks.LearningRateMonitor
     logging_interval: step

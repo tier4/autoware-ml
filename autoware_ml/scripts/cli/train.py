@@ -19,6 +19,7 @@ integration, and trainer execution for model training.
 """
 
 import logging
+import os
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
@@ -36,6 +37,7 @@ from autoware_ml.builders.model_builder import (
     resolve_weights_paths,
 )
 from autoware_ml.builders.logger_builder import build_trainer_logger
+from autoware_ml.callbacks.stop_on_signal import TrainingStopRequested
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.utils.runtime import (
@@ -80,7 +82,12 @@ def train(
     logger.info(f"Accelerator: {cfg.trainer.get('accelerator', 'auto')}")
     logger.info(f"Devices: {cfg.trainer.get('devices', 'auto')}")
 
-    trainer.fit(model, datamodule=datamodule, ckpt_path=resume_checkpoint_path)
+    try:
+        trainer.fit(model, datamodule=datamodule, ckpt_path=resume_checkpoint_path)
+    except TrainingStopRequested as stop:
+        logger.info(f"{stop} Resume with --resume-checkpoint {stop.checkpoint_path}")
+        # Non-zero, so that a job script does not run its next stage on a partial training.
+        raise SystemExit(os.EX_TEMPFAIL) from None
     logger.info("Training completed!")
     logger.info("Saving checkpoints and artifacts...")
     logger.info(f"Checkpoints saved to: {checkpoint_dir}")

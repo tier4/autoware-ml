@@ -15,19 +15,22 @@
 """Dataloader configuration and the datamodule shared by every task."""
 
 import logging
+import os
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 import lightning as L
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 
 from autoware_ml.databases.base_database import BaseDatabase
 from autoware_ml.datamodule.base_dataset import ConcatDataset
+from autoware_ml.datamodule.resumable_data_loader import ResumableDataLoader
 from autoware_ml.datamodule.samplers import (
     DistributedWeightedRandomSampler,
     FrameSamplingConfig,
     compute_frame_sampling_weights,
+    world_size_and_rank,
 )
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
@@ -252,7 +255,8 @@ class DataModule(L.LightningDataModule):
           config: Dataloader settings of the split.
 
         Returns:
-          DataLoader: Dataloader over the concatenated sources of the split.
+          DataLoader: Dataloader over the concatenated sources of the split, a
+            ``ResumableDataLoader`` for the training split.
 
         Raises:
           ValueError: If the split has no dataset or no dataloader settings, or if frame
@@ -267,20 +271,37 @@ class DataModule(L.LightningDataModule):
             raise ValueError(f"Split {split} has no dataloader settings.")
 
         kwargs = config.to_dataloader_kwargs()
-        if split == SplitType.TRAIN and self.train_frame_sampling is not None:
-            if config.shuffle:
+        if split != SplitType.TRAIN:
+            return DataLoader(dataset=dataset, collate_fn=dataset.collate_fn, **kwargs)
+
+        shuffle = kwargs.pop("shuffle")
+        if self.train_frame_sampling is not None:
+            if shuffle:
                 raise ValueError(
                     "The training dataloader cannot shuffle when frame sampling is on, the "
                     "weighted sampler draws the order. Set shuffle to false."
                 )
             weights = compute_frame_sampling_weights(dataset, self.train_frame_sampling)
-            kwargs["sampler"] = DistributedWeightedRandomSampler(
+            sampler = DistributedWeightedRandomSampler(
                 dataset,
                 weights,
                 seed=self.train_frame_sampling.seed,
                 drop_last=config.drop_last,
             )
-        return DataLoader(dataset=dataset, collate_fn=dataset.collate_fn, **kwargs)
+        else:
+            # The sampler Lightning injects under DDP, here on one device too: every epoch's
+            # order follows from the seed, so a resumed epoch can skip its trained batches.
+            num_replicas, rank = world_size_and_rank()
+            sampler = DistributedSampler(
+                dataset,
+                num_replicas=num_replicas,
+                rank=rank,
+                shuffle=shuffle,
+                seed=int(os.environ.get("PL_GLOBAL_SEED", 0)),
+            )
+        return ResumableDataLoader(
+            dataset=dataset, collate_fn=dataset.collate_fn, sampler=sampler, **kwargs
+        )
 
     def train_dataloader(self) -> DataLoader:
         """Create the dataloader of the training split."""
