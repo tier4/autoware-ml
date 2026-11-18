@@ -22,6 +22,7 @@ with numpy from the sampled yaw, scale and translation, independently of the tra
 """
 
 import math
+import pickle
 import unittest
 
 from jaxtyping import Float32
@@ -42,7 +43,9 @@ from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalBEVRandomFlip,
     GlobalRotScaleTrans,
     RandomRotateTargetAngle,
+    yaw_rotation_matrix,
 )
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.geometry import (
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
@@ -1237,6 +1240,77 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
                 atol=1e-5,
             )
         )
+
+
+class TestStreamParameters(BaseCameraLidarGeometryTestCase):
+    """The global augmentations applied with the parameters drawn for a stream."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pipeline = TransformsCompose(
+            [
+                GlobalRotScaleTrans(
+                    yaw_rot_range=[-0.4, 0.4],
+                    scale_ratio_range=[0.9, 1.1],
+                    translation_std=[0.5, 0.5, 0.2],
+                ),
+                GlobalBEVRandomFlip(horizontal_flip_ratio=0.5, vertical_flip_ratio=0.5),
+            ]
+        )
+
+    def augment(self, stream_parameters: tuple | None) -> Tensor:
+        """Augmentation matrix the pipeline applies to a fresh sample."""
+        output = self.pipeline(self.build_multi_task_gt_sample(), stream_parameters)
+        assert output.lidar_transformation_sample is not None
+        return output.lidar_transformation_sample.transformation_matrix
+
+    def test_frames_of_a_stream_get_the_same_augmentation(self) -> None:
+        """
+        Test that every frame transformed with the parameters of one stream is moved by the
+        same matrix, another stream by another one, and frames outside a stream each by their own.
+        """
+        stream = self.pipeline.sample_stream_parameters()
+        other_stream = self.pipeline.sample_stream_parameters()
+
+        first, second = self.augment(stream), self.augment(stream)
+
+        self.assertTrue(torch.equal(first, second))
+        self.assertFalse(torch.equal(first, self.augment(other_stream)))
+        self.assertFalse(torch.equal(self.augment(None), self.augment(None)))
+
+    def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
+        """
+        Test that the matrix applied to a frame is built from the drawn yaw, scale and
+        translation, and that the parameters survive the pickling to a dataloader worker.
+        """
+        stream = pickle.loads(pickle.dumps(self.pipeline.sample_stream_parameters()))
+        yaw, scale, translation = stream[0].values
+        flip = torch.diag(
+            torch.tensor(
+                [
+                    -1.0 if stream[1].values.vertical else 1.0,
+                    -1.0 if stream[1].values.horizontal else 1.0,
+                    1.0,
+                ]
+            )
+        )
+        expected = torch.eye(4)
+        expected[:3, :3] = flip @ yaw_rotation_matrix(yaw) * scale
+        expected[:3, 3] = flip @ torch.tensor(translation)
+
+        self.assertTrue(torch.allclose(self.augment(stream), expected, atol=1e-6))
+
+    def test_a_stream_skips_a_transform_in_every_frame(self) -> None:
+        """
+        Test that a rotation the stream did not draw, by its probability, moves no frame of it.
+        """
+        rotate = RandomRotateTargetAngle(probability=0.0, yaw_angle_ratios=[0.5])
+        stream = TransformsCompose([rotate]).sample_stream_parameters()
+
+        output = rotate(self.build_multi_task_gt_sample(), stream[0])
+
+        self.assertFalse(stream[0].apply)
+        self.assertIsNone(output.lidar_transformation_sample)
 
 
 if __name__ == "__main__":

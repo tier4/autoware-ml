@@ -29,6 +29,7 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transform
 
 from collections.abc import Sequence
 import math
+from typing import NamedTuple
 
 from jaxtyping import Float32
 import numpy as np
@@ -67,6 +68,32 @@ class RotationScaleTranslationData(BaseModel):
     rotation_matrix: Float32[Tensor, "3 3"]
     scale_factor: float  # Scale factor applied
     translation_vector: Float32[Tensor, "1 3"]  # Translation vector applied
+
+
+class RotScaleTransParameters(NamedTuple):
+    """Rotation, scale and translation drawn by ``GlobalRotScaleTrans``, as plain values.
+
+    Attributes:
+        yaw: Rotation around yaw in radians.
+        scale: Scale factor.
+        translation: Translation ``(x, y, z)`` in meters.
+    """
+
+    yaw: float
+    scale: float
+    translation: tuple[float, float, float]
+
+
+class BEVFlipParameters(NamedTuple):
+    """Flips drawn by ``GlobalBEVRandomFlip``.
+
+    Attributes:
+        horizontal: Whether to flip horizontally (laterally).
+        vertical: Whether to flip vertically (longitudinally).
+    """
+
+    horizontal: bool
+    vertical: bool
 
 
 def yaw_rotation_matrix(angle: float) -> Float32[Tensor, "3 3"]:
@@ -183,22 +210,37 @@ class GlobalRotScaleTrans(BaseTransform):
         translation = np.random.normal(0.0, self.translation_std, size=(1, 3))
         return torch.tensor(translation, dtype=torch.float32)
 
-    def sample_rot_scale_trans(
-        self,
-    ) -> tuple[LiDARTransformationSample, RotationScaleTranslationData]:
-        """Sample the rotation, scale and translation applied to the sample.
+    def sample_parameters(self) -> RotScaleTransParameters:
+        """Draw the rotation, the scale and the translation of one sample or one stream.
 
         The yaw, the scale and the translation are drawn in this order, so a test seeding the
         random state replays the draw of :meth:`transform`.
 
         Returns:
-            The sampled augmentation as a lidar transformation, rotation first, then scaling,
-            then translation, together with its raw components.
+            The drawn augmentation as plain values.
         """
+        yaw, scale = self.sample_yaw(), self.sample_scale()
+        x, y, z = self.sample_translation().flatten().tolist()
+        return RotScaleTransParameters(yaw=yaw, scale=scale, translation=(x, y, z))
+
+    def sample_rot_scale_trans(
+        self, parameters: RotScaleTransParameters | None = None
+    ) -> tuple[LiDARTransformationSample, RotationScaleTranslationData]:
+        """Build the rotation, scale and translation applied to the sample.
+
+        Args:
+            parameters: The drawn augmentation, None to draw it here.
+
+        Returns:
+            The augmentation as a lidar transformation, rotation first, then scaling, then
+            translation, together with its raw components.
+        """
+        if parameters is None:
+            parameters = self.sample_parameters()
         rotation_scale_translation_data = RotationScaleTranslationData(
-            rotation_matrix=yaw_rotation_matrix(self.sample_yaw()),
-            scale_factor=self.sample_scale(),
-            translation_vector=self.sample_translation(),
+            rotation_matrix=yaw_rotation_matrix(parameters.yaw),
+            scale_factor=parameters.scale,
+            translation_vector=torch.tensor([parameters.translation], dtype=torch.float32),
         )
         lidar_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
             rotation_matrix=rotation_scale_translation_data.rotation_matrix,
@@ -214,7 +256,23 @@ class GlobalRotScaleTrans(BaseTransform):
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Rotate, scale, and translate the available modalities and the bboxes."""
-        lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+
+    def transform_with_parameters(
+        self, model_gt_sample: ModelGTSample, parameters: RotScaleTransParameters
+    ) -> ModelGTSample:
+        """Rotate, scale, and translate the sample by the given augmentation.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are moved.
+            parameters: Augmentation drawn by :meth:`sample_parameters`.
+
+        Returns:
+            The moved sample with the augmentation recorded.
+        """
+        lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans(
+            parameters
+        )
         # Points and boxes are rows, so they take the transposed rotation
         row_vector_rotation_matrix = rotation_scale_translation_data.rotation_matrix.T
         scale_factor = rotation_scale_translation_data.scale_factor
@@ -291,9 +349,17 @@ class GlobalBEVRandomFlip(BaseTransform):
         """
         Sample random horizontal and vertical flips.
         """
-        horizontal_flip = np.random.rand() < self.horizontal_flip_ratio
-        vertical_flip = np.random.rand() < self.vertical_flip_ratio
+        horizontal_flip = bool(np.random.rand() < self.horizontal_flip_ratio)
+        vertical_flip = bool(np.random.rand() < self.vertical_flip_ratio)
         return horizontal_flip, vertical_flip
+
+    def sample_parameters(self) -> BEVFlipParameters:
+        """Draw the flips of one sample or one stream.
+
+        Returns:
+            The drawn flips.
+        """
+        return BEVFlipParameters(*self.sample_flip())
 
     def apply_flip(
         self,
@@ -321,8 +387,22 @@ class GlobalBEVRandomFlip(BaseTransform):
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Flip the available modalities and the bboxes along the sampled axes."""
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+
+    def transform_with_parameters(
+        self, model_gt_sample: ModelGTSample, parameters: BEVFlipParameters
+    ) -> ModelGTSample:
+        """Flip the sample along the given axes.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are flipped.
+            parameters: Flips drawn by :meth:`sample_parameters`.
+
+        Returns:
+            The flipped sample with the flips recorded.
+        """
         rotation_matrix = torch.eye(3, dtype=torch.float32)
-        horizontal_flip, vertical_flip = self.sample_flip()
+        horizontal_flip, vertical_flip = parameters
         transformation_order = []
 
         if horizontal_flip:

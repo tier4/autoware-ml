@@ -33,7 +33,7 @@ from torch.utils.data import Dataset
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import StreamParameters, TransformsCompose
 
 
 class PaddingSlot(int):
@@ -51,6 +51,45 @@ class PaddingSlot(int):
     def __repr__(self) -> str:
         """Show the index as a padding slot."""
         return f"PaddingSlot({int(self)})"
+
+
+class StreamSlot(int):
+    """Sample index of a frame of a stream, with the augmentation drawn for its stream.
+
+    The streaming sampler draws the augmentation of a stream once, with
+    :meth:`BaseDataset.sample_stream_augmentation`, and hands it to every frame of the stream,
+    so the frames a temporal model reads one after another are rotated, scaled and flipped
+    alike. As an ``int`` with one attribute, the index passes through the dataloader workers
+    unchanged.
+
+    Attributes:
+        augmentation: Parameters of every transform of the pipeline for the stream of the
+            frame, see ``TransformsCompose.sample_stream_parameters``.
+    """
+
+    augmentation: tuple[StreamParameters | None, ...]
+
+    def __new__(cls, index: int, augmentation: Sequence[StreamParameters | None]) -> "StreamSlot":
+        """Create the index of a frame with the augmentation of its stream."""
+        slot = super().__new__(cls, index)
+        slot.augmentation = tuple(augmentation)
+        return slot
+
+    def __reduce__(self) -> tuple[type, tuple[int, tuple[StreamParameters | None, ...]]]:
+        """Pickle the index together with its augmentation, a plain ``int`` would drop it."""
+        return type(self), (int(self), self.augmentation)
+
+    def at(self, index: int) -> "StreamSlot":
+        """The same slot on another index, for a dataset serving it from one of its sources."""
+        return type(self)(index, self.augmentation)
+
+    def __repr__(self) -> str:
+        """Show the index with the augmentation of its stream."""
+        return f"{type(self).__name__}({int(self)}, augmentation={self.augmentation})"
+
+
+class StreamPaddingSlot(StreamSlot, PaddingSlot):
+    """Padding slot of a stream, it repeats the last frame under the augmentation of the stream."""
 
 
 class BaseDataset(Dataset):
@@ -209,7 +248,8 @@ class BaseDataset(Dataset):
         """Load and transform one dataset sample.
 
         Args:
-            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane. A
+                ``StreamSlot`` is augmented by the parameters it carries, the ones of its stream.
 
         Returns:
             Transformed ModelGTSample instance, stamped with its loading time and whether it
@@ -217,7 +257,10 @@ class BaseDataset(Dataset):
         """
         start_time = time.perf_counter()
         model_gt_sample = self.get_data_sample(int(index))
-        transformed_gt_sample = self.apply_transforms(model_gt_sample)
+        transformed_gt_sample = self.apply_transforms(
+            model_gt_sample,
+            stream_parameters=index.augmentation if isinstance(index, StreamSlot) else None,
+        )
         return transformed_gt_sample._replace(
             io_processing_time=time.perf_counter() - start_time,
             is_padding=isinstance(index, PaddingSlot),
@@ -234,18 +277,40 @@ class BaseDataset(Dataset):
             ModelGTSample instance consumed by the transform pipeline.
         """
 
-    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def apply_transforms(
+        self,
+        model_gt_sample: ModelGTSample,
+        stream_parameters: Sequence[StreamParameters | None] | None = None,
+    ) -> ModelGTSample:
         """Apply the transform pipeline of the dataset to a metadata sample.
 
         Args:
             model_gt_sample: ModelGTSample instance.
+            stream_parameters: Augmentation of the stream of the sample, None to draw the
+                augmentation for the sample alone.
 
         Returns:
             Transformed ModelGTSample instance.
         """
         if self.transforms is None:
             return model_gt_sample
-        return self.transforms(model_gt_sample)
+        return self.transforms(model_gt_sample, stream_parameters)
+
+    def sample_stream_augmentation(self, index: int) -> tuple[StreamParameters | None, ...]:
+        """Draw the augmentation of the stream starting at one sample.
+
+        The pipeline draws it from ``np.random`` without loading the sample, and every frame
+        of the stream is then transformed with it.
+
+        Args:
+            index: Sample index of the first frame of the stream.
+
+        Returns:
+            Parameters of every transform of the pipeline, empty without a pipeline.
+        """
+        if self.transforms is None:
+            return ()
+        return self.transforms.sample_stream_parameters()
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
         """
@@ -364,6 +429,18 @@ class ConcatDataset(Dataset):
         start = self.ends[source_index - 1] if source_index else 0
         return source_index, (index - start) % len(self.datasets[source_index])
 
+    def sample_stream_augmentation(self, index: int) -> tuple[StreamParameters | None, ...]:
+        """Draw the augmentation of the stream starting at one sample, with its source's pipeline.
+
+        Args:
+            index: Split index of the first frame of the stream.
+
+        Returns:
+            Parameters of every transform of the pipeline of the source.
+        """
+        source_index, sample_index = self.locate(int(index))
+        return self.datasets[source_index].sample_stream_augmentation(sample_index)
+
     def __getitem__(self, index: int) -> ModelGTSample:
         """Load and transform the sample behind one index of the split.
 
@@ -374,7 +451,9 @@ class ConcatDataset(Dataset):
             Transformed ModelGTSample instance, flagged as padding for a padding slot.
         """
         source_index, sample_index = self.locate(index)
-        if isinstance(index, PaddingSlot):
+        if isinstance(index, StreamSlot):
+            sample_index = index.at(sample_index)
+        elif isinstance(index, PaddingSlot):
             sample_index = PaddingSlot(sample_index)
         return self.datasets[source_index][sample_index]
 
