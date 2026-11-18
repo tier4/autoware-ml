@@ -23,7 +23,7 @@ from jaxtyping import Bool, Float, Float32, Int64
 import torch
 
 from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch
-from autoware_ml.dataclasses.models.detection3d.head_outputs import FocalHead2DOutputs
+from autoware_ml.dataclasses.models.detection2d.head_outputs import FocalHead2DOutputs
 from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.task_modules.heatmap import draw_heatmap_gaussian
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations

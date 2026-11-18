@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.dataclasses.batch.detection2d import Detection2DGTBatch
-from autoware_ml.dataclasses.models.detection3d.head_outputs import FocalHead2DOutputs
+from autoware_ml.dataclasses.models.detection2d.head_outputs import FocalHead2DOutputs
 from autoware_ml.geometry.bbox_2d.base_bbox2d import BaseBBoxes2D
 from autoware_ml.losses.detection2d.quality_focal import QualityFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
