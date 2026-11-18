@@ -801,7 +801,7 @@ class TestHungarianAssigner2D(unittest.TestCase):
             gt_bboxes.unsqueeze(0),
             gt_labels.unsqueeze(0),
             gt_centers.unsqueeze(0),
-            torch.ones(1, gt_bboxes.shape[0], dtype=torch.bool),
+            torch.ones(1, gt_bboxes.shape[0], dtype=torch.bool, device=gt_bboxes.device),
             IMAGE_HEIGHT,
             IMAGE_WIDTH,
         )
