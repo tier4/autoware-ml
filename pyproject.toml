@@ -12,7 +12,6 @@ license = { file = "LICENSE" }
 authors = [{ name = "Amadeusz Szymko", email = "amadeusz.szymko.2@tier4.jp"}]
 keywords = ["autoware", "machine-learning", "autonomous-vehicle", "self-driving", "sensors"]
 dependencies = [
-    "av2==0.3.6",
     "cuda-python==12.8.0",
     # No official cp311 wheel exists for flash-attn 2.8.3+cu12+torch2.9 at Dao-AILab/flash-attention.
     # TODO: switch to https://github.com/Dao-AILab/flash-attention/releases once a matching official wheel is available.
@@ -48,6 +47,7 @@ dependencies = [
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
     "transforms3d==0.4.2",
+    "universal-pathlib==0.3.10",
     "zstandard==0.25.0"
 ]
 
@@ -87,13 +87,6 @@ extra-index-urls = ["https://download.pytorch.org/whl/cu128", "https://pypi.nvid
 # so `first-index` would stop before considering the NVIDIA index.
 index-strategy = "unsafe-best-match"
 
-[tool.pixi.pypi-options.dependency-overrides]
-# av2 requires `opencv-python`, while this project and nuscenes-devkit require
-# `opencv-python-headless`. Both wheels ship the same `cv2` package, so whichever
-# installs last overwrites the other, and the GUI build needs libGL/Qt that the
-# Docker image does not provide. A marker that never matches drops it.
-opencv-python = { version = "*", env-markers = "sys_platform == 'never'" }
-
 [tool.pixi.activation.env]
 # cuBLAS is only deterministic with a fixed workspace size; the trainer's
 # `deterministic` mode (torch.use_deterministic_algorithms) depends on it.
@@ -117,7 +110,9 @@ setuptools = "*"
 wheel = "*"
 
 [tool.pixi.tasks]
-install-project = "python -m pip install --no-cache-dir --no-build-isolation --no-deps -e ."
+# av2 is installed here with --no-deps instead of being locked: it requires opencv-python, which
+# clashes with opencv-python-headless, and CI's `pixi install --locked` ignores a dependency override.
+install-project ="python -m pip install --no-cache-dir --no-build-isolation --no-deps -e . av2==0.3.6"
 install-bash-completion = "bash -lc 'mkdir -p \"${HOME}/.local/share/bash-completion/completions\" && autoware-ml --show-completion bash > \"${HOME}/.local/share/bash-completion/completions/autoware-ml\"'"
 setup-project = { depends-on = ["install-project", "install-bash-completion"] }
 test = "pytest autoware_ml/ -v"
