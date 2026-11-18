@@ -1350,7 +1350,13 @@ def test_export_attention_matches_training_on_a_non_identity_second_order(
 
 
 def test_export_rejects_a_multi_sample_batch() -> None:
-    """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
+    """Test that the export refuses a batch of more than one sample.
+
+    Input: the encoder inputs of a single-sample batch and of a two-sample batch.
+    Expected: the single sample passes; the two-sample batch is refused before the graphs pad
+        and offset it as one frame.
+    Check: no error on the single sample, a ValueError naming ``single-sample`` on the pair.
+    """
     model = build_seg3d_model().eval()
     single = build_inputs().voxels_data
     require_single_sample_export_batch(

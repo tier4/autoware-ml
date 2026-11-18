@@ -287,7 +287,14 @@ def _build_det3d_seg3d_model() -> PTv3Det3DSeg3DModel:
 def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_encoder(
     tmp_path: Path,
 ) -> None:
-    """On the single-task models' weights, each head graph matches that model's own graph."""
+    """Test that the joint model's deployment is the seg3d and det3d graphs over one encoder.
+
+    Input: the joint model loaded with the single-task models' weights, and one batch.
+    Expected: three graphs named encoder, seg3d head, det3d head, the det head reading nothing
+        the seg head emits; each head's outputs match the single-task model's own deployment.
+    Check: the graph names and output names, the deployed outputs against the seg-only and
+        det-only deployments, and the derived spec names.
+    """
     segmentation3d_checkpoint = _save_segmentation3d_checkpoint(tmp_path)
     detection3d_model = build_trans_model(freeze_encoder=True)
     apply_matching_weights(detection3d_model, (segmentation3d_checkpoint,))
