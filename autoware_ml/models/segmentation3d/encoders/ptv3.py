@@ -1198,6 +1198,27 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
             child.shuffle_orders = False
 
 
+@torch.no_grad()
+def fold_cpe_bias(module: nn.Module) -> None:
+    """Fold the bias of every positional-encoding convolution into the linear layer after it.
+
+    ``Linear(W1, b1)(conv(x) + b0)`` equals ``Linear(W1, b1 + W1 b0)(conv(x))``, so the
+    convolution runs without a bias. Meant for an export copy, the parameters change in place.
+
+    Args:
+        module: Module hierarchy whose :class:`Block` children are folded in place.
+    """
+    for block in module.modules():
+        if not isinstance(block, Block) or block.cpe is None:
+            continue
+        conv, linear, _ = block.cpe.children()
+        if conv.bias is None:
+            continue
+        bias = linear.bias.double() + linear.weight.double() @ conv.bias.double()
+        linear.bias.copy_(bias.to(linear.bias.dtype))
+        conv.bias = None
+
+
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:
     """Deep-copy a module while detaching loaded flash-attention handles.
 
@@ -1382,6 +1403,7 @@ class PointTransformerV3Encoder(PointModule):
         export_encoder.set_serialization_order(order)
         export_encoder.shuffle_orders = False
         prepare_point_module_for_export(export_encoder)
+        fold_cpe_bias(export_encoder)
         return export_encoder
 
     def export_forward(self, data_dict: dict[str, torch.Tensor]) -> Point:

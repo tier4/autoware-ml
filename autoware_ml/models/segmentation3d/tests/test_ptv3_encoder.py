@@ -25,6 +25,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+import autoware_ml.models.segmentation3d.encoders.ptv3 as ptv3_encoder_module
 import autoware_ml.utils.point_cloud.structures as point_structures
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
@@ -45,6 +46,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_seg3d_model,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
+    Block,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -1367,3 +1369,57 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
     for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
         with pytest.raises(ValueError, match="single-sample"):
             builder(model, double)
+
+
+def _jitter_affine_parameters(model: nn.Module) -> None:
+    """Give every bias and normalization a non-trivial value, as training would."""
+    generator = torch.Generator().manual_seed(0)
+
+    def uniform(tensor: torch.Tensor, low: float, high: float) -> None:
+        tensor.copy_(low + (high - low) * torch.rand(tensor.shape, generator=generator))
+
+    with torch.no_grad():
+        for module in model.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.LayerNorm)):
+                uniform(module.weight, 0.5, 1.5)
+            if isinstance(module, nn.BatchNorm1d):
+                uniform(module.running_mean, -0.5, 0.5)
+                uniform(module.running_var, 0.5, 1.5)
+            if getattr(module, "bias", None) is not None:
+                uniform(module.bias, -0.5, 0.5)
+
+
+def _assert_export_fold_keeps_the_encoder_output(monkeypatch, fold_name: str) -> nn.Module:
+    """Run the export encoder with and without one fold and compare the stage features.
+
+    Returns:
+        The folded export encoder, for checks of what the fold changed.
+    """
+    device = torch.device("cuda")
+    model = build_seg3d_model()
+    _jitter_affine_parameters(model)
+    model = model.to(device).eval()
+    batch = build_inputs(device=device)
+    state = {key: value.clone() for key, value in model.state_dict().items()}
+
+    folded = build_ptv3_export_context(model, batch)
+    monkeypatch.setattr(ptv3_encoder_module, fold_name, lambda module: None)
+    reference = build_ptv3_export_context(model, batch)
+
+    assert len(folded.stage_feats) == len(reference.stage_feats)
+    for folded_feat, reference_feat in zip(folded.stage_feats, reference.stage_feats):
+        torch.testing.assert_close(folded_feat, reference_feat, rtol=1e-5, atol=1e-5)
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, state[key]), key
+    return folded.encoder_module
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
+    export_module = _assert_export_fold_keeps_the_encoder_output(monkeypatch, "fold_cpe_bias")
+    blocks = [module for module in export_module.modules() if isinstance(module, Block)]
+    assert blocks
+    assert all(next(block.cpe.children()).bias is None for block in blocks)
