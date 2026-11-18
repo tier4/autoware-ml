@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 
 import numpy as np
@@ -31,14 +32,14 @@ class _Draw(BaseTransform):
         super().__init__(probability=probability)
         self.count = count
 
-    def sample_parameters(self) -> list[float]:
+    def sample_parameters(self) -> Sequence[float]:
         return np.random.uniform(size=self.count).tolist()
 
     def transform(self, model_gt_sample: SimpleNamespace) -> SimpleNamespace:
         return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
 
     def transform_with_parameters(
-        self, model_gt_sample: SimpleNamespace, parameters: list[float]
+        self, model_gt_sample: SimpleNamespace, parameters: Sequence[float]
     ) -> SimpleNamespace:
         model_gt_sample.draws.append(parameters)
         return model_gt_sample
@@ -52,7 +53,9 @@ class _Noise(BaseTransform):
         return model_gt_sample
 
 
-def _draws(pipeline: TransformsCompose, stream_parameters: tuple | None) -> list[list[float]]:
+def _draws(
+    pipeline: TransformsCompose, stream_parameters: tuple | None
+) -> Sequence[Sequence[float]]:
     return pipeline(SimpleNamespace(draws=[]), stream_parameters).draws
 
 

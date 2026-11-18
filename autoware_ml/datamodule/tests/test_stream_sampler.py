@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import pickle
 import unittest
 
@@ -29,14 +30,14 @@ from autoware_ml.transforms.base import StreamParameters
 class _AugmentedScenesDataset:
     """Minimal dataset stub exposing its scenes and the draw of a stream augmentation."""
 
-    def __init__(self, scene_lengths: list[int]) -> None:
+    def __init__(self, scene_lengths: Sequence[int]) -> None:
         self._groups = []
         start = 0
         for length in scene_lengths:
             self._groups.append(list(range(start, start + length)))
             start += length
 
-    def scene_index_groups(self) -> list[list[int]]:
+    def scene_index_groups(self) -> Sequence[Sequence[int]]:
         return [list(group) for group in self._groups]
 
     def sample_stream_augmentation(self, index: int) -> tuple[float]:
@@ -55,7 +56,7 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
 
     def build_stream_sampler(
         self,
-        scene_lengths: list[int],
+        scene_lengths: Sequence[int],
         batch_size: int,
         seed: int = 0,
         shuffle: bool = False,
@@ -81,12 +82,12 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
             consistent_augmentation=consistent_augmentation,
         )
 
-    def lanes(self, sampler: GroupStreamingSampler) -> list[list[int]]:
+    def lanes(self, sampler: GroupStreamingSampler) -> Sequence[Sequence[int]]:
         """Split the indices of one epoch into the lanes they feed, batch position by position."""
         indices = list(iter(sampler))
         return [indices[lane :: sampler.batch_size] for lane in range(sampler.batch_size)]
 
-    def drawn(self, sampler: GroupStreamingSampler, epoch: int) -> list[tuple]:
+    def drawn(self, sampler: GroupStreamingSampler, epoch: int) -> Sequence[tuple]:
         """The augmentation carried by every slot of one epoch."""
         sampler.set_epoch(epoch)
         return [slot.augmentation for slot in sampler]
