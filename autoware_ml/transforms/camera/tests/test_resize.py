@@ -14,6 +14,7 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
+import pickle
 import unittest
 
 from jaxtyping import Float32
@@ -23,8 +24,11 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
+    ImageAugmentationDraw,
+    ImageAugmentationParameters,
     PadMultiViewImage,
     ResizeCropFlipRotImage,
     ResizeMultiviewImages,
@@ -580,6 +584,101 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         intrinsics = output.camera_image_data.augmented_camera_intrinsics
         self.assertFalse(torch.allclose(intrinsics[0], intrinsics[1]))
         self.assert_projection_is_consistent(output.camera_image_data)
+
+    def build_training_transform(self) -> ResizeCropFlipRotImage:
+        """A transform that draws every part of the augmentation."""
+        return ResizeCropFlipRotImage(
+            target_size=[16, 24],
+            resize_range=[0.5, 1.5],
+            bottom_crop_ratio_range=[0.0, 0.3],
+            training=True,
+            random_horizontal_flip=True,
+            rotation_range=[-5.0, 5.0],
+        )
+
+    def augmented_intrinsics(
+        self, pipeline: TransformsCompose, stream_parameters: tuple | None
+    ) -> Float32[Tensor, "num_cameras 3 3"]:
+        """Augmented intrinsics the pipeline gives a fresh sample."""
+        output = pipeline(self.build_multi_task_gt_sample(), stream_parameters)
+        assert output.camera_image_data is not None
+        self.assert_projection_is_consistent(output.camera_image_data)
+        return output.camera_image_data.augmented_camera_intrinsics
+
+    def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
+        """
+        Test that the parameters of one stream augment every camera of every frame alike,
+        another stream differently, and that they survive the pickling to a dataloader worker.
+        """
+        np.random.seed(0)
+        pipeline = TransformsCompose([self.build_training_transform()])
+        stream = pickle.loads(pickle.dumps(pipeline.sample_stream_parameters()))
+        other_stream = pipeline.sample_stream_parameters()
+
+        first = self.augmented_intrinsics(pipeline, stream)
+        second = self.augmented_intrinsics(pipeline, stream)
+
+        self.assertTrue(stream[0].apply)
+        self.assertTrue(torch.equal(first, second))
+        self.assertTrue(torch.equal(first[0], first[1]))
+        self.assertFalse(torch.equal(first, self.augmented_intrinsics(pipeline, other_stream)))
+
+    def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
+        """Test that the pixel values of a camera are built from the draw of the stream."""
+        transform = self.build_training_transform()
+        draw = ImageAugmentationDraw(
+            resize_fraction=0.25,
+            bottom_crop_ratio=0.25,
+            horizontal_flip=True,
+            rotation=3.0,
+            crop_left_fraction=0.5,
+        )
+
+        parameters = transform.sample_augmentation(self.image_height, self.image_width, draw)
+
+        # A quarter into the resize range of 0.5 to 1.5 is 0.75, so 32 x 48 becomes 24 x 36.
+        # Three quarters of the height are kept above the bottom crop, 18 rows, 2 more than
+        # the target, and the crop sits in the middle of the 12 free columns.
+        self.assertEqual(
+            parameters,
+            ImageAugmentationParameters(
+                resized_height=24,
+                resized_width=36,
+                crop_top=2,
+                crop_left=6,
+                horizontal_flip=True,
+                rotation=3.0,
+            ),
+        )
+
+    def test_a_stream_in_validation_draws_nothing_and_matches_a_single_frame(self) -> None:
+        """
+        Test that the validation parameters of a stream leave the random state alone and
+        augment a frame as the transform does on its own.
+        """
+        pipeline = TransformsCompose(
+            [
+                ResizeCropFlipRotImage(
+                    target_size=[16, 24],
+                    resize_range=[0.5, 1.5],
+                    bottom_crop_ratio_range=[0.0, 0.3],
+                    training=False,
+                )
+            ]
+        )
+        np.random.seed(3)
+        expected = np.random.uniform(size=3).tolist()
+
+        np.random.seed(3)
+        stream = pipeline.sample_stream_parameters()
+
+        self.assertEqual(np.random.uniform(size=3).tolist(), expected)
+        self.assertTrue(
+            torch.equal(
+                self.augmented_intrinsics(pipeline, stream),
+                self.augmented_intrinsics(pipeline, None),
+            )
+        )
 
     @staticmethod
     def intensity_centroid(
