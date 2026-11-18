@@ -67,10 +67,8 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
-    PTv3ExportContext,
     build_ptv3_encoder_dynamic_axes,
     build_ptv3_export_context,
-    build_seg3d_head_export_spec,
     export_patch_sizes,
     prepare_ptv3_export_inputs,
     require_single_sample_export_batch,
@@ -1374,32 +1372,14 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
 
 def _jitter_affine_parameters(model: nn.Module) -> None:
     """Give every bias and normalization a non-trivial value, as training would."""
-    generator = torch.Generator().manual_seed(0)
-
-    def uniform(tensor: torch.Tensor, low: float, high: float) -> None:
-        tensor.copy_(low + (high - low) * torch.rand(tensor.shape, generator=generator))
-
-    with torch.no_grad():
-        for module in model.modules():
-            if isinstance(module, (nn.BatchNorm1d, nn.LayerNorm)):
-                uniform(module.weight, 0.5, 1.5)
-            if isinstance(module, nn.BatchNorm1d):
-                uniform(module.running_mean, -0.5, 0.5)
-                uniform(module.running_var, 0.5, 1.5)
-            if getattr(module, "bias", None) is not None:
-                uniform(module.bias, -0.5, 0.5)
-
-
-def _export_seg3d_model(
-    model: PTv3Segmentation3DModel, batch: ModelBatchInputs
-) -> tuple[PTv3ExportContext, nn.Module, tuple[torch.Tensor, torch.Tensor]]:
-    """Export the encoder and the segmentation head and run both once."""
-    context = build_ptv3_export_context(model, batch)
-    head = model.seg3d_head.prepare_for_export(model.EXPORT_ORDER)
-    spec = build_seg3d_head_export_spec(context, head, model.get_export_output_names())
-    with torch.no_grad():
-        outputs = spec.module(*spec.args)
-    return context, head, outputs
+    for module in model.modules():
+        if isinstance(module, (nn.BatchNorm1d, nn.LayerNorm)):
+            nn.init.uniform_(module.weight, 0.5, 1.5)
+        if isinstance(module, nn.BatchNorm1d):
+            nn.init.uniform_(module.running_mean, -0.5, 0.5)
+            nn.init.uniform_(module.running_var, 0.5, 1.5)
+        if getattr(module, "bias", None) is not None:
+            nn.init.uniform_(module.bias, -0.5, 0.5)
 
 
 @pytest.mark.skipif(
@@ -1407,6 +1387,7 @@ def _export_seg3d_model(
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
 def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
+    torch.manual_seed(0)
     device = torch.device("cuda")
     model = build_seg3d_model()
     _jitter_affine_parameters(model)
@@ -1414,28 +1395,23 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
     batch = build_inputs(device=device)
     state = {key: value.clone() for key, value in model.state_dict().items()}
 
-    folded_context, folded_head, folded_outputs = _export_seg3d_model(model, batch)
+    folded = model.build_export_specs(batch)
     monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
-    reference_context, _, reference_outputs = _export_seg3d_model(model, batch)
+    reference = model.build_export_specs(batch)
 
-    for folded, reference in zip(
-        folded_context.stage_feats, reference_context.stage_feats, strict=True
-    ):
-        torch.testing.assert_close(folded, reference, rtol=1e-5, atol=1e-5)
-    _, folded_probs = folded_outputs
-    _, reference_probs = reference_outputs
-    torch.testing.assert_close(folded_probs, reference_probs, rtol=1e-5, atol=1e-5)
+    for name in ("ptv3_encoder", "ptv3_seg3d_head"):
+        with torch.no_grad():
+            folded_outputs = folded[name].module(*folded[name].args)
+            reference_outputs = reference[name].module(*reference[name].args)
+        for folded_output, reference_output in zip(folded_outputs, reference_outputs, strict=True):
+            if folded_output.is_floating_point():
+                torch.testing.assert_close(folded_output, reference_output, rtol=1e-5, atol=1e-5)
+        blocks = [
+            block
+            for block in folded[name].module.modules()
+            if isinstance(block, Block) and block.cpe is not None
+        ]
+        assert blocks, name
+        assert all(next(block.cpe.children()).bias is None for block in blocks), name
     for key, value in model.state_dict().items():
         assert torch.equal(value, state[key]), key
-    head_blocks = [
-        block
-        for block in folded_head.modules()
-        if isinstance(block, Block) and block.cpe is not None
-    ]
-    encoder_blocks = [
-        block
-        for block in folded_context.encoder_module.modules()
-        if isinstance(block, Block) and block.cpe is not None
-    ]
-    assert head_blocks and encoder_blocks
-    assert all(next(block.cpe.children()).bias is None for block in head_blocks + encoder_blocks)
