@@ -471,6 +471,31 @@ class Point3DRoPE(nn.Module):
             sign[start + half : start + self.chunk] = 1.0
         self.register_buffer("permutation", permutation, persistent=False)
         self.register_buffer("sign", sign, persistent=False)
+        # Per head channel: the coordinate axis and the frequency column it reads in the
+        # lookup tables; the unrotated tail reads the extra zero-frequency column.
+        frequency_count = self.inv_freq.numel()
+        lookup_axis = torch.zeros(self.head_dim, dtype=torch.long)
+        lookup_column = torch.full((self.head_dim,), frequency_count, dtype=torch.long)
+        for axis in range(3):
+            start = axis * self.chunk
+            lookup_axis[start : start + self.chunk] = axis
+            lookup_column[start : start + self.chunk] = torch.arange(self.chunk) % frequency_count
+        self.register_buffer("lookup_axis", lookup_axis, persistent=False)
+        self.register_buffer("lookup_column", lookup_column, persistent=False)
+        self.register_buffer("cos_table", None, persistent=False)
+        self.register_buffer("sin_table", None, persistent=False)
+
+    def bound_to_grid(self, extent: int) -> None:
+        """Look the cosines and sines up per coordinate instead of computing them.
+
+        Args:
+            extent: Exclusive upper bound of every grid coordinate passed afterwards.
+        """
+        position = torch.arange(extent, dtype=self.inv_freq.dtype, device=self.inv_freq.device)
+        frequency = torch.cat([self.inv_freq, self.inv_freq.new_zeros(1)])
+        angle = position.unsqueeze(1) * frequency.unsqueeze(0)
+        self.cos_table = angle.cos().flatten()
+        self.sin_table = angle.sin().flatten()
 
     def tables(self, grid_coord: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Build full-width cosine/sine tables for one set of voxel positions.
@@ -482,6 +507,12 @@ class Point3DRoPE(nn.Module):
             Cosine and sine tensors of shape ``(N, 1, head_dim)``, broadcastable
             over the head axis.
         """
+        if self.cos_table is not None and self.sin_table is not None:
+            # TensorRT fuses Sin/Cos into the rotation and evaluates them for every head;
+            # one gather per channel from a flat constant table costs a load instead.
+            width = self.inv_freq.numel() + 1
+            index = grid_coord.long()[:, self.lookup_axis] * width + self.lookup_column
+            return self.cos_table[index].unsqueeze(1), self.sin_table[index].unsqueeze(1)
         position = grid_coord.to(self.inv_freq.dtype)
         angles = [
             (position[:, axis : axis + 1] * self.inv_freq.unsqueeze(0)).repeat(1, 2)
@@ -1368,6 +1399,22 @@ class PointTransformerV3Encoder(PointModule):
         """
         self.order = list(order)
         set_block_serialization_order(self.enc, len(self.order))
+
+    def bound_rope_to_grid(self, sparse_shape: torch.Tensor) -> None:
+        """Bound the rotary embedding of every stage to that stage's grid.
+
+        Args:
+            sparse_shape: Grid shape of the input stage; every input grid coordinate
+                is smaller along its axis.
+        """
+        depth = 0
+        for stage_index, stage in enumerate(self.enc.children()):
+            if stage_index > 0:
+                depth += _pooling_depth(self.stride[stage_index - 1])
+            extent = int(pooled_sparse_shape(sparse_shape, depth).max())
+            for module in stage.modules():
+                if isinstance(module, Point3DRoPE):
+                    module.bound_to_grid(extent)
 
     def prepare_for_export(self, order: Sequence[str]) -> PointTransformerV3Encoder:
         """Return an isolated encoder copy configured for ONNX export.

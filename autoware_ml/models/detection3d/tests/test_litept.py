@@ -126,6 +126,55 @@ def test_point3d_rope_dot_product_depends_only_on_relative_position() -> None:
     assert not torch.allclose(score([7, 3, 5], [2, 1, 4]), score([7, 3, 5], [4, 1, 4]), atol=1e-4)
 
 
+@pytest.mark.parametrize("head_dim", [12, 16, 18, 32])
+def test_point3d_rope_lookup_matches_the_computed_tables(head_dim: int) -> None:
+    """Bounding to a grid swaps Sin/Cos for a table lookup without changing a value."""
+    rope = Point3DRoPE(head_dim=head_dim, base=100.0)
+    grid_coord = torch.randint(0, 50, (9, 3))
+    expected_cos, expected_sin = rope.tables(grid_coord)
+
+    rope.bound_to_grid(50)
+    cos, sin = rope.tables(grid_coord)
+
+    assert rope.cos_table.shape == (50 * (rope.chunk // 2 + 1),)
+    assert torch.equal(cos, expected_cos)
+    assert torch.equal(sin, expected_sin)
+
+
+def test_encoder_bounds_each_stage_rope_to_that_stage_grid() -> None:
+    """Each stage's tables cover the largest axis of its pooled grid and no more."""
+    encoder = LitePTEncoder(
+        in_channels=4,
+        order=("z",),
+        stride=(2, 2),
+        enc_depths=(1, 1, 1),
+        enc_channels=(12, 24, 24),
+        enc_num_head=(1, 2, 2),
+        enc_patch_size=(2, 2, 2),
+        enable_flash=False,
+        enc_conv=(True, False, False),
+        enc_attn=(False, True, True),
+    )
+
+    encoder.bound_rope_to_grid(torch.tensor([20, 12, 5]))
+
+    stages = list(encoder.enc._modules.values())
+    for stage, extent in ((stages[1], 10), (stages[2], 5)):
+        rope = stage._modules["block0"].attn.rope
+        assert rope.cos_table.shape[0] == extent * (rope.chunk // 2 + 1)
+
+
+def test_export_copy_looks_rope_up_and_the_live_encoder_does_not() -> None:
+    model = build_litept_seg3d_model()
+
+    export_encoder = model._prepare_encoder_export()
+
+    export_rope = export_encoder.enc._modules["enc2"]._modules["block0"].attn.rope
+    live_rope = model.encoder.enc._modules["enc2"]._modules["block0"].attn.rope
+    assert export_rope.cos_table.shape[0] == 2 * (export_rope.chunk // 2 + 1)
+    assert live_rope.cos_table is None
+
+
 def test_block_rejects_a_configuration_with_no_operation() -> None:
     with pytest.raises(ValueError, match="at least one"):
         Block(
@@ -318,6 +367,22 @@ def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> N
         assert declared <= set(spec.input_names), tag
         assert {"voxels", "num_points_per_voxel"} <= declared, tag
         onnx.checker.check_model(onnx.load(str(path)))
+
+
+@REQUIRES_SPARSE_CUDA
+def test_exported_litept_encoder_has_no_sin_or_cos(tmp_path) -> None:
+    """The exported rotary embedding reads constant tables instead of computing them."""
+    onnx_cfg = OmegaConf.create(
+        {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
+    )
+    model = build_litept_seg3d_model().cuda().eval()
+    spec = model.build_export_specs(build_inputs(device=torch.device("cuda")))["ptv3_encoder"]
+    path = tmp_path / "litept_encoder.onnx"
+
+    export_to_onnx(spec, onnx_cfg, path)
+
+    op_types = {node.op_type for node in onnx.load(str(path)).graph.node}
+    assert not op_types & {"Sin", "Cos"}
 
 
 @REQUIRES_SPARSE_CUDA
