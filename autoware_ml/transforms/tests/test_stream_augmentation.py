@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from types import SimpleNamespace
+import unittest
 
 import numpy as np
-import pytest
 
 from autoware_ml.transforms.base import BaseTransform, StreamParameters, TransformsCompose
 
@@ -53,62 +53,102 @@ class _Noise(BaseTransform):
         return model_gt_sample
 
 
-def _draws(
-    pipeline: TransformsCompose, stream_parameters: tuple | None
-) -> Sequence[Sequence[float]]:
-    return pipeline(SimpleNamespace(draws=[]), stream_parameters).draws
+class TestStreamAugmentation(unittest.TestCase):
+    """The augmentation a pipeline draws once for a stream and applies to its frames."""
+
+    def draws(
+        self, pipeline: TransformsCompose, stream_parameters: tuple | None
+    ) -> Sequence[Sequence[float]]:
+        """The draws every transform of the pipeline applies to a fresh sample."""
+        return pipeline(SimpleNamespace(draws=[]), stream_parameters).draws
+
+    def test_frames_of_one_stream_get_the_drawn_augmentation_and_streams_differ(self) -> None:
+        """
+        Input: a pipeline of two transforms drawing 3 and 2 values, the parameters of two
+        streams drawn from it, and two frames of the first stream and one of the second.
+        Expected: every frame of a stream is transformed with the values drawn for it.
+        Check: both frames of the first stream record its drawn values, and the frame of the
+        other stream records different ones.
+        """
+        pipeline = TransformsCompose([_Draw(3), _Draw(2)])
+        stream = pipeline.sample_stream_parameters()
+        other_stream = pipeline.sample_stream_parameters()
+
+        first = self.draws(pipeline, stream)
+        second = self.draws(pipeline, stream)
+        other = self.draws(pipeline, other_stream)
+
+        self.assertEqual(first, [stream[0].values, stream[1].values])
+        self.assertEqual(second, first)
+        self.assertNotEqual(other, first)
+
+    def test_frames_outside_a_stream_draw_on_their_own(self) -> None:
+        """
+        Input: a pipeline of one transform drawing 3 values, called twice without stream
+        parameters.
+        Expected: every sample draws its own augmentation.
+        Check: the two samples record different values.
+        """
+        pipeline = TransformsCompose([_Draw(3)])
+
+        self.assertNotEqual(self.draws(pipeline, None), self.draws(pipeline, None))
+
+    def test_a_transform_without_stream_parameters_draws_for_every_frame(self) -> None:
+        """
+        Input: a pipeline of a transform that shares its draw with a stream and a jitter that
+        does not implement sample_parameters, and two frames of one stream.
+        Expected: the stream holds no parameters for the jitter, which keeps drawing per frame.
+        Check: the stream entry of the jitter is None, the first transform records the same
+        values in both frames and the jitter different ones.
+        """
+        pipeline = TransformsCompose([_Draw(1), _Noise()])
+        stream = pipeline.sample_stream_parameters()
+
+        first = self.draws(pipeline, stream)
+        second = self.draws(pipeline, stream)
+
+        self.assertIsNone(stream[1])
+        self.assertEqual(first[0], second[0])
+        self.assertNotEqual(first[1], second[1])
+
+    def test_a_transform_with_a_probability_is_applied_to_the_whole_stream(self) -> None:
+        """
+        Input: a transform applied with a probability of one half, 40 streams drawn from it
+        and 5 frames of every stream.
+        Expected: the probability is decided once per stream, not per frame.
+        Check: some streams apply the transform and some skip it, and the 5 frames of a
+        stream all record a draw or all record none.
+        """
+        pipeline = TransformsCompose([_Draw(1, probability=0.5)])
+        streams = [pipeline.sample_stream_parameters() for _ in range(40)]
+
+        self.assertEqual({stream[0].apply for stream in streams}, {True, False})
+        for stream in streams:
+            applied = {len(self.draws(pipeline, stream)) for _ in range(5)}
+            self.assertEqual(applied, {int(stream[0].apply)})
+
+    def test_a_skipped_transform_draws_no_parameters(self) -> None:
+        """
+        Input: a transform with a probability of zero.
+        Expected: the stream skips the transform without drawing its values.
+        Check: the stream parameters are apply False with no values.
+        """
+        self.assertEqual(
+            _Draw(1, probability=0.0).sample_stream_parameters(), StreamParameters(False, None)
+        )
+
+    def test_the_parameters_of_another_pipeline_are_rejected(self) -> None:
+        """
+        Input: a pipeline of two transforms given the stream parameters of a pipeline of one.
+        Expected: parameters that cannot be matched to the transforms are a caller error.
+        Check: the pipeline raises a ValueError naming its length of 2.
+        """
+        pipeline = TransformsCompose([_Draw(1), _Draw(1)])
+        other_parameters = TransformsCompose([_Draw(1)]).sample_stream_parameters()
+
+        with self.assertRaisesRegex(ValueError, "pipeline of 2"):
+            self.draws(pipeline, other_parameters)
 
 
-def test_frames_of_one_stream_get_the_drawn_augmentation_and_streams_differ() -> None:
-    pipeline = TransformsCompose([_Draw(3), _Draw(2)])
-    stream, other_stream = (
-        pipeline.sample_stream_parameters(),
-        pipeline.sample_stream_parameters(),
-    )
-
-    first, second, other = (
-        _draws(pipeline, stream),
-        _draws(pipeline, stream),
-        _draws(pipeline, other_stream),
-    )
-
-    assert first == second == [stream[0].values, stream[1].values]
-    assert first != other
-
-
-def test_frames_outside_a_stream_draw_on_their_own() -> None:
-    pipeline = TransformsCompose([_Draw(3)])
-
-    assert _draws(pipeline, None) != _draws(pipeline, None)
-
-
-def test_a_transform_without_stream_parameters_draws_for_every_frame_of_a_stream() -> None:
-    pipeline = TransformsCompose([_Draw(1), _Noise()])
-    stream = pipeline.sample_stream_parameters()
-
-    first, second = _draws(pipeline, stream), _draws(pipeline, stream)
-
-    assert stream[1] is None
-    assert first[0] == second[0]
-    assert first[1] != second[1]
-
-
-def test_a_transform_applied_with_a_probability_is_applied_to_the_whole_stream() -> None:
-    pipeline = TransformsCompose([_Draw(1, probability=0.5)])
-    streams = [pipeline.sample_stream_parameters() for _ in range(40)]
-
-    assert {stream[0].apply for stream in streams} == {True, False}
-    for stream in streams:
-        applied = [len(_draws(pipeline, stream)) for _ in range(5)]
-        assert applied == [int(stream[0].apply)] * 5
-
-
-def test_a_skipped_transform_draws_no_parameters() -> None:
-    assert _Draw(1, probability=0.0).sample_stream_parameters() == StreamParameters(False, None)
-
-
-def test_the_parameters_of_another_pipeline_are_rejected() -> None:
-    pipeline = TransformsCompose([_Draw(1), _Draw(1)])
-
-    with pytest.raises(ValueError, match="pipeline of 2"):
-        _draws(pipeline, TransformsCompose([_Draw(1)]).sample_stream_parameters())
+if __name__ == "__main__":
+    unittest.main()
