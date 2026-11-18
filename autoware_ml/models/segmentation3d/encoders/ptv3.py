@@ -666,7 +666,7 @@ class SerializedAttention(PointModule):
             pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
             order = point.serialized_order[self.order_index][pad]
             inverse = unpad[point.serialized_inverse[self.order_index]]
-        qkv = self.qkv(point.feat)[order]
+        qkv = self.qkv(point.feat[order])
         head_dim = channel_count // head_count
 
         # With RoPE the projection has to be split before attention so queries
