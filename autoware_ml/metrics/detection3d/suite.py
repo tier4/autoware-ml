@@ -407,7 +407,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         active = self._stage_filter_keys()
         available = []
         for index, metric_filter in enumerate(self._component_filters):
-            is_available = metric_filter.cache_key in active and metric_filter.available(frame_meta)
+            is_available = metric_filter.cache_key in active and self._filter_available(
+                metric_filter, frame_meta
+            )
             if metric_filter.cache_key in active:
                 self._note_frame_coverage(index, is_available)
             available.append(is_available)

@@ -577,9 +577,31 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         Returns:
             Whether the frame enters the filter's slice.
         """
-        available = metric_filter.available(frame_meta)
+        available = self._filter_available(metric_filter, frame_meta)
         self._note_frame_coverage(index, available)
         return available
+
+    @staticmethod
+    def _filter_available(metric_filter: MetricFilter, frame_meta: FrameMetaSample | None) -> bool:
+        """Whether the filter covers one frame, checking its metadata first.
+
+        The check lives here and not only in the filters, so a filter that sets
+        ``needs_frame_meta`` and forgets ``require_frame_meta`` cannot count a
+        frame without metadata as covered.
+
+        Args:
+            metric_filter: The filter asked about the frame.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
+
+        Returns:
+            Whether the frame enters the filter's slice.
+
+        Raises:
+            ValueError: If the filter reads the metadata and the frame carries none.
+        """
+        if metric_filter.needs_frame_meta:
+            metric_filter.require_frame_meta(frame_meta)
+        return metric_filter.available(frame_meta)
 
     def _log_coverage(self) -> None:
         """Log per-filter frame coverage once per epoch.

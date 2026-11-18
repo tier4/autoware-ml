@@ -18,9 +18,16 @@ import unittest
 
 import numpy as np
 
-from autoware_ml.metrics.base import IDENTITY
+from autoware_ml.metrics.base import IDENTITY, IdentityFilter, MetricSuite
 from autoware_ml.metrics.filters import CollisionFilter, CorridorFilter, RegionFilter
 from autoware_ml.metrics.tests.conftest import EGO
+
+
+class ForgetfulFilter(IdentityFilter):
+    """A filter that declares the frame metadata and never calls require_frame_meta."""
+
+    name = "forgetful"
+    needs_frame_meta = True
 
 
 class TestMetricFilterInterface(unittest.TestCase):
@@ -75,6 +82,20 @@ class TestMetricFilterInterface(unittest.TestCase):
                     map_filter.keep_boxes(self.boxes, None)
                 with self.assertRaisesRegex(ValueError, map_filter.name):
                     map_filter.available(None)
+
+    def test_suite_raises_for_filter_that_skips_the_metadata_check(self) -> None:
+        """
+        Input: a filter with needs_frame_meta set whose available never reads the metadata.
+        Expected: the suite checks the metadata itself before asking the filter.
+        Check: a frame without metadata raises a ValueError naming the filter,
+            while a filter that needs none is reported available.
+        """
+        forgetful_filter = ForgetfulFilter()
+
+        self.assertTrue(forgetful_filter.available(None))
+        with self.assertRaisesRegex(ValueError, "forgetful"):
+            MetricSuite._filter_available(forgetful_filter, None)
+        self.assertTrue(MetricSuite._filter_available(IDENTITY, None))
 
     def test_empty_inputs_give_empty_masks_without_frame_metadata(self) -> None:
         """
