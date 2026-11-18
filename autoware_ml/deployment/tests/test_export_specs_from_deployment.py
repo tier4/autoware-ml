@@ -99,7 +99,7 @@ class _GraphModel(_ToyModel):
             ),
         )
 
-    def deployment_forward(self, multi_task_batch_inputs, executors):
+    def deployment_forward(self, multi_task_batch_inputs, executors, device):
         features = multi_task_batch_inputs["points"].float()
         encoded = executors["encoder"].run(features=features)["encoded"]
         return executors["head"].run(bev=encoded.sum(dim=0, keepdim=True))
@@ -152,7 +152,7 @@ def _identity_deployment(
                 onnx_dynamic_axes=onnx_dynamic_axes or {},
             ),
         ),
-        lambda multi_task_batch_inputs, executors: executors["g"].run(
+        lambda multi_task_batch_inputs, executors, device: executors["g"].run(
             x=multi_task_batch_inputs["x"]
         ),
     )
@@ -187,8 +187,8 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         """Test that each spec traces on the tensors the function passed, matching forward().
 
         Input: the two-graph toy model on points ``[[1, 2], [3, 4]]``.
-        Expected: the encoder spec's arg is the points; the head spec's arg is the doubled rows
-            summed, ``[[8, 12]]``; the head run on it equals ``forward()``.
+        Expected: the encoder spec's arg equals the points; the head spec's arg is the doubled
+            rows summed, ``[[8, 12]]``; the head run on it equals ``forward()``.
         Check: both spec args and the head outputs against ``forward()``.
         """
         model = _GraphModel().eval()
@@ -239,7 +239,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
                     "sub", module=_Subtract(), input_names=("a", "b"), output_names=("diff",)
                 ),
             ),
-            lambda multi_task_batch_inputs, executors: executors["sub"].run(
+            lambda multi_task_batch_inputs, executors, device: executors["sub"].run(
                 b=torch.tensor([1.0]), a=torch.tensor([10.0])
             ),
         )
@@ -264,7 +264,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
 
         deployment = DeploymentDeclaration(
             graphs(),
-            lambda multi_task_batch_inputs, executors: executors["g"].run(x=torch.ones(2)),
+            lambda multi_task_batch_inputs, executors, device: executors["g"].run(x=torch.ones(2)),
         )
         self.assertEqual(
             list(build_export_specs_from_deployment(deployment, None, torch.device("cpu"))),
@@ -284,7 +284,7 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
                     "g", module=nn.Identity(), input_names=("typo",), output_names=("y",)
                 ),
             ),
-            lambda multi_task_batch_inputs, executors: executors["g"].run(
+            lambda multi_task_batch_inputs, executors, device: executors["g"].run(
                 x=multi_task_batch_inputs["x"]
             ),
         )
@@ -293,18 +293,18 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
                 deployment, {"x": torch.ones(1)}, torch.device("cpu")
             )
 
-    def test_a_graph_input_reused_in_place_is_rejected(self) -> None:
-        """Test that the function rewriting a graph's input in place is rejected at export.
+    def test_trace_inputs_are_copies_taken_when_the_graph_ran(self) -> None:
+        """Test that a spec traces on a copy of the graph's inputs, taken when the graph ran.
 
         Input: two identity graphs; the function multiplies ``g``'s output, which is its
             input tensor, in place before passing it to ``h``.
-        Expected: ValueError listing ``{'g': ['x']}``.
-        Check: the error message.
+        Expected: ``g``'s trace input is still ones; ``h``'s is threes.
+        Check: both spec args.
         """
 
-        # nn.Identity returns the tensor it got: in place, the function would rewrite g's
-        # trace input.
-        def forward(multi_task_batch_inputs, executors):
+        # nn.Identity returns the tensor it got: without the copy, the in-place multiply
+        # would rewrite g's trace input.
+        def forward(multi_task_batch_inputs, executors, device):
             y = executors["g"].run(x=torch.ones(2))["y"]
             return executors["h"].run(z=y.mul_(3.0))
 
@@ -315,8 +315,11 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
             ),
             forward,
         )
-        with self.assertRaisesRegex(ValueError, r"\{'g': \['x'\]\}"):
-            build_export_specs_from_deployment(deployment, None, torch.device("cpu"))
+        specs = build_export_specs_from_deployment(deployment, None, torch.device("cpu"))
+        (x,) = specs["g"].args
+        (z,) = specs["h"].args
+        self.assertTrue(torch.equal(x, torch.ones(2)))
+        self.assertTrue(torch.equal(z, torch.full((2,), 3.0)))
 
 
 class TestExportEvalMode(unittest.TestCase):
@@ -363,7 +366,7 @@ class TestExportEvalMode(unittest.TestCase):
                     "wrapped", module=_Wrapper(shared), input_names=("x",), output_names=("y",)
                 ),
             ),
-            lambda multi_task_batch_inputs, executors: executors["wrapped"].run(
+            lambda multi_task_batch_inputs, executors, device: executors["wrapped"].run(
                 x=multi_task_batch_inputs["x"]
             ),
         )

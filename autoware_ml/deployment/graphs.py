@@ -12,29 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deployment declared as graphs plus one function.
+"""A model's deployment: the computation graphs it exports and the function that runs them.
 
-A model declares the graphs it exports (:class:`DeploymentGraph`) and writes its deployed
-inference as one function, ``deployment_forward(multi_task_batch_inputs, executors)``, on the
-preprocessed batch ``forward()`` takes: the glue is plain code and each graph runs as
-``executors[name].run(**inputs)``. The same function serves export
-(:func:`build_export_specs_from_deployment` traces each graph on the tensors one PyTorch run
-passed it) and every later run on a backend.
+A model declares the computation graphs it exports, one :class:`DeploymentGraph` per ONNX file
+and TensorRT engine. It also writes ``deployment_forward(multi_task_batch_inputs, executors,
+device)``, the PyTorch code between those graphs: it takes the preprocessed batch ``forward()``
+takes, runs each graph as ``executors[name].run(**inputs)`` and returns the model outputs.
+The same function serves export, where :func:`build_export_specs_from_deployment` runs it once
+in PyTorch and traces each graph on the tensors it was passed, and every later run on a backend.
 
-By lifetime: :class:`DeploymentGraph` and :class:`DeploymentDeclaration` are what the model
-declares; :class:`GraphExecutors`, :class:`GraphExecutor` and :class:`DeploymentResult` belong
-to one run; :class:`~autoware_ml.utils.deploy.ExportSpec` is derived from both. A
-:class:`GraphExecutor` is what the function calls (named, checked, recorded); a
-:data:`BackendGraphRunner` is what a backend provides to it (positional tensors in, named out;
-:func:`run_graph_module` is the PyTorch one).
+:class:`DeploymentGraph` and :class:`DeploymentDeclaration` are what the model declares. A
+:class:`GraphExecutor` belongs to one run: it is what the function calls, by name and checked.
+A :data:`GraphRunner` is what a backend provides to it: positional tensors in, named tensors
+out; :func:`run_graph_module` is the PyTorch one. :class:`~autoware_ml.utils.deploy.ExportSpec`
+is derived from a graph and the tensors it ran on.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
-from typing import NamedTuple
 
 from jaxtyping import Shaped
 import torch
@@ -43,13 +41,12 @@ from torch import nn
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.utils.deploy import ExportSpec
 
-#: A graph input or output: any dtype and shape, fixed by the graph's module.
 GraphTensor = Shaped[torch.Tensor, "*shape"]
 
 
 @dataclass(frozen=True)
 class DeploymentGraph:
-    """One exported ONNX / TensorRT graph.
+    """One exported computation graph: one ONNX file and one TensorRT engine.
 
     Attributes:
         name: Unique graph name, also the ``deploy.onnx.modules`` key and the artifact stem.
@@ -61,9 +58,8 @@ class DeploymentGraph:
         output_names: ONNX output names, in the module's return order; a run of the graph
             returns its tensors under these names.
         onnx_dynamic_axes: Axes dynamic by construction, ``{tensor: {dim: name}}``. They
-            become the spec's ``dynamic_axes``, the one declaration both ONNX exporters
-            derive from. One name is one size: an output whose axis differs from an
-            input's gets another name.
+            become the spec's ``dynamic_axes``, which the TorchScript and the ``torch.export``
+            ONNX exporter both take.
     """
 
     name: str
@@ -73,8 +69,6 @@ class DeploymentGraph:
     onnx_dynamic_axes: Mapping[str, Mapping[int, str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # The exporter renames a repeated name (``x`` -> ``x.1``), so the artifact would not
-        # carry the declared names.
         for kind, names in (("input_names", self.input_names), ("output_names", self.output_names)):
             repeated = sorted({name for name in names if names.count(name) > 1})
             if repeated:
@@ -84,44 +78,29 @@ class DeploymentGraph:
                 )
 
 
-def validate_graphs(graphs: Sequence[DeploymentGraph]) -> tuple[DeploymentGraph, ...]:
-    """Check a model's graph declaration and return it as a tuple.
-
-    Whether the deployed function runs each graph with its declared inputs is checked when
-    it runs.
-
-    Raises:
-        ValueError: On no graph, or on two graphs with one name (the artifact's file name).
-    """
-    graphs = tuple(graphs)
-    if not graphs:
-        raise ValueError("A deployment needs at least one exportable DeploymentGraph.")
-    names = [graph.name for graph in graphs]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
-    if duplicates:
-        raise ValueError(f"Duplicate graph names: {duplicates}.")
-    return graphs
-
-
 def run_graph_module(graph: DeploymentGraph, args: Sequence[GraphTensor]) -> dict[str, GraphTensor]:
     """Run a graph's PyTorch module on its positional inputs and name its outputs.
 
-    This is the PyTorch :data:`BackendGraphRunner`; a backend runner runs the graph's artifact instead.
+    This is the PyTorch :data:`GraphRunner`; a backend runner runs the graph's artifact instead.
+    The module returns its tensors as one tensor, a tuple in ``output_names`` order, or a
+    mapping whose keys are ``output_names`` in that order: ONNX export names the outputs by
+    position, so a mapping in another order would name the exported tensors wrongly.
 
     Raises:
-        TypeError: When the module returns a mapping; a graph returns its tensors
-            positionally, in the order of its declared ``output_names``.
-        ValueError: When the module returns another number of tensors than ``output_names``.
+        ValueError: When the module returns another number of tensors than ``output_names``,
+            or a mapping whose keys are not ``output_names`` in the declared order.
     """
     raw = graph.module(*args)
+    if isinstance(raw, Mapping):
+        if list(raw) != list(graph.output_names):
+            raise ValueError(
+                f"Graph {graph.name!r} returned the outputs {list(raw)}; it declares "
+                f"{list(graph.output_names)}, and ONNX export names outputs by position, so "
+                "a mapping has to list them in the declared order."
+            )
+        return dict(raw)
     if isinstance(raw, torch.Tensor):
         raw = (raw,)
-    if isinstance(raw, Mapping):
-        # zip() would iterate the keys and name the outputs after them.
-        raise TypeError(
-            f"Graph {graph.name!r} returned a mapping; a graph returns its tensors "
-            f"positionally, in the order of its output_names {list(graph.output_names)}."
-        )
     raw = tuple(raw)
     if len(raw) != len(graph.output_names):
         raise ValueError(
@@ -132,31 +111,7 @@ def run_graph_module(graph: DeploymentGraph, args: Sequence[GraphTensor]) -> dic
 
 
 #: What a backend provides to run one graph: its positional inputs in, its outputs by name.
-BackendGraphRunner = Callable[[tuple[GraphTensor, ...]], Mapping[str, GraphTensor]]
-
-
-@dataclass
-class _GraphRunRecord:
-    """What one graph ran on; written by :meth:`GraphExecutor.run`, read by :func:`run_deployment`.
-
-    Attributes:
-        args: The positional inputs of the run, in ``input_names`` order, on the run device;
-            ``None`` until the graph ran.
-        versions: The in-place version counter of each input when the graph ran.
-    """
-
-    args: tuple[GraphTensor, ...] | None = None
-    versions: tuple[int, ...] = ()
-
-    def modified_inputs(self, input_names: tuple[str, ...]) -> list[str]:
-        """Names of the inputs modified in place since the graph ran."""
-        if self.args is None:
-            return []
-        return [
-            name
-            for name, arg, version in zip(input_names, self.args, self.versions, strict=True)
-            if arg._version != version
-        ]
+GraphRunner = Callable[[tuple[GraphTensor, ...]], Mapping[str, GraphTensor]]
 
 
 class GraphExecutor:
@@ -164,7 +119,7 @@ class GraphExecutor:
 
     ``run(**inputs)`` takes exactly ``input_names`` as tensors, moves them to the run device,
     runs the graph and returns its ``output_names`` tensors by name. A graph runs once per
-    run; the framework records what it ran on, for export tracing and the run's checks.
+    run.
 
     Attributes:
         name: The graph's name, the artifact stem.
@@ -172,20 +127,19 @@ class GraphExecutor:
         output_names: The graph's output names, in declaration order.
     """
 
-    def __init__(
-        self,
-        graph: DeploymentGraph,
-        runner: BackendGraphRunner,
-        device: torch.device,
-        record: _GraphRunRecord,
-    ) -> None:
+    def __init__(self, graph: DeploymentGraph, runner: GraphRunner, device: torch.device) -> None:
         self.name = graph.name
         self.input_names = graph.input_names
         self.output_names = graph.output_names
         self._runner = runner
         self._device = device
-        self._record = record
         self._output_name_set = frozenset(graph.output_names)
+        self._ran = False
+
+    @property
+    def ran(self) -> bool:
+        """Whether the graph ran in this run."""
+        return self._ran
 
     def run(self, **inputs: GraphTensor) -> dict[str, GraphTensor]:
         """Run the graph on exactly its declared inputs and return its declared outputs.
@@ -200,7 +154,7 @@ class GraphExecutor:
                 ``output_names``: the artifact does not match the declaration.
         """
         name = self.name
-        if self._record.args is not None:
+        if self._ran:
             raise RuntimeError(f"Graph {name!r} was run twice in one run.")
         if set(inputs) != set(self.input_names):
             raise TypeError(
@@ -217,8 +171,7 @@ class GraphExecutor:
                 "to pass each input as a tensor."
             )
         args = tuple(inputs[key].to(self._device) for key in self.input_names)
-        self._record.args = args
-        self._record.versions = tuple(arg._version for arg in args)
+        self._ran = True
         return self._check_outputs(self._runner(args))
 
     def _check_outputs(self, produced: Mapping[str, GraphTensor]) -> dict[str, GraphTensor]:
@@ -248,36 +201,10 @@ class GraphExecutor:
         return {key: produced[key] for key in self.output_names}
 
 
-class GraphExecutors(Mapping[str, GraphExecutor]):
-    """The executors of one run, by graph name, and the device they run on.
-
-    What the deployed function receives: ``executors[name].run(**inputs)`` runs one graph.
-
-    Attributes:
-        device: Device every executor runs on; the function moves the tensors it makes there.
-    """
-
-    def __init__(self, executors: Mapping[str, GraphExecutor], device: torch.device) -> None:
-        self._executors = dict(executors)
-        self.device = device
-
-    def __getitem__(self, name: str) -> GraphExecutor:
-        try:
-            return self._executors[name]
-        except KeyError:
-            raise KeyError(
-                f"No graph {name!r}; the model declares {sorted(self._executors)}."
-            ) from None
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._executors)
-
-    def __len__(self) -> int:
-        return len(self._executors)
-
-
-#: ``deployment_forward(multi_task_batch_inputs, executors) -> {output name: tensor}``.
-DeploymentForward = Callable[[ModelBatchInputs, GraphExecutors], Mapping[str, GraphTensor]]
+#: The deployed inference: ``forward(multi_task_batch_inputs, executors, device) -> model outputs``.
+DeploymentForward = Callable[
+    [ModelBatchInputs, Mapping[str, GraphExecutor], torch.device], Mapping[str, GraphTensor]
+]
 
 
 @dataclass(frozen=True)
@@ -285,40 +212,37 @@ class DeploymentDeclaration:
     """A model's deployment: the graphs it exports and the function that runs them.
 
     Attributes:
-        graphs: The exported graphs, checked by :func:`validate_graphs`.
+        graphs: The exported graphs, at least one, with unique names (each name is an
+            artifact's file name).
         forward: The deployed inference,
-            ``forward(multi_task_batch_inputs, executors) -> model outputs``.
+            ``forward(multi_task_batch_inputs, executors, device) -> model outputs``.
     """
 
     graphs: tuple[DeploymentGraph, ...]
     forward: DeploymentForward
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "graphs", validate_graphs(self.graphs))
+        """Keep the graphs as a tuple and refuse an empty declaration or a repeated name.
 
-
-class DeploymentResult(NamedTuple):
-    """What one run of a deployment produced, on any backend.
-
-    Attributes:
-        outputs: The model outputs the deployed function returned, by name.
-        graph_inputs: The logical inputs of each graph run, by graph name: the tensors the
-            deployed function passed ``run()``, moved to the run device, in ``input_names``
-            order. Export traces each graph on them. They are not necessarily the tensors a
-            backend finally bound to its artifact: an ONNX Runtime or TensorRT runner may
-            feed a host, contiguous or re-typed copy of them.
-    """
-
-    outputs: dict[str, GraphTensor]
-    graph_inputs: dict[str, tuple[GraphTensor, ...]]
+        Raises:
+            ValueError: On no graph, or on two graphs with one name.
+        """
+        graphs = tuple(self.graphs)
+        if not graphs:
+            raise ValueError("A deployment needs at least one exportable DeploymentGraph.")
+        names = [graph.name for graph in graphs]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"Duplicate graph names: {duplicates}.")
+        object.__setattr__(self, "graphs", graphs)
 
 
 def run_deployment(
     deployment: DeploymentDeclaration,
-    runner_for: Callable[[DeploymentGraph], BackendGraphRunner],
+    runner_for: Callable[[DeploymentGraph], GraphRunner],
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
-) -> DeploymentResult:
+) -> dict[str, GraphTensor]:
     """Run the deployed function once, each graph on ``runner_for(graph)``; check what it did.
 
     ``runner_for`` is the backend seam: :func:`run_deployment_in_torch` runs each graph's
@@ -332,25 +256,18 @@ def run_deployment(
         device: Device the graphs run on.
 
     Returns:
-        The model outputs and the logical inputs each graph ran on.
+        The model outputs the deployed function returned, by name.
 
     Raises:
         TypeError: When a graph gets a non-tensor input, or the function returns something
             other than a non-empty mapping of tensors.
-        ValueError: When the function modifies a graph input in place after the graph ran;
-            export traces the graph on that tensor.
         RuntimeError: When the function skips a declared graph or runs one twice.
     """
-    records = {graph.name: _GraphRunRecord() for graph in deployment.graphs}
-    executors = GraphExecutors(
-        {
-            graph.name: GraphExecutor(graph, runner_for(graph), device, records[graph.name])
-            for graph in deployment.graphs
-        },
-        device,
-    )
+    executors = {
+        graph.name: GraphExecutor(graph, runner_for(graph), device) for graph in deployment.graphs
+    }
     with torch.no_grad():
-        outputs = deployment.forward(multi_task_batch_inputs, executors)
+        outputs = deployment.forward(multi_task_batch_inputs, executors, device)
     if not isinstance(outputs, Mapping) or not outputs:
         raise TypeError(
             "deployment_forward returns the model outputs as a non-empty mapping of name -> "
@@ -361,45 +278,36 @@ def run_deployment(
         raise TypeError(
             f"deployment_forward returned model outputs that are not tensors: {others}."
         )
-    graph_inputs: dict[str, tuple[GraphTensor, ...]] = {}
-    uncalled: list[str] = []
-    for name, record in records.items():
-        if record.args is None:
-            uncalled.append(name)
-        else:
-            graph_inputs[name] = record.args
+    uncalled = [name for name, executor in executors.items() if not executor.ran]
     if uncalled:
         raise RuntimeError(
             f"deployment_forward did not run the declared graphs {uncalled}; every declared "
             "graph is exported, so each has to run."
         )
-    modified = {
-        graph.name: records[graph.name].modified_inputs(graph.input_names)
-        for graph in deployment.graphs
-    }
-    modified = {name: names for name, names in modified.items() if names}
-    if modified:
-        raise ValueError(
-            f"deployment_forward modified graph inputs in place after the graphs ran: "
-            f"{modified}; export traces each graph on the tensors it ran on."
-        )
-    return DeploymentResult(dict(outputs), graph_inputs)
+    return dict(outputs)
 
 
 def run_deployment_in_torch(
     deployment: DeploymentDeclaration,
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
-) -> DeploymentResult:
+) -> dict[str, GraphTensor]:
     """Run the deployed function once in PyTorch, every graph on its own module.
 
-    Export takes its trace inputs from ``graph_inputs``. Modules run in their current mode;
-    export switches them to eval first.
+    Modules run in their current mode; export switches them to eval first.
+
+    Args:
+        deployment: The model's graphs and deployed function.
+        multi_task_batch_inputs: The preprocessed batch, as ``forward()`` takes it.
+        device: Device the graphs run on; the inputs of each graph are moved there.
+
+    Returns:
+        The model outputs the deployed function returned, by name.
 
     Raises:
-        TypeError: When a graph returns a mapping, or as :func:`run_deployment`.
-        ValueError: When a graph returns another number of tensors than it declares, or as
-            :func:`run_deployment`.
+        ValueError: When a graph's module returns another number of tensors than it
+            declares, or a mapping in another order.
+        TypeError: As :func:`run_deployment`.
         RuntimeError: As :func:`run_deployment`.
     """
     return run_deployment(
@@ -436,7 +344,11 @@ def build_export_specs_from_deployment(
     multi_task_batch_inputs: ModelBatchInputs,
     device: torch.device,
 ) -> dict[str, ExportSpec]:
-    """Run the deployed function once and return ``{graph name: ExportSpec}`` per graph.
+    """Run the deployed function once in PyTorch and return ``{graph name: ExportSpec}``.
+
+    Each graph is traced on a copy of the tensors the function passed it, taken when the
+    graph ran, so what the function does with those tensors afterwards does not reach the
+    trace.
 
     The graph modules are switched to eval first. An export wrapper starts in training
     mode, and ``torch.onnx.export`` restores the module's mode recursively when it is done:
@@ -447,11 +359,25 @@ def build_export_specs_from_deployment(
         deployment: The model's graphs and deployed function.
         multi_task_batch_inputs: One preprocessed example batch.
         device: Device of the tracing run.
+
+    Raises:
+        ValueError: As :func:`run_deployment_in_torch`.
+        TypeError: As :func:`run_deployment_in_torch`.
+        RuntimeError: As :func:`run_deployment_in_torch`.
     """
+    trace_inputs: dict[str, tuple[GraphTensor, ...]] = {}
+
+    def runner_for(graph: DeploymentGraph) -> GraphRunner:
+        def run(args: tuple[GraphTensor, ...]) -> dict[str, GraphTensor]:
+            trace_inputs[graph.name] = tuple(arg.detach().clone() for arg in args)
+            return run_graph_module(graph, args)
+
+        return run
+
     for graph in deployment.graphs:
         graph.module.eval()
-    result = run_deployment_in_torch(deployment, multi_task_batch_inputs, device)
+    run_deployment(deployment, runner_for, multi_task_batch_inputs, device)
     return {
-        graph.name: export_spec_for_graph(graph, result.graph_inputs[graph.name])
+        graph.name: export_spec_for_graph(graph, trace_inputs[graph.name])
         for graph in deployment.graphs
     }

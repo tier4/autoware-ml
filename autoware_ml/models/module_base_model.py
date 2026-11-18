@@ -38,8 +38,8 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
-    GraphExecutors,
     DeploymentGraph,
+    GraphExecutor,
     build_export_specs_from_deployment,
 )
 from autoware_ml.metrics.base import MetricSuite
@@ -443,17 +443,20 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         return None
 
     def deployment_forward(
-        self, multi_task_batch_inputs: ModelBatchInputs, executors: GraphExecutors
+        self,
+        multi_task_batch_inputs: ModelBatchInputs,
+        executors: Mapping[str, GraphExecutor],
+        device: torch.device,
     ) -> Mapping[str, Shaped[torch.Tensor, "*shape"]]:
-        """Run the deployed inference: the glue in plain code, each graph called by name.
+        """Run the deployed inference: the PyTorch code between the graphs, each graph by name.
 
         ``executors[name].run(**inputs)`` runs one declared graph and returns its outputs by name;
-        every declared graph runs exactly once. Tensors the function creates go to
-        ``executors.device``. The returned tensors are the model outputs.
+        every declared graph runs exactly once. The returned tensors are the model outputs.
 
         Args:
             multi_task_batch_inputs: The preprocessed batch, as :meth:`forward` takes it.
-            executors: The executors of this run, one per declared graph.
+            executors: The executors of this run, one per declared graph, by graph name.
+            device: Device the graphs run on; tensors the function creates go there.
 
         Returns:
             The model outputs by name.
@@ -462,6 +465,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
             f"{type(self).__name__} declares deployment_graphs() but not deployment_forward()."
         )
 
+    @final
     def deployment_declaration(self) -> DeploymentDeclaration | None:
         """Return the model's deployment, or ``None`` when it declares no graphs."""
         graphs = self.deployment_graphs()
@@ -491,9 +495,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """
         deployment = self.deployment_declaration()
         if deployment is None:
-            # TODO(vividf): Drop this fallback with build_export_spec(). Once every model
-            # declares deployment_graphs(), this method only derives the specs and is no longer
-            # overridden.
+            # TODO(vividf): Drop this fallback with build_export_spec() and mark this method
+            # @final. Once every model declares deployment_graphs(), it only derives the specs
+            # and is no longer overridden.
             return {"end_to_end": self.build_export_spec(multi_task_batch_inputs)}
         # A submodule can be in training mode under a model in eval mode.
         in_training = [

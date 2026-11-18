@@ -27,13 +27,11 @@ from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
     DeploymentForward,
     DeploymentGraph,
-    DeploymentResult,
     GraphExecutor,
     GraphTensor,
     run_deployment,
     run_deployment_in_torch,
     run_graph_module,
-    validate_graphs,
 )
 
 
@@ -69,16 +67,16 @@ def _toy_graphs(
     )
 
 
-def _toy_forward(multi_task_batch_inputs, executors):
+def _toy_forward(multi_task_batch_inputs, executors, device):
     y = executors["encoder"].run(x=multi_task_batch_inputs["x"].float())["y"]
-    return executors["head"].run(z=y.to(executors.device) + 0.5)
+    return executors["head"].run(z=y.to(device) + 0.5)
 
 
 def _run(
     forward: DeploymentForward = _toy_forward,
     graphs: Sequence[DeploymentGraph] | None = None,
     x: Shaped[torch.Tensor, " num"] | None = None,
-) -> DeploymentResult:
+) -> dict[str, GraphTensor]:
     """Run ``forward`` on the toy graphs (or ``graphs``) in PyTorch, on the batch ``{"x": x}``."""
     return run_deployment_in_torch(
         DeploymentDeclaration(_toy_graphs() if graphs is None else graphs, forward),
@@ -90,27 +88,27 @@ def _run(
 class TestGraphDeclaration(unittest.TestCase):
     """Unit tests for the graph declaration and its checks."""
 
-    def test_validate_returns_a_tuple_in_declaration_order(self) -> None:
-        """Test that validation returns the graphs as a tuple, in order.
+    def test_the_declaration_keeps_its_graphs_as_a_tuple_in_order(self) -> None:
+        """Test that the declaration keeps the graphs as a tuple, in declaration order.
 
-        Input: the two toy graphs as a list, ``encoder`` then ``head``.
-        Expected: a tuple with the same names in the same order.
-        Check: the type of the result and its graph names.
+        Input: a declaration from the two toy graphs as a list, ``encoder`` then ``head``.
+        Expected: ``graphs`` is a tuple with the same names in the same order.
+        Check: the type of ``graphs`` and its graph names.
         """
-        graphs = validate_graphs(list(_toy_graphs()))
-        self.assertIsInstance(graphs, tuple)
-        self.assertEqual([graph.name for graph in graphs], ["encoder", "head"])
+        deployment = DeploymentDeclaration(list(_toy_graphs()), _toy_forward)
+        self.assertIsInstance(deployment.graphs, tuple)
+        self.assertEqual([graph.name for graph in deployment.graphs], ["encoder", "head"])
 
     def test_duplicate_graph_names_rejected(self) -> None:
         """Test that two graphs with one name are rejected: the name is the artifact name.
 
-        Input: the ``encoder`` graph twice.
+        Input: a declaration with the ``encoder`` graph twice.
         Expected: ValueError listing ``['encoder']`` as duplicate.
         Check: the error message.
         """
         encoder, _ = _toy_graphs()
         with self.assertRaisesRegex(ValueError, r"Duplicate graph names: \['encoder'\]"):
-            validate_graphs((encoder, encoder))
+            DeploymentDeclaration((encoder, encoder), _toy_forward)
 
     def test_graph_names_each_onnx_tensor_once(self) -> None:
         """Test that a graph naming one ONNX tensor twice is rejected.
@@ -138,19 +136,6 @@ class TestGraphDeclaration(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one exportable DeploymentGraph"):
             DeploymentDeclaration((), _toy_forward)
 
-    def test_deployed_model_checks_its_graphs(self) -> None:
-        """Test that the deployment checks and keeps its graphs as a tuple.
-
-        Input: a declaration from a list of the toy graphs, then one from a duplicated graph.
-        Expected: the first keeps its graphs as a tuple; the second raises ValueError.
-        Check: the type of ``graphs`` and the error message.
-        """
-        deployment = DeploymentDeclaration(list(_toy_graphs()), _toy_forward)
-        self.assertIsInstance(deployment.graphs, tuple)
-        encoder, _ = _toy_graphs()
-        with self.assertRaisesRegex(ValueError, "Duplicate graph names"):
-            DeploymentDeclaration((encoder, encoder), _toy_forward)
-
 
 class TestRunDeploymentInTorch(unittest.TestCase):
     """Unit tests for running a deployment in PyTorch and its runtime checks."""
@@ -159,15 +144,14 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         """Test that the function runs the graphs and its return value is the model outputs.
 
         Input: the toy deployment on ``x = [1, 2, 3]``.
-        Expected: ``plus = 2x + 1.5`` and ``minus = 2x - 0.5``, and one input record per graph.
-        Check: the output names and values, and the recorded graph names in order.
+        Expected: ``plus = 2x + 1.5`` and ``minus = 2x - 0.5``.
+        Check: the output names and values.
         """
-        result = _run(x=torch.tensor([1, 2, 3]))
-        # encoder: y=2x; glue: z=y+0.5; head: plus=z+1, minus=z-1
-        self.assertEqual(list(result.outputs), ["plus", "minus"])
-        self.assertTrue(torch.equal(result.outputs["plus"], torch.tensor([3.5, 5.5, 7.5])))
-        self.assertTrue(torch.equal(result.outputs["minus"], torch.tensor([1.5, 3.5, 5.5])))
-        self.assertEqual(list(result.graph_inputs), ["encoder", "head"])
+        outputs = _run(x=torch.tensor([1, 2, 3]))
+        # encoder: y=2x; between the graphs: z=y+0.5; head: plus=z+1, minus=z-1
+        self.assertEqual(list(outputs), ["plus", "minus"])
+        self.assertTrue(torch.equal(outputs["plus"], torch.tensor([3.5, 5.5, 7.5])))
+        self.assertTrue(torch.equal(outputs["minus"], torch.tensor([1.5, 3.5, 5.5])))
 
     def test_keyword_inputs_bind_in_the_declared_order(self) -> None:
         """Test that a graph's arguments follow its declared ``input_names``, not the call's order.
@@ -186,15 +170,15 @@ class TestRunDeploymentInTorch(unittest.TestCase):
             ),
         )
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             a, b = torch.tensor([10.0]), torch.tensor([1.0])
             outputs = dict(executors["ab"].run(b=b, a=a))
             outputs.update(executors["ba"].run(a=a, b=b))
             return outputs
 
-        result = _run(forward, graphs)
-        self.assertTrue(torch.equal(result.outputs["a_minus_b"], torch.tensor([9.0])))
-        self.assertTrue(torch.equal(result.outputs["b_minus_a"], torch.tensor([-9.0])))
+        outputs = _run(forward, graphs)
+        self.assertTrue(torch.equal(outputs["a_minus_b"], torch.tensor([9.0])))
+        self.assertTrue(torch.equal(outputs["b_minus_a"], torch.tensor([-9.0])))
 
     def test_graph_output_arity_is_checked(self) -> None:
         """Test that a graph returning fewer tensors than it declares is rejected, by name.
@@ -208,20 +192,41 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         ):
             _run(graphs=_toy_graphs(head=_Double()))
 
-    def test_graph_returning_a_mapping_is_rejected(self) -> None:
-        """Test that a graph returning its outputs as a mapping is rejected, by name.
+    def test_graph_returning_a_mapping_in_the_declared_order_is_accepted(self) -> None:
+        """Test that a graph module may return its outputs as a mapping in the declared order.
 
-        Input: the toy deployment with a ``head`` module that returns a dict.
-        Expected: TypeError naming ``head``.
-        Check: the error message.
+        Input: the toy deployment with a ``head`` module returning ``{"plus", "minus"}``.
+        Expected: the model outputs ``plus = 2x + 1.5`` and ``minus = 2x - 0.5``.
+        Check: the output names and values.
         """
 
         class _DictHead(nn.Module):
             def forward(self, x):
                 return {"plus": x + 1, "minus": x - 1}
 
-        with self.assertRaisesRegex(TypeError, r"'head' returned a mapping"):
-            _run(graphs=_toy_graphs(head=_DictHead()))
+        outputs = _run(graphs=_toy_graphs(head=_DictHead()))
+        self.assertEqual(list(outputs), ["plus", "minus"])
+        self.assertTrue(torch.equal(outputs["plus"], torch.tensor([3.5])))
+        self.assertTrue(torch.equal(outputs["minus"], torch.tensor([1.5])))
+
+    def test_graph_returning_a_mapping_in_another_order_is_rejected(self) -> None:
+        """Test that a graph module returning a mapping in another order than declared is
+        rejected: ONNX export names the outputs by position.
+
+        Input: the toy deployment with a ``head`` module returning ``minus`` before ``plus``.
+        Expected: ValueError naming ``head``, the returned and the declared order.
+        Check: the error message.
+        """
+
+        class _ReversedHead(nn.Module):
+            def forward(self, x):
+                return {"minus": x - 1, "plus": x + 1}
+
+        with self.assertRaisesRegex(
+            ValueError,
+            r"'head' returned the outputs \['minus', 'plus'\]; it declares \['plus', 'minus'\]",
+        ):
+            _run(graphs=_toy_graphs(head=_ReversedHead()))
 
     def test_graph_inputs_are_tensors(self) -> None:
         """Test that a graph input that is not a tensor is rejected.
@@ -231,7 +236,7 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         Check: the error message.
         """
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             return executors["head"].run(
                 z=[executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]]
             )
@@ -247,24 +252,24 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         Check: the error message.
         """
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             return executors["encoder"].run(features=multi_task_batch_inputs["x"])
 
         with self.assertRaisesRegex(TypeError, r"missing \['x'\], unknown \['features'\]"):
             _run(forward)
 
-    def test_an_undeclared_graph_is_named(self) -> None:
-        """Test that calling a graph the model does not declare lists the declared ones.
+    def test_an_undeclared_graph_is_a_key_error(self) -> None:
+        """Test that calling a graph the model does not declare fails on the lookup.
 
         Input: a function indexing ``executors["backbone"]`` on the toy deployment.
-        Expected: KeyError naming ``backbone`` and listing ``['encoder', 'head']``.
+        Expected: KeyError naming ``backbone``.
         Check: the error message.
         """
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             return executors["backbone"].run(x=multi_task_batch_inputs["x"])
 
-        with self.assertRaisesRegex(KeyError, r"No graph 'backbone'.*\['encoder', 'head'\]"):
+        with self.assertRaisesRegex(KeyError, "backbone"):
             _run(forward)
 
     def test_a_declared_graph_left_uncalled_is_rejected(self) -> None:
@@ -275,7 +280,7 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         Check: the error message.
         """
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             return executors["encoder"].run(x=multi_task_batch_inputs["x"])
 
         with self.assertRaisesRegex(RuntimeError, r"did not run the declared graphs \['head'\]"):
@@ -289,7 +294,7 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         Check: the error message.
         """
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             executors["encoder"].run(x=multi_task_batch_inputs["x"])
             return executors["encoder"].run(x=multi_task_batch_inputs["x"])
 
@@ -305,11 +310,11 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         Check: both error messages.
         """
 
-        def as_tuple(multi_task_batch_inputs, executors):
+        def as_tuple(multi_task_batch_inputs, executors, device):
             y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
             return tuple(executors["head"].run(z=y).values())
 
-        def with_a_list(multi_task_batch_inputs, executors):
+        def with_a_list(multi_task_batch_inputs, executors, device):
             y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
             outputs = dict(executors["head"].run(z=y))
             outputs["extra"] = [y]
@@ -319,41 +324,6 @@ class TestRunDeploymentInTorch(unittest.TestCase):
             _run(as_tuple)
         with self.assertRaisesRegex(TypeError, r"not tensors: \['extra'\]"):
             _run(with_a_list)
-
-    def test_a_graph_input_modified_after_the_call_is_rejected(self) -> None:
-        """Test that the function modifying a graph's input after the call is rejected.
-
-        Input: a function that runs ``encoder`` on ``x`` and then adds 100 to ``x`` in place.
-        Expected: ValueError listing ``{'encoder': ['x']}``.
-        Check: the error message.
-        """
-
-        def forward(multi_task_batch_inputs, executors):
-            x = multi_task_batch_inputs["x"].float()
-            y = executors["encoder"].run(x=x)["y"]
-            x.add_(100.0)
-            return executors["head"].run(z=y)
-
-        with self.assertRaisesRegex(ValueError, r"after the graphs ran: \{'encoder': \['x'\]\}"):
-            _run(forward)
-
-    def test_graph_inputs_are_the_tensors_the_graph_ran_on(self) -> None:
-        """Test that the recorded graph inputs are the tensors the function passed.
-
-        Input: a function that keeps a reference to the tensor it passes ``head``.
-        Expected: the recorded ``head`` input is that same tensor object.
-        Check: identity of the recorded input.
-        """
-        seen = {}
-
-        def forward(multi_task_batch_inputs, executors):
-            y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
-            seen["z"] = y + 0.5
-            return executors["head"].run(z=seen["z"])
-
-        result = _run(forward)
-        (head_input,) = result.graph_inputs["head"]
-        self.assertIs(head_input, seen["z"])
 
 
 class _CopyingRunner:
@@ -386,19 +356,19 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
 
     def _run_on_copying_runners(
         self, forward: DeploymentForward = _toy_forward
-    ) -> tuple[DeploymentResult, dict[str, _CopyingRunner]]:
+    ) -> tuple[dict[str, GraphTensor], dict[str, _CopyingRunner]]:
         runners = {graph.name: _CopyingRunner(graph) for graph in _toy_graphs()}
-        result = run_deployment(
+        outputs = run_deployment(
             DeploymentDeclaration(tuple(runners[name].graph for name in runners), forward),
             lambda graph: runners[graph.name],
             {"x": torch.tensor([1.0])},
             torch.device("cpu"),
         )
-        return result, runners
+        return outputs, runners
 
     def _run_with_encoder_outputs(
         self, rewrite: Callable[[dict[str, GraphTensor]], object]
-    ) -> DeploymentResult:
+    ) -> dict[str, GraphTensor]:
         """Run the toy deployment with the encoder runner's outputs passed through ``rewrite``."""
         encoder, head = _toy_graphs()
         runners = {"encoder": _RewritingRunner(encoder, rewrite), "head": _CopyingRunner(head)}
@@ -465,53 +435,34 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
             "encoder": _CopyingRunner(_toy_graphs()[0]),
             "head": _RewritingRunner(head, lambda outputs: dict(reversed(list(outputs.items())))),
         }
-        result = run_deployment(
+        outputs = run_deployment(
             DeploymentDeclaration((runners["encoder"].graph, head), _toy_forward),
             lambda graph: runners[graph.name],
             {"x": torch.tensor([1.0])},
             torch.device("cpu"),
         )
-        self.assertEqual(list(result.outputs), ["plus", "minus"])
+        self.assertEqual(list(outputs), ["plus", "minus"])
 
-    def test_graph_inputs_are_the_logical_inputs_not_the_bound_copies(self) -> None:
-        """Test that the recorded graph inputs are the tensors the function passed, even when
-        the runner bound a copy of them to its artifact.
+    def test_a_runner_gets_the_graph_inputs_positionally(self) -> None:
+        """Test that a runner receives the graph's inputs positionally, in ``input_names`` order.
 
         Input: the toy deployment on copying runners, the function keeping its ``x``.
-        Expected: the recorded ``encoder`` input is that ``x``; the bound tensor is another
-            object; ``plus`` is still ``2x + 1``.
-        Check: identity of the recorded and the bound input, and the ``plus`` value.
+        Expected: the ``encoder`` runner bound one tensor equal to ``x``, its own copy, and
+            ``plus`` is ``2x + 1.5``.
+        Check: the bound tensor's value and identity, and the ``plus`` value.
         """
         seen = {}
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             seen["x"] = multi_task_batch_inputs["x"]
             y = executors["encoder"].run(x=seen["x"])["y"]
-            return executors["head"].run(z=y)
+            return executors["head"].run(z=y + 0.5)
 
-        result, runners = self._run_on_copying_runners(forward)
-        (encoder_input,) = result.graph_inputs["encoder"]
-        self.assertIs(encoder_input, seen["x"])
+        outputs, runners = self._run_on_copying_runners(forward)
         (bound,) = runners["encoder"].bound
+        self.assertTrue(torch.equal(bound, seen["x"]))
         self.assertIsNot(bound, seen["x"])
-        self.assertTrue(torch.equal(result.outputs["plus"], torch.tensor([3.0])))
-
-    def test_an_input_modified_after_the_run_is_rejected_on_any_runner(self) -> None:
-        """Test that the in-place check guards every backend, not only the PyTorch run.
-
-        Input: copying runners and a function adding 100 to ``x`` in place after ``encoder``.
-        Expected: ValueError listing ``{'encoder': ['x']}``.
-        Check: the error message.
-        """
-
-        def forward(multi_task_batch_inputs, executors):
-            x = multi_task_batch_inputs["x"]
-            y = executors["encoder"].run(x=x)["y"]
-            x.add_(100.0)
-            return executors["head"].run(z=y)
-
-        with self.assertRaisesRegex(ValueError, r"after the graphs ran: \{'encoder': \['x'\]\}"):
-            self._run_on_copying_runners(forward)
+        self.assertTrue(torch.equal(outputs["plus"], torch.tensor([3.5])))
 
     def test_the_executor_exposes_its_names_and_run_only(self) -> None:
         """Test that the deployed function sees a graph's name, input and output names and
@@ -524,7 +475,7 @@ class TestRunDeploymentOnARunner(unittest.TestCase):
         """
         seen = {}
 
-        def forward(multi_task_batch_inputs, executors):
+        def forward(multi_task_batch_inputs, executors, device):
             seen["encoder"] = executors["encoder"]
             y = executors["encoder"].run(x=multi_task_batch_inputs["x"])["y"]
             return executors["head"].run(z=y)
