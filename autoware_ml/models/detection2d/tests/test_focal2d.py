@@ -23,7 +23,7 @@ from jaxtyping import Bool, Float, Float32, Int64
 import torch
 
 from autoware_ml.dataclasses.models.detection3d.head_outputs import FocalHead2DOutputs
-from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D, _GroundTruth2D
+from autoware_ml.models.detection2d.heads.focal2d import FocalHead2D
 from autoware_ml.models.detection3d.task_modules.heatmap import draw_heatmap_gaussian
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 
@@ -95,15 +95,11 @@ class TestFocalHead2D(unittest.TestCase):
         centers: list[Float32[torch.Tensor, "num_boxes 2"]],
     ) -> Float32[torch.Tensor, "num_images num_classes feature_height feature_width"]:
         """The heatmaps of the given images on the 6 x 10 grid, one channel per class."""
-        ground_truth = _GroundTruth2D(
-            bboxes=torch.cat(boxes),
-            labels=torch.cat(labels),
-            centers=torch.cat(centers),
-            counts=[box.shape[0] for box in boxes],
+        outputs = self.head(torch.randn(1, 1, 32, 6, 10), IMAGE_HEIGHT, IMAGE_WIDTH)
+        ground_truth = self.head._padded_ground_truth(
+            outputs, boxes, labels, centers, torch.zeros(len(boxes), dtype=torch.bool)
         )
-        heatmaps = self.head._build_heatmaps(
-            ground_truth, FEATURE_HEIGHT, FEATURE_WIDTH, torch.device("cpu")
-        )
+        heatmaps = self.head._build_heatmaps(ground_truth, FEATURE_HEIGHT, FEATURE_WIDTH)
         return heatmaps.transpose(1, 2).reshape(len(boxes), -1, FEATURE_HEIGHT, FEATURE_WIDTH)
 
     def test_forward_predicts_every_token_of_every_image(self) -> None:
