@@ -83,6 +83,10 @@ class _AugmentedDataset(BaseDataset):
 class TestStreamSlot(unittest.TestCase):
     """The augmentation a dataset applies to the frames of a stream."""
 
+    def setUp(self) -> None:
+        """Set up the dataset behind one random transform shared by the tests."""
+        self.dataset = _AugmentedDataset()
+
     def test_frames_of_a_stream_are_augmented_alike_and_other_frames_on_their_own(self) -> None:
         """
         Input: a dataset behind one random transform, two streams drawn from it, and frames
@@ -92,13 +96,12 @@ class TestStreamSlot(unittest.TestCase):
         Check: the three frames of one stream record its draw, the other stream records
         another one, and two plain reads of one frame record different draws.
         """
-        dataset = _AugmentedDataset()
-        stream = dataset.sample_stream_augmentation(0)
-        other = dataset.sample_stream_augmentation(0)
+        stream = self.dataset.sample_stream_augmentation(0)
+        other = self.dataset.sample_stream_augmentation(0)
 
-        in_stream = [dataset.draw(StreamSlot(index, stream)) for index in (0, 1, 0)]
-        other_stream = dataset.draw(StreamSlot(0, other))
-        on_their_own = [dataset.draw(0), dataset.draw(0)]
+        in_stream = [self.dataset.draw(StreamSlot(index, stream)) for index in (0, 1, 0)]
+        other_stream = self.dataset.draw(StreamSlot(0, other))
+        on_their_own = [self.dataset.draw(0), self.dataset.draw(0)]
 
         self.assertEqual(set(in_stream), {stream[0].values})
         self.assertEqual(other_stream, other[0].values)
@@ -122,11 +125,10 @@ class TestStreamSlot(unittest.TestCase):
         Expected: only the padding slot is served as padding.
         Check: is_padding is False for the stream slot and True for the padding slot.
         """
-        dataset = _AugmentedDataset()
-        stream = dataset.sample_stream_augmentation(0)
+        stream = self.dataset.sample_stream_augmentation(0)
 
-        self.assertFalse(dataset[StreamSlot(1, stream)].is_padding)
-        self.assertTrue(dataset[StreamPaddingSlot(1, stream)].is_padding)
+        self.assertFalse(self.dataset[StreamSlot(1, stream)].is_padding)
+        self.assertTrue(self.dataset[StreamPaddingSlot(1, stream)].is_padding)
 
     def test_a_split_hands_its_sources_the_augmentation_of_a_slot(self) -> None:
         """
@@ -135,14 +137,14 @@ class TestStreamSlot(unittest.TestCase):
         Expected: the split forwards the augmentation of the slot to the source serving it.
         Check: both sources record the one draw of the stream.
         """
-        first, second = _AugmentedDataset(), _AugmentedDataset()
-        split = ConcatDataset([first, second], repeats=[1, 1])
+        second = _AugmentedDataset()
+        split = ConcatDataset([self.dataset, second], repeats=[1, 1])
         stream = split.sample_stream_augmentation(3)
 
         split[StreamSlot(0, stream)]
         split[StreamSlot(3, stream)]
 
-        self.assertEqual(first.rotate.draws, [stream[0].values])
+        self.assertEqual(self.dataset.rotate.draws, [stream[0].values])
         self.assertEqual(second.rotate.draws, [stream[0].values])
 
     def test_a_split_hands_its_sources_the_padding_of_a_slot(self) -> None:
@@ -153,7 +155,7 @@ class TestStreamSlot(unittest.TestCase):
         Check: the source receives a StreamPaddingSlot on index 1 carrying the augmentation,
         then a plain PaddingSlot.
         """
-        split = ConcatDataset([_AugmentedDataset(), _AugmentedDataset()], repeats=[1, 1])
+        split = ConcatDataset([self.dataset, _AugmentedDataset()], repeats=[1, 1])
         stream = split.sample_stream_augmentation(3)
 
         served: list[int] = []
