@@ -286,13 +286,19 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         executors: Mapping[str, GraphExecutor],
         device: torch.device,
     ) -> Mapping[str, Float32[torch.Tensor, "batch_size channels height width"]]:
-        """Run the split the Autoware runtime runs::
+        """Run the split the Autoware runtime runs: decorate, the voxel encoder graph, scatter,
+        the backbone-neck-head graph. Decoration and scatter have no learned parameters.
 
-            decorate -> pts_voxel_encoder_centerpoint -> scatter
-                -> pts_backbone_neck_head_centerpoint
+        Args:
+            multi_task_batch_inputs: The preprocessed batch, holding the voxels.
+            executors: The executors of this run, one per declared graph, by graph name.
+            device: Device the graphs run on; the scatter canvas is built there.
 
-        Pillar decoration and the BEV scatter have no learned parameters and stay out of the
-        graphs.
+        Returns:
+            The head maps by name, as :class:`CenterHeadOutputs` names them.
+
+        Raises:
+            ValueError: If the batch holds no voxels.
         """
         voxels = multi_task_batch_inputs.voxels_data
         if voxels is None:
