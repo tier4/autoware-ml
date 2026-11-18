@@ -25,7 +25,6 @@ import pytest
 import torch
 import torch.nn as nn
 
-import autoware_ml.models.segmentation3d.encoders.ptv3 as ptv3_encoder_module
 import autoware_ml.utils.point_cloud.structures as point_structures
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
@@ -68,8 +67,10 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    PTv3ExportContext,
     build_ptv3_encoder_dynamic_axes,
     build_ptv3_export_context,
+    build_seg3d_head_export_spec,
     export_patch_sizes,
     prepare_ptv3_export_inputs,
     require_single_sample_export_batch,
@@ -1389,29 +1390,16 @@ def _jitter_affine_parameters(model: nn.Module) -> None:
                 uniform(module.bias, -0.5, 0.5)
 
 
-def _assert_export_fold_keeps_the_encoder_output(monkeypatch, fold_name: str) -> nn.Module:
-    """Run the export encoder with and without one fold and compare the stage features.
-
-    Returns:
-        The folded export encoder, for checks of what the fold changed.
-    """
-    device = torch.device("cuda")
-    model = build_seg3d_model()
-    _jitter_affine_parameters(model)
-    model = model.to(device).eval()
-    batch = build_inputs(device=device)
-    state = {key: value.clone() for key, value in model.state_dict().items()}
-
-    folded = build_ptv3_export_context(model, batch)
-    monkeypatch.setattr(ptv3_encoder_module, fold_name, lambda module: None)
-    reference = build_ptv3_export_context(model, batch)
-
-    assert len(folded.stage_feats) == len(reference.stage_feats)
-    for folded_feat, reference_feat in zip(folded.stage_feats, reference.stage_feats):
-        torch.testing.assert_close(folded_feat, reference_feat, rtol=1e-5, atol=1e-5)
-    for key, value in model.state_dict().items():
-        assert torch.equal(value, state[key]), key
-    return folded.encoder_module
+def _export_seg3d_model(
+    model: PTv3Segmentation3DModel, batch: ModelBatchInputs
+) -> tuple[PTv3ExportContext, nn.Module, tuple[torch.Tensor, torch.Tensor]]:
+    """Export the encoder and the segmentation head and run both once."""
+    context = build_ptv3_export_context(model, batch)
+    head = model.seg3d_head.prepare_for_export(model.EXPORT_ORDER)
+    spec = build_seg3d_head_export_spec(context, head, model.get_export_output_names())
+    with torch.no_grad():
+        outputs = spec.module(*spec.args)
+    return context, head, outputs
 
 
 @pytest.mark.skipif(
@@ -1419,7 +1407,35 @@ def _assert_export_fold_keeps_the_encoder_output(monkeypatch, fold_name: str) ->
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
 def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
-    export_module = _assert_export_fold_keeps_the_encoder_output(monkeypatch, "fold_cpe_bias")
-    blocks = [module for module in export_module.modules() if isinstance(module, Block)]
-    assert blocks
-    assert all(next(block.cpe.children()).bias is None for block in blocks)
+    device = torch.device("cuda")
+    model = build_seg3d_model()
+    _jitter_affine_parameters(model)
+    model = model.to(device).eval()
+    batch = build_inputs(device=device)
+    state = {key: value.clone() for key, value in model.state_dict().items()}
+
+    folded_context, folded_head, folded_outputs = _export_seg3d_model(model, batch)
+    monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
+    reference_context, _, reference_outputs = _export_seg3d_model(model, batch)
+
+    for folded, reference in zip(
+        folded_context.stage_feats, reference_context.stage_feats, strict=True
+    ):
+        torch.testing.assert_close(folded, reference, rtol=1e-5, atol=1e-5)
+    _, folded_probs = folded_outputs
+    _, reference_probs = reference_outputs
+    torch.testing.assert_close(folded_probs, reference_probs, rtol=1e-5, atol=1e-5)
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, state[key]), key
+    head_blocks = [
+        block
+        for block in folded_head.modules()
+        if isinstance(block, Block) and block.cpe is not None
+    ]
+    encoder_blocks = [
+        block
+        for block in folded_context.encoder_module.modules()
+        if isinstance(block, Block) and block.cpe is not None
+    ]
+    assert head_blocks and encoder_blocks
+    assert all(next(block.cpe.children()).bias is None for block in head_blocks + encoder_blocks)
