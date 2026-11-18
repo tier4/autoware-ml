@@ -883,31 +883,6 @@ class EgoReachability:
         return self._first_meeting(max(start_hat, start_gap), meets)
 
 
-def time_to_collision(
-    ego: Agent,
-    obj: Agent,
-    drivable: BaseGeometry | None,
-    params: ReachabilityParams,
-) -> float:
-    """Earliest ``t`` at which ego and ``obj`` can occupy a common point at time ``t``.
-
-    Returns ``inf`` when no such ``t`` exists within the horizon. ``ego`` must be a wheeled agent
-    and needs ``drivable`` (fronts are clipped to it), pass the road/road_shoulder/crosswalk
-    union in the map frame. One-pair form of :class:`EgoReachability`, which callers evaluating
-    many objects against the same ego frame should build once and query instead.
-
-    Args:
-        ego: Wheeled ego agent in the map frame.
-        obj: Object agent in the map frame.
-        drivable: Drivable surface the wheeled fronts are clipped to.
-        params: Shared reachability parameters.
-
-    Returns:
-        The earliest collision time in seconds, ``inf`` when none exists.
-    """
-    return EgoReachability(ego, drivable, params).time_to_collision(obj)
-
-
 def collision_weights(ttc: np.ndarray, decay: float) -> np.ndarray:
     """Risk weight ``e^(-decay * TTC)`` per entry. An unreachable object (``inf``) weighs 0.
 

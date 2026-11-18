@@ -34,7 +34,6 @@ from autoware_ml.metrics.geometry.reachability import (
     collision_weights,
     localized_surface,
     reachable_set,
-    time_to_collision,
     wheeled_reachable_region,
     wheeled_reachable_set,
 )
@@ -93,7 +92,7 @@ def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
     lead = Agent.wheeled(
         25.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
     )
-    ttc = time_to_collision(ego, lead, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(lead)
     # The 20.2 m between the two bodies close at 20 m/s in 1.01 s, and the corners
     # of the slightly turning bodies swing out enough to take the last 0.2 m.
     assert 1.0 <= ttc <= 1.1
@@ -104,7 +103,7 @@ def test_a_stationary_object_ahead_collides_at_about_distance_over_speed() -> No
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     obj = Agent.static(30.0, 0.0, footprint=_footprint(30.0, 0.0))
-    ttc = time_to_collision(ego, obj, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj)
     assert ttc != inf
     assert 2.4 <= ttc <= 3.1  # ~ (30 - body - half-footprint) / 10
 
@@ -116,7 +115,7 @@ def test_oncoming_closes_at_combined_speed() -> None:
     obj = Agent.wheeled(
         40.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    ttc = time_to_collision(ego, obj, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj)
     assert ttc != inf
     assert 1.7 <= ttc <= 2.1  # ~ 40 / (10 + 10)
 
@@ -130,7 +129,7 @@ def test_oncoming_beyond_ego_reach_still_collides() -> None:
     obj = Agent.wheeled(
         50.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    ttc = time_to_collision(ego, obj, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj)
     assert 2.1 <= ttc <= 2.4  # ~ (50 - 2 * 3.4 body reach) / 20
 
 
@@ -139,7 +138,7 @@ def test_crossing_omnidirectional_agent_is_finite_within_horizon() -> None:
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     ped = Agent.omnidirectional(18.0, 6.0, speed=4.0, radius=0.4)
-    ttc = time_to_collision(ego, ped, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(ped)
     assert ttc != inf and ttc <= PARAMS.horizon_s
 
 
@@ -148,7 +147,7 @@ def test_a_far_object_is_unreachable_within_the_horizon() -> None:
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     obj = Agent.static(200.0, 0.0, footprint=_footprint(200.0, 0.0))
-    assert time_to_collision(ego, obj, ROAD, PARAMS) == inf
+    assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj) == inf
 
 
 def test_a_wheeled_set_needs_a_drivable_surface() -> None:
@@ -157,7 +156,7 @@ def test_a_wheeled_set_needs_a_drivable_surface() -> None:
     )
     obj = Agent.static(20.0, 0.0, footprint=_footprint(20.0, 0.0))
     with pytest.raises(ValueError, match="drivable"):
-        time_to_collision(ego, obj, None, PARAMS)
+        EgoReachability(ego, None, PARAMS).time_to_collision(obj)
 
 
 def test_disconnected_road_is_unreachable() -> None:
@@ -171,11 +170,11 @@ def test_disconnected_road_is_unreachable() -> None:
     oncoming_across = Agent.wheeled(
         5.0, 30.0, heading=-pi / 2, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    assert time_to_collision(ego, oncoming_across, split_road, PARAMS) == inf
+    assert EgoReachability(ego, split_road, PARAMS).time_to_collision(oncoming_across) == inf
     off_road = Agent.wheeled(
         0.0, 60.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    assert time_to_collision(ego, off_road, ROAD, PARAMS) == inf
+    assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(off_road) == inf
     # The filled reachable region keeps only the strip the agent is on.
     region = wheeled_reachable_region(ego, PARAMS, split_road)
     assert region.intersection(box(-80.0, 20.0, 200.0, 40.0)).is_empty
@@ -196,7 +195,12 @@ def test_steps_stay_within_horizon() -> None:
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=3.0, dt_s=0.1)).steps == 30
     # A meeting first reachable at 1.1 s lies beyond the 1.0 s horizon, so it stays inf.
     walker = Agent.omnidirectional(7.6, 0.0, speed=5.0, radius=0.5)
-    assert time_to_collision(ego, walker, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
+    assert (
+        EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)).time_to_collision(
+            walker
+        )
+        == inf
+    )
 
 
 def test_collision_weights_monotone_and_bounds() -> None:
@@ -501,7 +505,7 @@ def test_a_one_lane_bend_is_not_overly_pessimistic() -> None:
         0.0, -30.0, heading=pi / 2, speed=10.0, front=2.4, rear=2.4, width=2.0, min_turn_radius=3.0
     )
 
-    ttc = time_to_collision(ego, crossing, junction, PARAMS)
+    ttc = EgoReachability(ego, junction, PARAMS).time_to_collision(crossing)
 
     # Both need about (30 - 3.4 body reach) / 10 seconds to reach the corner.
     assert 2.4 <= ttc <= 3.0
