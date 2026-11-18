@@ -1025,7 +1025,7 @@ class SerializedPooling(PointModule):
                 pooled_order = pooled_order[permutation]
                 pooled_inverse = pooled_inverse[permutation]
 
-        scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, "max")
+        scatter_feat = segment_csr(self.proj(point.feat[indices]), idx_ptr, "max")
         if self.export_mode:
             scatter_coord = grid_coord.to(dtype=point.coord.dtype)
         else:
