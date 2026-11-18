@@ -367,26 +367,38 @@ class TestBuildModel:
                 resume_checkpoint_path=str(tmp_path / "last.ckpt"),
             )
 
+    @pytest.mark.parametrize(
+        ("is_last_batch", "next_epoch"),
+        [(None, 4), (True, 4), (False, 3)],
+        ids=["no-loop-state", "epoch-end", "mid-epoch"],
+    )
     def test_resume_checkpoint_only_reports_progress(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        is_last_batch: bool | None,
+        next_epoch: int,
     ) -> None:
         """
-        Input: a resume checkpoint carrying the epoch and global step, no weights.
+        Input: a resume checkpoint carrying the epoch and global step, no weights, saved at
+            the end of its epoch, mid-epoch, or without loop state.
         Expected: the builder leaves weight restoration to the trainer and only logs where
-            training continues.
-        Check: the log mentions the checkpoint, the saved epoch and the next epoch, and the
-            model keeps its fresh initialization in training mode.
+            training continues: the next epoch, or the same one for a mid-epoch checkpoint.
+        Check: the log mentions the checkpoint, the saved epoch and step, the epoch and step
+            training continues at, and the model keeps its fresh initialization in training mode.
         """
         caplog.set_level("INFO")
         resume_path = tmp_path / "last.ckpt"
-        torch.save(
-            {
-                "epoch": 3,
-                "global_step": 40,
-                "state_dict": {"layer.weight": torch.full((1, _HIDDEN_SIZE), 9.0)},
-            },
-            resume_path,
-        )
+        checkpoint = {
+            "epoch": 3,
+            "global_step": 40,
+            "state_dict": {"layer.weight": torch.full((1, _HIDDEN_SIZE), 9.0)},
+        }
+        if is_last_batch is not None:
+            checkpoint["loops"] = {
+                "fit_loop": {"epoch_loop.batch_progress": {"is_last_batch": is_last_batch}}
+            }
+        torch.save(checkpoint, resume_path)
 
         model = _build(_model_cfg(), resume_checkpoint_path=str(resume_path))
 
@@ -394,7 +406,7 @@ class TestBuildModel:
         assert model.training
         assert f"Resuming from '{resume_path}'" in caplog.text
         assert "epoch 3 (global step 40)" in caplog.text
-        assert "continues at epoch 4" in caplog.text
+        assert f"continues at epoch {next_epoch}, global step 40" in caplog.text
 
 
 class TestResolveWeightsPaths:

@@ -94,13 +94,17 @@ def build_model(
         progress = torch.load(
             resume_checkpoint_path, map_location=device, weights_only=False, mmap=True
         )
+        # A checkpoint saved before its epoch's last batch continues inside that epoch.
+        fit_loop = progress.get("loops", {}).get("fit_loop", {})
+        epoch_done = fit_loop.get("epoch_loop.batch_progress", {}).get("is_last_batch", True)
         logger.info(
             "Resuming from '%s': checkpoint saved at epoch %d (global step %d), "
-            "training continues at epoch %d.",
+            "training continues at epoch %d, global step %d.",
             resume_checkpoint_path,
             progress["epoch"],
             progress["global_step"],
-            progress["epoch"] + 1,
+            progress["epoch"] + int(epoch_done),
+            progress["global_step"],
         )
     logger.info(f"Model built successfully with {model}.")
     return model
