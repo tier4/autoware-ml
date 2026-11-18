@@ -29,6 +29,7 @@ optimizer:
 
 trainer:
   max_epochs: ???
+  precision: bf16-mixed
   # Initial value only, the dynamic_validation callback of the root rewrites it per epoch.
   check_val_every_n_epoch: 5
   gradient_clip_val: 10.0
