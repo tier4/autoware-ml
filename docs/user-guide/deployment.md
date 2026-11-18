@@ -209,29 +209,48 @@ the ONNX carries and never picks its own. Choose the engine's numerics with
 
 ## Model-Owned Export Wrappers
 
-The preferred deployment path is to keep export logic inside the model. Models
-with deployment-specific requirements should override `build_export_spec()` and
-return an explicit export module plus example tensor inputs.
+Export logic stays inside the model. A model declares its deployment with two
+methods:
 
-This keeps export-time behavior close to the model implementation and avoids
-ad hoc post-processing for most cases.
+- `deployment_graphs()` returns one `DeploymentGraph` per exported computation
+  graph (one ONNX file and one TensorRT engine each): its name, its export-ready
+  module, the tensor names it takes and returns, and its dynamic axes.
+- `deployment_forward(multi_task_batch_inputs, executors, device)` is the
+  PyTorch code between the graphs. It takes the preprocessed batch `forward()`
+  takes, runs each graph as `executors[name].run(input_name=tensor)`, creates its
+  own tensors on `device` and returns the model outputs by name.
 
-A model whose deployment splits into several exported graphs with PyTorch glue
-between them can declare that split instead, with two methods: `deployment_graphs()`
-returns its `DeploymentGraph`s (one exported module each, named after the graph, with
-the tensor names it takes and returns), and
-`deployment_forward(multi_task_batch_inputs, executors)` runs the deployed inference on
-the preprocessed batch `forward()` takes, the glue in plain code and each graph run as
-`executors[name].run(input_name=tensor)`. `build_export_specs()` then runs that function
-once on the example batch in eval mode and returns one export spec per
-`DeploymentGraph`, traced on the tensors the function passed it. Every declared graph
-runs exactly once, and a graph's inputs must not be modified in place after
-the run, since export traces the graph on them; the run rejects a function that
-breaks either rule. The model outputs are what `deployment_forward()` returns. Each
-`DeploymentGraph` module is export-ready as declared, the live submodule or the copy
-its `prepare_for_export()` makes; the framework never alters it, and it declares
-the graphs again after replacing a module rather than reusing an earlier
-declaration.
+```python
+def deployment_graphs(self):
+    return (
+        DeploymentGraph("encoder", module=self.encoder, input_names=("features",),
+                        output_names=("encoded",),
+                        onnx_dynamic_axes={"features": {0: "num_points"}, "encoded": {0: "num_points"}}),
+        DeploymentGraph("head", module=self.head, input_names=("bev",), output_names=("heatmap", "reg")),
+    )
+
+def deployment_forward(self, multi_task_batch_inputs, executors, device):
+    encoded = executors["encoder"].run(features=self.featurize(multi_task_batch_inputs))["encoded"]
+    return executors["head"].run(bev=self.scatter(encoded).to(device))
+```
+
+`build_export_specs()` runs `deployment_forward()` once in eval mode and returns
+one export spec per graph, traced on a copy of the tensors the function passed
+it. The rules the run enforces:
+
+- Every declared graph runs exactly once.
+- A graph's module returns its outputs as a tensor, a tuple in `output_names`
+  order, or a mapping with the keys in that order.
+- The function returns a non-empty mapping of name to tensor.
+- A `DeploymentGraph` module is export-ready as declared (the live submodule or
+  the copy its `prepare_for_export()` makes); the framework never alters it and
+  declares the graphs again after replacing a module.
+
+A model whose deployment is one graph without code around it can still override
+`build_export_spec()` and return an export module plus example tensor inputs;
+this single-graph path is kept until TransFusion, FRNet, CalibrationStatus and
+camera-lidar BEVFusion declare `deployment_graphs()` (see the TODO in
+`ModuleBaseModel`).
 
 ## Optional Graph Modification
 
