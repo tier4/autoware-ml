@@ -432,7 +432,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         * Every ``DeploymentGraph.module`` is export-ready when returned: the live submodule
           where tracing it is fine, otherwise the copy its ``prepare_for_export()`` makes.
-          The framework runs and traces the module and never alters it.
+          The framework switches the module to eval mode for the export, runs and traces it,
+          and changes nothing else.
         * The method is pure and cheap enough to call again: callers declare the graphs again
           after replacing modules (e.g. with quantized ones) instead of reusing earlier ones,
           so a copy made here never goes stale.
@@ -451,7 +452,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         """Run the deployed inference: the PyTorch code between the graphs, each graph by name.
 
         ``executors[name].run(**inputs)`` runs one declared graph and returns its outputs by name;
-        every declared graph runs exactly once. The returned tensors are the model outputs.
+        every declared graph runs exactly once, so a sub-network the model applies several
+        times in one inference runs as one graph on the batched inputs. The returned tensors
+        are the model outputs.
 
         Args:
             multi_task_batch_inputs: The preprocessed batch, as :meth:`forward` takes it.

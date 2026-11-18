@@ -52,7 +52,8 @@ class DeploymentGraph:
         name: Unique graph name, also the ``deploy.onnx.modules`` key and the artifact stem.
         module: The traced module, export-ready as declared (the live submodule or an
             export copy); its positional arguments are the ``input_names`` tensors. The
-            framework runs and traces it and never alters it.
+            framework switches it to eval mode for the export, runs and traces it, and
+            changes nothing else.
         input_names: The names the deployed function passes the tensors under, in the
             module's argument order; they are the ONNX input names.
         output_names: ONNX output names, in the module's return order; a run of the graph
@@ -200,19 +201,17 @@ class DeploymentDeclaration:
     forward: DeploymentForward
 
     def __post_init__(self) -> None:
-        """Keep the graphs as a tuple and refuse an empty declaration or a repeated name.
+        """Refuse an empty declaration or a repeated graph name.
 
         Raises:
             ValueError: On no graph, or on two graphs with one name.
         """
-        graphs = tuple(self.graphs)
-        if not graphs:
+        if not self.graphs:
             raise ValueError("A deployment needs at least one exportable DeploymentGraph.")
-        names = [graph.name for graph in graphs]
+        names = [graph.name for graph in self.graphs]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"Duplicate graph names: {duplicates}.")
-        object.__setattr__(self, "graphs", graphs)
 
 
 def run_deployment(

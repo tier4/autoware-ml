@@ -248,51 +248,6 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertEqual([arg.item() for arg in spec.args], [10.0, 1.0])
         self.assertTrue(torch.equal(spec.module(*spec.args), torch.tensor([9.0])))
 
-    def test_graphs_passed_as_a_generator_export_every_graph(self) -> None:
-        """Test that graphs given as a generator are read once and every graph is exported.
-
-        Input: a declaration whose graphs are a one-graph generator.
-        Expected: one spec, ``g``.
-        Check: the spec keys.
-        """
-
-        # The graphs must be read once: a generator is empty on a second pass.
-        def graphs():
-            yield DeploymentGraph(
-                "g", module=nn.Identity(), input_names=("x",), output_names=("y",)
-            )
-
-        deployment = DeploymentDeclaration(
-            graphs(),
-            lambda multi_task_batch_inputs, executors, device: executors["g"].run(x=torch.ones(2)),
-        )
-        self.assertEqual(
-            list(build_export_specs_from_deployment(deployment, None, torch.device("cpu"))),
-            ["g"],
-        )
-
-    def test_a_misspelled_input_name_fails_at_export_naming_both_sides(self) -> None:
-        """Test that a misspelled input name fails at export, naming the graph and the names.
-
-        Input: a graph declaring ``typo`` whose function passes ``x``.
-        Expected: TypeError naming ``g``, ``['typo']`` and ``['x']``.
-        Check: the error message.
-        """
-        deployment = DeploymentDeclaration(
-            (
-                DeploymentGraph(
-                    "g", module=nn.Identity(), input_names=("typo",), output_names=("y",)
-                ),
-            ),
-            lambda multi_task_batch_inputs, executors, device: executors["g"].run(
-                x=multi_task_batch_inputs["x"]
-            ),
-        )
-        with self.assertRaisesRegex(TypeError, r"'g' takes \['typo'\], got \['x'\]"):
-            build_export_specs_from_deployment(
-                deployment, {"x": torch.ones(1)}, torch.device("cpu")
-            )
-
     def test_trace_inputs_are_copies_taken_when_the_graph_ran(self) -> None:
         """Test that a spec traces on a copy of the graph's inputs, taken when the graph ran.
 

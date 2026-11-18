@@ -238,12 +238,23 @@ def deployment_forward(self, multi_task_batch_inputs, executors, device):
 one export spec per graph, traced on a copy of the tensors the function passed
 it. The rules the run enforces:
 
-- Every declared graph runs exactly once.
+- Every declared graph runs exactly once: one graph is one engine with one
+  optimization profile, traced on the inputs of that run. A sub-network the model
+  applies several times in one inference (once per camera, say) is one graph run
+  once on the batched inputs, as BEVFusion's image backbone takes every camera
+  at once.
 - A graph's module returns its outputs as a tensor, a tuple in `output_names`
   order, or a mapping with the keys in that order.
 - A `DeploymentGraph` module is export-ready as declared (the live submodule or
-  the copy its `prepare_for_export()` makes); the framework never alters it and
-  declares the graphs again after replacing a module.
+  the copy its `prepare_for_export()` makes); the framework switches it to eval
+  mode for the export and changes nothing else, and declares the graphs again
+  after replacing a module.
+
+`forward()` and `deployment_forward()` compose the same modules twice, and
+nothing but a test keeps the two equal: every model that declares graphs runs
+`assert_deployment_reproduces_forward()` (in
+`autoware_ml/deployment/tests/deployment_assertions.py`) on one batch in its
+tests, comparing every model output.
 
 A model whose deployment is one graph without code around it can still override
 `build_export_spec()` and return an export module plus example tensor inputs;
