@@ -39,7 +39,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor
+from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor, GraphTensor
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
@@ -529,14 +529,11 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
         return multi_task_predictions
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph] | None:
-        """Declare the lidar-only graph; it keeps the name and I/O the runtime loads.
-
-        The graph is single-sample. ONNX Runtime cannot run the ``autoware::`` plugin ops of
-        its sparse encoder, so that backend falls back to PyTorch.
+        """Declare the single-sample lidar-only graph, named and bound as the runtime loads it.
 
         Returns:
-            The graph, or ``None`` for camera-only and camera-lidar models; the latter keep
-            the hand-written two-graph :meth:`build_export_specs`.
+            The graph, or ``None`` for camera-only and camera-lidar models, which keep the
+            hand-written :meth:`build_export_specs`.
         """
         if self.camera_network is not None or self.lidar_network is None:
             return None
@@ -559,8 +556,16 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
         multi_task_batch_inputs: ModelBatchInputs,
         executors: Mapping[str, GraphExecutor],
         device: torch.device,
-    ) -> Mapping[str, torch.Tensor]:
+    ) -> Mapping[str, GraphTensor]:
         """Run ``bevfusion_lidar`` on the voxels of the batch's only sample.
+
+        Args:
+            multi_task_batch_inputs: The preprocessed single-sample batch, holding the voxels.
+            executors: The executors of this run, one per declared graph, by graph name.
+            device: Device the graph runs on; unused, the graph reads the voxels as they are.
+
+        Returns:
+            ``bbox_pred``, ``score`` and ``label_pred`` of the sample.
 
         Raises:
             ValueError: On a batch of more than one sample; the graph is single-sample.
