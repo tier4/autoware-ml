@@ -198,9 +198,8 @@ class ImageAugmentationParameters(NamedTuple):
 class ImageAugmentationDraw:
     """Resize, crop, flip, and rotation drawn by ``ResizeCropFlipRotImage``, as plain values.
 
-    The draw depends on no image size, so it can be made before a frame is loaded and shared
-    by every camera and every frame of a stream. ``sample_augmentation`` turns it into the
-    pixel values of one camera image.
+    The draw depends on no image size, so the draw of a camera can be kept for every frame
+    of a stream. ``sample_augmentation`` turns it into the pixel values of one camera image.
 
     Attributes:
         resize_fraction: Position of the resize factor within the resize range, in [0, 1].
@@ -501,9 +500,11 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
     centered along the width, and neither flip nor rotation is applied, so the transform is
     deterministic.
 
-    While the transform keeps the draw of a stream, see :meth:`draw_parameters`, that one
-    draw is applied to every camera of every frame instead, as Sparse4D keeps the image
-    augmentation of a sequence.
+    While the transform keeps the draws of a stream, see :meth:`draw_parameters`, every
+    camera still has a draw of its own, made with the first frame of the stream, and keeps
+    it over the later frames: the camera at one position of the camera order is augmented
+    alike in every frame. The camera order therefore has to be the same in every frame of
+    a stream.
     """
 
     _required_keys = ["camera_image_data"]
@@ -532,8 +533,12 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
                 never rotate.
         """
         super().__init__(probability=None)
-        # Draw kept for the frames of a stream, None to draw for every camera of every sample
-        self.parameters: ImageAugmentationDraw | None = None
+        # Draw of every camera kept for the frames of a stream, in camera order. Empty until
+        # the first frame of the stream tells the number of cameras, None to draw for every
+        # camera of every sample.
+        self.parameters: Sequence[ImageAugmentationDraw] | None = None
+        # Seed the cameras of the kept stream are drawn from
+        self._camera_seed = 0
         self.target_size = tuple(target_size)
         self.resize_range = resize_range
         self.bottom_crop_ratio_range = bottom_crop_ratio_range
@@ -550,10 +555,6 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        # The kept draw of a stream is shared by the cameras, otherwise every camera draws
-        if self.parameters is not None:
-            return self.transform_with_parameters(model_gt_sample, self.parameters)
-
         # This is checked in the _validate_required_keys()
         camera_image_data: BaseImages = (
             model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
@@ -562,28 +563,67 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]
 
+        # The kept draws of a stream are applied camera by camera, otherwise every camera draws
+        if self.parameters is not None:
+            self.parameters = self._keep_camera_parameters(self.parameters, len(images))
+            return self.transform_with_parameters(model_gt_sample, self.parameters)
+
         return self._augment_cameras(
             model_gt_sample,
             [self.sample_augmentation(source_height, source_width) for _ in images],
         )
 
     def draw_parameters(self) -> bool:
-        """Draw one augmentation for every camera and keep it for the samples that follow.
+        """Start keeping the draw of every camera for the samples that follow.
+
+        The number of cameras is unknown before a frame is loaded, so only the seed of the
+        cameras is drawn here. Every camera draws from it with the first frame, see
+        :meth:`_keep_camera_parameters`.
 
         Returns:
             True, the transform keeps its parameters.
         """
-        self.parameters = self.sample_parameters()
+        self._camera_seed = int(np.random.randint(np.iinfo(np.int32).max))
+        self.parameters = ()
         return True
 
+    def _keep_camera_parameters(
+        self, parameters: Sequence[ImageAugmentationDraw], num_cameras: int
+    ) -> Sequence[ImageAugmentationDraw]:
+        """Draw the augmentation of the cameras that have none yet, and keep the others.
+
+        A camera draws from ``np.random`` seeded by the kept stream and its position in the
+        camera order, so every dataloader worker draws the same values for it, and the
+        random state of NumPy is restored afterwards.
+
+        Args:
+            parameters: Draws already kept, in camera order.
+            num_cameras: Number of cameras of the sample.
+
+        Returns:
+            The draw of every camera of the sample, in camera order.
+        """
+        if len(parameters) >= num_cameras:
+            return parameters
+        state = np.random.get_state()
+        try:
+            new_parameters = []
+            for camera_index in range(len(parameters), num_cameras):
+                np.random.seed([self._camera_seed, camera_index])
+                new_parameters.append(self.sample_parameters())
+        finally:
+            np.random.set_state(state)
+        return (*parameters, *new_parameters)
+
     def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: ImageAugmentationDraw
+        self, model_gt_sample: ModelGTSample, parameters: Sequence[ImageAugmentationDraw]
     ) -> ModelGTSample:
-        """Augment every camera image by the one given draw.
+        """Augment every camera image by its given draw.
 
         Args:
             model_gt_sample: ModelGTSample instance containing `camera_image_data`.
-            parameters: Augmentation drawn by :meth:`sample_parameters`, shared by the cameras.
+            parameters: Augmentation drawn by :meth:`sample_parameters` for every camera, in
+                camera order.
 
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
@@ -594,8 +634,13 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         )
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]
-        camera_parameters = self.sample_augmentation(source_height, source_width, parameters)
-        return self._augment_cameras(model_gt_sample, [camera_parameters for _ in images])
+        return self._augment_cameras(
+            model_gt_sample,
+            [
+                self.sample_augmentation(source_height, source_width, camera_parameters)
+                for _, camera_parameters in zip(images, parameters)
+            ],
+        )
 
     def _augment_cameras(
         self, model_gt_sample: ModelGTSample, parameters: Sequence[ImageAugmentationParameters]
