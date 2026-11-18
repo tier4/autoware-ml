@@ -936,8 +936,8 @@ def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
     Check: each suite was reset once more, and the streams were reset as well.
     """
     model = _build_model(metrics=[_ResetCountingSuite()])
-    val_suite = model._stage_metrics(EvalStage.VAL)[0]
-    test_suite = model._stage_metrics(EvalStage.TEST)[0]
+    val_suite = model._stage_suites(EvalStage.VAL)[0]
+    test_suite = model._stage_suites(EvalStage.TEST)[0]
     resets_after_construction = (val_suite.resets, test_suite.resets)
 
     model.on_validation_epoch_start()

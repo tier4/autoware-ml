@@ -56,13 +56,13 @@ class MetricEvalMixin:
         """
         super().__init__(*args, **kwargs)
         prototypes = list(metrics) if metrics else []
-        for metric in prototypes:
-            if not metric.prefix:
+        for suite in prototypes:
+            if not suite.prefix:
                 raise ValueError(
-                    f"{type(metric).__name__} has an empty prefix, every suite attached "
+                    f"{type(suite).__name__} has an empty prefix, every suite attached "
                     "to a model needs one so its log keys are namespaced."
                 )
-        prefixes = [metric.prefix for metric in prototypes]
+        prefixes = [suite.prefix for suite in prototypes]
         duplicates = sorted({prefix for prefix in prefixes if prefixes.count(prefix) > 1})
         if duplicates:
             raise ValueError(
@@ -71,13 +71,13 @@ class MetricEvalMixin:
             )
         # A suite is cloned only for stages it actually reports at, so a heavy
         # test-only suite (and its deep-copied providers) never exists at val.
-        self._metrics_by_stage = nn.ModuleDict(
+        self._suites_by_stage = nn.ModuleDict(
             {
                 stage.value: nn.ModuleList(
                     [
-                        self._stage_clone(metric, stage)
-                        for metric in prototypes
-                        if metric.runs_at(stage)
+                        self._stage_clone(suite, stage)
+                        for suite in prototypes
+                        if suite.runs_at(stage)
                     ]
                 )
                 for stage in (EvalStage.VAL, EvalStage.TEST)
@@ -85,8 +85,8 @@ class MetricEvalMixin:
         )
 
     @staticmethod
-    def _stage_clone(metric: MetricSuite, stage: EvalStage) -> MetricSuite:
-        clone = metric.clone()
+    def _stage_clone(suite: MetricSuite, stage: EvalStage) -> MetricSuite:
+        clone = suite.clone()
         clone.bind_stage(stage)
         return clone
 
@@ -105,23 +105,23 @@ class MetricEvalMixin:
         """
         return EvalOutput()
 
-    def _stage_metrics(self, stage: EvalStage) -> nn.ModuleList:
-        return self._metrics_by_stage[stage.value]
+    def _stage_suites(self, stage: EvalStage) -> nn.ModuleList:
+        return self._suites_by_stage[stage.value]
 
     def on_validation_epoch_start(self) -> None:
         """Reset the validation metric state for a fresh epoch."""
-        for metric in self._stage_metrics(EvalStage.VAL):
-            metric.reset()
+        for suite in self._stage_suites(EvalStage.VAL):
+            suite.reset()
 
     def on_test_epoch_start(self) -> None:
         """Reset the test metric state for a fresh epoch."""
-        for metric in self._stage_metrics(EvalStage.TEST):
-            metric.reset()
+        for suite in self._stage_suites(EvalStage.TEST):
+            suite.reset()
 
     def on_validation_batch_end(
         self, outputs: Any, batch: Any, batch_idx: int, dataloader_idx: int = 0
     ) -> None:
-        """Accumulate one validation batch into every metric.
+        """Accumulate one validation batch into every suite.
 
         Args:
             outputs: Raw forward outputs of the batch.
@@ -134,7 +134,7 @@ class MetricEvalMixin:
     def on_test_batch_end(
         self, outputs: Any, batch: Any, batch_idx: int, dataloader_idx: int = 0
     ) -> None:
-        """Accumulate one test batch into every metric.
+        """Accumulate one test batch into every suite.
 
         Args:
             outputs: Raw forward outputs of the batch.
@@ -153,8 +153,8 @@ class MetricEvalMixin:
         self._log_metrics(EvalStage.TEST)
 
     def _update_metrics(self, stage: EvalStage, outputs: Any, batch: Any, batch_idx: int) -> None:
-        metrics = self._stage_metrics(stage)
-        if not len(metrics):
+        suites = self._stage_suites(stage)
+        if not len(suites):
             return
         raw_outputs = (
             outputs["model_outputs"]
@@ -163,23 +163,23 @@ class MetricEvalMixin:
         )
         eval_output = self.build_eval_output(batch, raw_outputs)
         if batch_idx == 0:
-            self._check_requirements(list(metrics), eval_output)
-        for metric in metrics:
-            metric.update(eval_output)
+            self._check_requirements(list(suites), eval_output)
+        for suite in suites:
+            suite.update(eval_output)
 
-    def _check_requirements(self, metrics: list[MetricSuite], eval_output: EvalOutput) -> None:
-        for metric in metrics:
-            missing = metric.requirements().check_requirements(eval_output)
+    def _check_requirements(self, suites: list[MetricSuite], eval_output: EvalOutput) -> None:
+        for suite in suites:
+            missing = suite.requirements().check_requirements(eval_output)
             if missing:
                 raise ValueError(
-                    f"Metric {type(metric).__name__!r} needs {list(missing)}, not produced by "
+                    f"Suite {type(suite).__name__!r} needs {list(missing)}, not produced by "
                     f"{type(self).__name__}.build_eval_output."
                 )
 
     def _log_metrics(self, stage: EvalStage) -> None:
         report = MetricReport()
-        for metric in self._stage_metrics(stage):
-            report.merge(metric.result(stage), prefix=metric.prefix)
+        for suite in self._stage_suites(stage):
+            report.merge(suite.result(stage), prefix=suite.prefix)
         if not len(report):
             return
         # Values are already global and identical on every rank after sync, so no sync_dist.
