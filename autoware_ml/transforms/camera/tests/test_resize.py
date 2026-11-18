@@ -615,10 +615,10 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         """
         pipeline = TransformsCompose([self.build_training_transform()])
 
-        pipeline.draw_stream_parameters((0, 0, 0))
+        pipeline.keep_stream_parameters((0, 0, 0))
         first = self.augmented_intrinsics(pipeline)
         second = self.augmented_intrinsics(pipeline)
-        pipeline.draw_stream_parameters((0, 0, 1))
+        pipeline.keep_stream_parameters((0, 0, 1))
         other = self.augmented_intrinsics(pipeline)
 
         self.assertTrue(torch.equal(first, second))
@@ -627,17 +627,17 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
 
     def test_cameras_draw_on_their_own_again_after_a_stream(self) -> None:
         """
-        Input: a training transform whose stream parameters were drawn and then cleared, and
-        one frame transformed afterwards.
-        Expected: without a kept draw every camera draws its own augmentation again.
-        Check: the transform keeps no parameters and the two cameras of the frame get
-        different augmented intrinsics.
+        Input: a training transform that read a frame of a stream, and one frame outside
+        the stream transformed afterwards.
+        Expected: outside a stream every camera draws its own augmentation again.
+        Check: the transform of the pipeline keeps no parameters and the two cameras of the
+        frame get different augmented intrinsics.
         """
         np.random.seed(0)
         transform = self.build_training_transform()
         pipeline = TransformsCompose([transform])
 
-        pipeline.draw_stream_parameters((0, 0, 0))
+        pipeline.keep_stream_parameters((0, 0, 0))
         pipeline.clear_stream_parameters()
         intrinsics = self.augmented_intrinsics(pipeline)
 
@@ -699,7 +699,7 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         )
 
         single_frame = self.augmented_intrinsics(pipeline)
-        pipeline.draw_stream_parameters((0, 0, 0))
+        pipeline.keep_stream_parameters((0, 0, 0))
 
         self.assertTrue(torch.equal(self.augmented_intrinsics(pipeline), single_frame))
 

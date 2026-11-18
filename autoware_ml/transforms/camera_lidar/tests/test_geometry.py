@@ -1246,13 +1246,16 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.rot_scale_trans = GlobalRotScaleTrans(
-            yaw_rot_range=[-0.4, 0.4],
-            scale_ratio_range=[0.9, 1.1],
-            translation_std=[0.5, 0.5, 0.2],
+        self.pipeline = TransformsCompose(
+            [
+                GlobalRotScaleTrans(
+                    yaw_rot_range=[-0.4, 0.4],
+                    scale_ratio_range=[0.9, 1.1],
+                    translation_std=[0.5, 0.5, 0.2],
+                ),
+                GlobalBEVRandomFlip(horizontal_flip_ratio=0.5, vertical_flip_ratio=0.5),
+            ]
         )
-        self.flip = GlobalBEVRandomFlip(horizontal_flip_ratio=0.5, vertical_flip_ratio=0.5)
-        self.pipeline = TransformsCompose([self.rot_scale_trans, self.flip])
 
     def augment(self) -> Tensor:
         """Augmentation matrix the pipeline applies to a fresh sample."""
@@ -1270,9 +1273,9 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
         Check: two frames of one stream get the same transformation matrix, the frame of the
         other stream another one, and the two frames outside a stream differ.
         """
-        self.pipeline.draw_stream_parameters((0, 0, 0))
+        self.pipeline.keep_stream_parameters((0, 0, 0))
         first, second = self.augment(), self.augment()
-        self.pipeline.draw_stream_parameters((0, 0, 1))
+        self.pipeline.keep_stream_parameters((0, 0, 1))
         other = self.augment()
         self.pipeline.clear_stream_parameters()
 
@@ -1289,9 +1292,10 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
         Check: the transformation matrix of the frame equals the one built here from the
         kept values.
         """
-        self.pipeline.draw_stream_parameters((0, 0, 0))
-        rot_scale_trans = self.rot_scale_trans.parameters
-        flips = self.flip.parameters
+        self.pipeline.keep_stream_parameters((0, 0, 0))
+        rot_scale_trans, flips = (
+            transform.parameters for transform in self.pipeline.active_pipeline
+        )
         assert rot_scale_trans is not None and flips is not None
         flip = torch.diag(
             torch.tensor([-1.0 if flips.vertical else 1.0, -1.0 if flips.horizontal else 1.0, 1.0])
@@ -1316,7 +1320,7 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
         outcomes = set()
         for scene in range(20):
-            pipeline.draw_stream_parameters((0, 0, scene))
+            pipeline.keep_stream_parameters((0, 0, scene))
             rotated = {
                 pipeline(self.build_multi_task_gt_sample()).lidar_transformation_sample is not None
                 for _ in range(3)

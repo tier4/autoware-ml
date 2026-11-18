@@ -236,10 +236,6 @@ class GlobalRotScaleTrans(BaseTransform):
         self.parameters = self.sample_parameters()
         return True
 
-    def clear_parameters(self) -> None:
-        """Drop the kept parameters, so every sample draws its own again."""
-        self.parameters = None
-
     def sample_rot_scale_trans(
         self, parameters: RotScaleTransParameters | None = None
     ) -> tuple[LiDARTransformationSample, RotationScaleTranslationData]:
@@ -394,10 +390,6 @@ class GlobalBEVRandomFlip(BaseTransform):
         """
         self.parameters = self.sample_parameters()
         return True
-
-    def clear_parameters(self) -> None:
-        """Drop the kept parameters, so every sample draws its own again."""
-        self.parameters = None
 
     def apply_flip(
         self,

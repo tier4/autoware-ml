@@ -64,7 +64,7 @@ class StreamSlot(int):
 
     Attributes:
         stream_seed: Integers naming the stream, see
-            ``TransformsCompose.draw_stream_parameters``.
+            ``TransformsCompose.keep_stream_parameters``.
     """
 
     stream_seed: tuple[int, ...]
@@ -291,8 +291,8 @@ class BaseDataset(Dataset):
     def update_stream_augmentation(self, index: int) -> None:
         """Make the pipeline keep the augmentation of the stream of a sample, or of none.
 
-        The pipeline draws the augmentation again when the sample belongs to another stream
-        than the one before it, and goes back to drawing per sample for a plain index.
+        The pipeline draws the augmentation of a stream with its first frame and keeps it for
+        the later ones, and goes back to drawing per sample for a plain index.
 
         Args:
             index: Sample index, a ``StreamSlot`` for a frame augmented as its stream.
@@ -300,7 +300,7 @@ class BaseDataset(Dataset):
         if self.transforms is None:
             return
         if isinstance(index, StreamSlot):
-            self.transforms.draw_stream_parameters(index.stream_seed)
+            self.transforms.keep_stream_parameters(index.stream_seed)
         else:
             self.transforms.clear_stream_parameters()
 

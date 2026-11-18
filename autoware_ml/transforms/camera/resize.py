@@ -576,10 +576,6 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         self.parameters = self.sample_parameters()
         return True
 
-    def clear_parameters(self) -> None:
-        """Drop the kept parameters, so every sample draws its own again."""
-        self.parameters = None
-
     def transform_with_parameters(
         self, model_gt_sample: ModelGTSample, parameters: ImageAugmentationDraw
     ) -> ModelGTSample:

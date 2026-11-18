@@ -39,17 +39,17 @@ class _Rotate(BaseTransform):
     def __init__(self) -> None:
         super().__init__()
         self.parameters: float | None = None
+        # Angles applied and angles drawn, shared with the copies a pipeline keeps per stream
         self.draws: list[float] = []
+        self.sampled: list[float] = []
 
     def sample_parameters(self) -> float:
-        return float(np.random.uniform())
+        self.sampled.append(float(np.random.uniform()))
+        return self.sampled[-1]
 
     def draw_parameters(self) -> bool:
         self.parameters = self.sample_parameters()
         return True
-
-    def clear_parameters(self) -> None:
-        self.parameters = None
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         parameters = self.parameters if self.parameters is not None else self.sample_parameters()
@@ -120,9 +120,10 @@ class TestStreamSlot(unittest.TestCase):
         """
         Input: the frames of two streams read in turn, as a dataloader worker reads the
         lanes of a batch.
-        Expected: the pipeline draws again whenever the stream changes, and a stream gets
-        the same values every time it comes back.
-        Check: the two reads of either stream record one value, and the streams differ.
+        Expected: the pipeline draws the augmentation of a stream once and keeps it while
+        the other stream is read.
+        Check: the two reads of either stream record one value, the streams differ, and
+        the transform drew twice in all.
         """
         first = self.dataset.draw(StreamSlot(0, self.STREAM))
         other = self.dataset.draw(StreamSlot(1, self.OTHER_STREAM))
@@ -132,6 +133,7 @@ class TestStreamSlot(unittest.TestCase):
         self.assertEqual(first_again, first)
         self.assertEqual(other_again, other)
         self.assertNotEqual(first, other)
+        self.assertEqual(len(self.dataset.rotate.sampled), 2)
 
     def test_a_dataset_without_a_pipeline_serves_a_stream_slot(self) -> None:
         """
