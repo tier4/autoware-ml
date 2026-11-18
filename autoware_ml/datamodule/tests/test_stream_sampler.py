@@ -25,6 +25,7 @@ import numpy as np
 from autoware_ml.datamodule.base_dataset import PaddingSlot, StreamPaddingSlot, StreamSlot
 from autoware_ml.datamodule.samplers import GroupStreamingSampler
 from autoware_ml.transforms.base import StreamParameters
+from autoware_ml.transforms.camera_lidar.geometry import BEVFlipParameters, RotScaleTransParameters
 
 
 class _AugmentedScenesDataset:
@@ -40,9 +41,12 @@ class _AugmentedScenesDataset:
     def scene_index_groups(self) -> Sequence[Sequence[int]]:
         return [list(group) for group in self._groups]
 
-    def sample_stream_augmentation(self, index: int) -> tuple[float]:
-        """One value drawn as a pipeline draws the rotation of a stream."""
-        return (float(np.random.uniform()),)
+    def sample_stream_augmentation(self, index: int) -> tuple[StreamParameters | None, ...]:
+        """The parameters of a pipeline of one rotation, drawn as a pipeline draws them."""
+        rotation = RotScaleTransParameters(
+            yaw=float(np.random.uniform()), scale=1.0, translation=(0.0, 0.0, 0.0)
+        )
+        return (StreamParameters(apply=True, values=rotation),)
 
     def __len__(self) -> int:
         return sum(len(group) for group in self._groups)
@@ -87,17 +91,21 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
         indices = list(iter(sampler))
         return [indices[lane :: sampler.batch_size] for lane in range(sampler.batch_size)]
 
-    def drawn(self, sampler: GroupStreamingSampler, epoch: int) -> Sequence[tuple]:
+    def drawn(
+        self, sampler: GroupStreamingSampler, epoch: int
+    ) -> Sequence[tuple[StreamParameters | None, ...]]:
         """The augmentation carried by every slot of one epoch."""
         sampler.set_epoch(epoch)
         return [slot.augmentation for slot in sampler]
 
-    def drawn_per_scene(self, sampler: GroupStreamingSampler) -> dict[int, set[tuple]]:
+    def drawn_per_scene(
+        self, sampler: GroupStreamingSampler
+    ) -> dict[int, set[tuple[StreamParameters | None, ...]]]:
         """The augmentations the slots of every scene carry in the current epoch."""
         scene_of = {
             index: scene for scene, group in enumerate(sampler.scene_groups) for index in group
         }
-        drawn: dict[int, set[tuple]] = {}
+        drawn: dict[int, set[tuple[StreamParameters | None, ...]]] = {}
         for slot in sampler:
             drawn.setdefault(scene_of[int(slot)], set()).add(slot.augmentation)
         return drawn
@@ -195,7 +203,14 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
         Check: the unpickled and the moved slots carry the augmentation, and the padding
         slot stays a StreamPaddingSlot.
         """
-        augmentation = (StreamParameters(True, (0.1, 1.02, (0.0, 0.1, 0.0))), None)
+        augmentation = (
+            StreamParameters(
+                apply=True,
+                values=RotScaleTransParameters(yaw=0.1, scale=1.02, translation=(0.0, 0.1, 0.0)),
+            ),
+            StreamParameters(apply=True, values=BEVFlipParameters(horizontal=True, vertical=False)),
+            None,
+        )
         slot = StreamSlot(3, augmentation)
         padding = StreamPaddingSlot(3, augmentation)
 

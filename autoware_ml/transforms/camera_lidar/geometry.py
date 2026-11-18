@@ -29,7 +29,7 @@ https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/datasets/transform
 
 from collections.abc import Sequence
 import math
-from typing import NamedTuple
+from dataclasses import dataclass
 
 from jaxtyping import Float32
 import numpy as np
@@ -39,7 +39,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.base import BaseTransform, TransformParameters
 from autoware_ml.types.spatial import BEVDirection
 from autoware_ml.types.geometry import TransformationName
 
@@ -70,7 +70,8 @@ class RotationScaleTranslationData(BaseModel):
     translation_vector: Float32[Tensor, "1 3"]  # Translation vector applied
 
 
-class RotScaleTransParameters(NamedTuple):
+@dataclass(frozen=True)
+class RotScaleTransParameters(TransformParameters):
     """Rotation, scale and translation drawn by ``GlobalRotScaleTrans``, as plain values.
 
     Attributes:
@@ -84,7 +85,8 @@ class RotScaleTransParameters(NamedTuple):
     translation: tuple[float, float, float]
 
 
-class BEVFlipParameters(NamedTuple):
+@dataclass(frozen=True)
+class BEVFlipParameters(TransformParameters):
     """Flips drawn by ``GlobalBEVRandomFlip``.
 
     Attributes:
@@ -142,7 +144,7 @@ def apply_lidar_transformation(
     )
 
 
-class GlobalRotScaleTrans(BaseTransform):
+class GlobalRotScaleTrans(BaseTransform[RotScaleTransParameters]):
     """Apply global rotation, scaling, and optional translation to points, bboxes and cameras.
 
     Optional keys:
@@ -319,7 +321,7 @@ class RandomRotateTargetAngle(GlobalRotScaleTrans):
         return float(np.random.choice(self.yaw_angle_ratios)) * float(np.pi)
 
 
-class GlobalBEVRandomFlip(BaseTransform):
+class GlobalBEVRandomFlip(BaseTransform[BEVFlipParameters]):
     """Globally and randomly flip points, bboxes and cameras along the BEV axes.
 
     Optional keys:
@@ -359,7 +361,8 @@ class GlobalBEVRandomFlip(BaseTransform):
         Returns:
             The drawn flips.
         """
-        return BEVFlipParameters(*self.sample_flip())
+        horizontal_flip, vertical_flip = self.sample_flip()
+        return BEVFlipParameters(horizontal=horizontal_flip, vertical=vertical_flip)
 
     def apply_flip(
         self,
@@ -402,7 +405,7 @@ class GlobalBEVRandomFlip(BaseTransform):
             The flipped sample with the flips recorded.
         """
         rotation_matrix = torch.eye(3, dtype=torch.float32)
-        horizontal_flip, vertical_flip = parameters
+        horizontal_flip, vertical_flip = parameters.horizontal, parameters.vertical
         transformation_order = []
 
         if horizontal_flip:

@@ -33,6 +33,7 @@ the transformed one. They reject camera image data that already carries depth ma
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import NamedTuple
 
@@ -44,10 +45,10 @@ from torchvision.transforms import v2
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages, compose_lidar2images
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.base import BaseTransform, ParametersT, TransformParameters
 
 
-class ImageSpaceTransform(BaseTransform):
+class ImageSpaceTransform(BaseTransform[ParametersT]):
     """Base class of the transforms that only remap the pixels of the camera images.
 
     It holds the image-space affine builders and the composition of an image-space
@@ -193,7 +194,8 @@ class ImageAugmentationParameters(NamedTuple):
     rotation: float
 
 
-class ImageAugmentationDraw(NamedTuple):
+@dataclass(frozen=True)
+class ImageAugmentationDraw(TransformParameters):
     """Resize, crop, flip, and rotation drawn by ``ResizeCropFlipRotImage``, as plain values.
 
     The draw depends on no image size, so it can be made before a frame is loaded and shared
@@ -489,7 +491,7 @@ class PadMultiViewImage(ImageSpaceTransform):
         )
 
 
-class ResizeCropFlipRotImage(ImageSpaceTransform):
+class ResizeCropFlipRotImage(ImageSpaceTransform[ImageAugmentationDraw]):
     """Resize, crop, flip, and rotate every camera image to the target size.
 
     The source image is resized once, then a crop box sized as the target is cut out of it,

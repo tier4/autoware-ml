@@ -46,6 +46,7 @@ from autoware_ml.datamodule.base_dataset import (
     StreamPaddingSlot,
     StreamSlot,
 )
+from autoware_ml.transforms.base import StreamParameters
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -415,7 +416,9 @@ class GroupStreamingSampler(DistributedSampler):
         augmentation = self._draw_augmentation(frames[0], scene_index, epoch)
         return [StreamSlot(index, augmentation) for index in frames]
 
-    def _draw_augmentation(self, first_frame: int, scene_index: int, epoch: int) -> tuple:
+    def _draw_augmentation(
+        self, first_frame: int, scene_index: int, epoch: int
+    ) -> tuple[StreamParameters | None, ...]:
         """Draw the augmentation values of one scene for an epoch.
 
         The pipeline of the dataset draws from ``np.random``, seeded here by the run, the epoch

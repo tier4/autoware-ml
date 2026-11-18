@@ -46,6 +46,7 @@ from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.geometry.points.lidar_points import LiDARPoints
+from autoware_ml.transforms.base import StreamParameters
 from autoware_ml.types.dataset import SplitType
 from autoware_ml.types.tasks import TaskType
 from autoware_ml.types.geometry import (
@@ -239,7 +240,9 @@ class _SampleDataset(BaseDataset):
         return self.samples[index]
 
     def apply_transforms(
-        self, model_gt_sample: ModelGTSample, stream_parameters: object = None
+        self,
+        model_gt_sample: ModelGTSample,
+        stream_parameters: Sequence[StreamParameters | None] | None = None,
     ) -> ModelGTSample:
         """Record every sample the pipeline receives and return it unchanged."""
         self.transformed.append(model_gt_sample)

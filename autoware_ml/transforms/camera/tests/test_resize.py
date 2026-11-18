@@ -14,6 +14,7 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
+from collections.abc import Sequence
 import pickle
 import unittest
 
@@ -24,7 +25,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import StreamParameters, TransformsCompose
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
     ImageAugmentationDraw,
@@ -597,7 +598,9 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         )
 
     def augmented_intrinsics(
-        self, pipeline: TransformsCompose, stream_parameters: tuple | None
+        self,
+        pipeline: TransformsCompose,
+        stream_parameters: Sequence[StreamParameters | None] | None,
     ) -> Float32[Tensor, "num_cameras 3 3"]:
         """Augmented intrinsics the pipeline gives a fresh sample."""
         output = pipeline(self.build_multi_task_gt_sample(), stream_parameters)

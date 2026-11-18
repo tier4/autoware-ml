@@ -21,6 +21,7 @@ the raw intrinsics, or touching the intrinsics) fails. The expected matrices are
 with numpy from the sampled yaw, scale and translation, independently of the transform.
 """
 
+from collections.abc import Sequence
 import math
 import pickle
 import unittest
@@ -45,7 +46,7 @@ from autoware_ml.transforms.camera_lidar.geometry import (
     RandomRotateTargetAngle,
     yaw_rotation_matrix,
 )
-from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.base import StreamParameters, TransformsCompose
 from autoware_ml.types.geometry import (
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
@@ -1258,7 +1259,7 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
             ]
         )
 
-    def augment(self, stream_parameters: tuple | None) -> Tensor:
+    def augment(self, stream_parameters: Sequence[StreamParameters | None] | None) -> Tensor:
         """Augmentation matrix the pipeline applies to a fresh sample."""
         output = self.pipeline(self.build_multi_task_gt_sample(), stream_parameters)
         assert output.lidar_transformation_sample is not None
@@ -1292,7 +1293,7 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
         drawn values.
         """
         stream = pickle.loads(pickle.dumps(self.pipeline.sample_stream_parameters()))
-        yaw, scale, translation = stream[0].values
+        rot_scale_trans = stream[0].values
         flip = torch.diag(
             torch.tensor(
                 [
@@ -1303,8 +1304,8 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
             )
         )
         expected = torch.eye(4)
-        expected[:3, :3] = flip @ yaw_rotation_matrix(yaw) * scale
-        expected[:3, 3] = flip @ torch.tensor(translation)
+        expected[:3, :3] = flip @ yaw_rotation_matrix(rot_scale_trans.yaw) * rot_scale_trans.scale
+        expected[:3, 3] = flip @ torch.tensor(rot_scale_trans.translation)
 
         self.assertTrue(torch.allclose(self.augment(stream), expected, atol=1e-6))
 

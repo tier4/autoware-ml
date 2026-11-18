@@ -17,31 +17,44 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from types import SimpleNamespace
 import unittest
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform, StreamParameters, TransformsCompose
+from autoware_ml.transforms.base import (
+    BaseTransform,
+    StreamParameters,
+    TransformParameters,
+    TransformsCompose,
+)
 
 
-class _Draw(BaseTransform):
+@dataclass(frozen=True)
+class _Numbers(TransformParameters):
+    """The uniform numbers drawn by ``_Draw``."""
+
+    numbers: tuple[float, ...]
+
+
+class _Draw(BaseTransform[_Numbers]):
     """Append ``count`` uniform draws to the sample, as an augmentation reads its parameters."""
 
     def __init__(self, count: int = 1, probability: float | None = None) -> None:
         super().__init__(probability=probability)
         self.count = count
 
-    def sample_parameters(self) -> Sequence[float]:
-        return np.random.uniform(size=self.count).tolist()
+    def sample_parameters(self) -> _Numbers:
+        return _Numbers(numbers=tuple(np.random.uniform(size=self.count).tolist()))
 
     def transform(self, model_gt_sample: SimpleNamespace) -> SimpleNamespace:
         return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
 
     def transform_with_parameters(
-        self, model_gt_sample: SimpleNamespace, parameters: Sequence[float]
+        self, model_gt_sample: SimpleNamespace, parameters: _Numbers
     ) -> SimpleNamespace:
-        model_gt_sample.draws.append(parameters)
+        model_gt_sample.draws.append(parameters.numbers)
         return model_gt_sample
 
 
@@ -49,7 +62,7 @@ class _Noise(BaseTransform):
     """Append one draw of its own to every sample, as a jitter that no stream shares."""
 
     def transform(self, model_gt_sample: SimpleNamespace) -> SimpleNamespace:
-        model_gt_sample.draws.append([float(np.random.uniform())])
+        model_gt_sample.draws.append((float(np.random.uniform()),))
         return model_gt_sample
 
 
@@ -57,7 +70,9 @@ class TestStreamAugmentation(unittest.TestCase):
     """The augmentation a pipeline draws once for a stream and applies to its frames."""
 
     def draws(
-        self, pipeline: TransformsCompose, stream_parameters: tuple | None
+        self,
+        pipeline: TransformsCompose,
+        stream_parameters: Sequence[StreamParameters | None] | None,
     ) -> Sequence[Sequence[float]]:
         """The draws every transform of the pipeline applies to a fresh sample."""
         return pipeline(SimpleNamespace(draws=[]), stream_parameters).draws
@@ -78,7 +93,7 @@ class TestStreamAugmentation(unittest.TestCase):
         second = self.draws(pipeline, stream)
         other = self.draws(pipeline, other_stream)
 
-        self.assertEqual(first, [stream[0].values, stream[1].values])
+        self.assertEqual(first, [stream[0].values.numbers, stream[1].values.numbers])
         self.assertEqual(second, first)
         self.assertNotEqual(other, first)
 

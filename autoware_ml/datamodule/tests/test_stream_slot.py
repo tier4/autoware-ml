@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import unittest
 from unittest import mock
 
@@ -30,26 +31,33 @@ from autoware_ml.datamodule.base_dataset import (
     StreamPaddingSlot,
     StreamSlot,
 )
-from autoware_ml.transforms.base import BaseTransform, TransformsCompose
+from autoware_ml.transforms.base import BaseTransform, TransformParameters, TransformsCompose
 
 
-class _Rotate(BaseTransform):
+@dataclass(frozen=True)
+class _Angle(TransformParameters):
+    """The angle drawn by ``_Rotate``."""
+
+    angle: float
+
+
+class _Rotate(BaseTransform[_Angle]):
     """Record the angle applied to every sample, drawn per sample or handed in by its stream."""
 
     def __init__(self) -> None:
         super().__init__()
         self.draws: list[float] = []
 
-    def sample_parameters(self) -> float:
-        return float(np.random.uniform())
+    def sample_parameters(self) -> _Angle:
+        return _Angle(angle=float(np.random.uniform()))
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
 
     def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: float
+        self, model_gt_sample: ModelGTSample, parameters: _Angle
     ) -> ModelGTSample:
-        self.draws.append(parameters)
+        self.draws.append(parameters.angle)
         return model_gt_sample
 
 
@@ -103,8 +111,8 @@ class TestStreamSlot(unittest.TestCase):
         other_stream = self.dataset.draw(StreamSlot(0, other))
         on_their_own = [self.dataset.draw(0), self.dataset.draw(0)]
 
-        self.assertEqual(set(in_stream), {stream[0].values})
-        self.assertEqual(other_stream, other[0].values)
+        self.assertEqual(set(in_stream), {stream[0].values.angle})
+        self.assertEqual(other_stream, other[0].values.angle)
         self.assertNotEqual(other_stream, in_stream[0])
         self.assertNotEqual(on_their_own[0], on_their_own[1])
 
@@ -144,8 +152,8 @@ class TestStreamSlot(unittest.TestCase):
         split[StreamSlot(0, stream)]
         split[StreamSlot(3, stream)]
 
-        self.assertEqual(self.dataset.rotate.draws, [stream[0].values])
-        self.assertEqual(second.rotate.draws, [stream[0].values])
+        self.assertEqual(self.dataset.rotate.draws, [stream[0].values.angle])
+        self.assertEqual(second.rotate.draws, [stream[0].values.angle])
 
     def test_a_split_hands_its_sources_the_padding_of_a_slot(self) -> None:
         """
