@@ -61,6 +61,11 @@ class DataLoaderConfig:
         persistent_workers: Whether worker processes stay alive across epochs.
         shuffle: Whether the dataloader shuffles samples.
         drop_last: Whether to drop the final incomplete batch.
+        stream_consistent_augmentation: Whether a streaming datamodule augments every frame of
+            a stream alike, with one draw per stream and epoch, instead of every frame on its
+            own. It only shares the draws between frames: whether the cameras of a frame
+            share one is an option of the image transform, see ``per_camera_augmentation`` of
+            ``ResizeCropFlipRotImage``.
     """
 
     batch_size: int = 1
@@ -69,6 +74,7 @@ class DataLoaderConfig:
     persistent_workers: bool = False
     shuffle: bool = False
     drop_last: bool = False
+    stream_consistent_augmentation: bool = False
 
     def to_dataloader_kwargs(self) -> dict[str, Any]:
         """Convert to keyword arguments accepted by ``DataLoader``.
@@ -106,7 +112,6 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
         predict_dataloader: DataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
         resumable_train_sampler: bool = False,
-        allow_resume_layout_change: bool = False,
     ) -> None:
         """
         Initialize the datamodule.
@@ -123,9 +128,6 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
           resumable_train_sampler: Serve the training split through a sampler whose position
             is saved in the checkpoint, so a resumed run continues mid-epoch instead of
             restarting it (see ``autoware_ml/resume/data_loader.py``). Off by default.
-          allow_resume_layout_change: Let a resumed run use another number of GPUs, batch size
-            or gradient accumulation than the checkpoint. Not recommended: changing the global
-            batch changes the optimization. Off by default, such a resume fails.
         """
         super().__init__()
 
@@ -141,7 +143,6 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
         self.predict_dataloader_config = predict_dataloader
         self.train_frame_sampling = train_frame_sampling
         self.resumable_train_sampler = resumable_train_sampler
-        self.allow_resume_layout_change = allow_resume_layout_change
 
     def databases(self) -> Sequence[BaseDatabase]:
         """
@@ -280,6 +281,12 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
             )
         if config is None:
             raise ValueError(f"Split {split} has no dataloader settings.")
+        if config.stream_consistent_augmentation:
+            raise ValueError(
+                f"Split {split} sets stream_consistent_augmentation, which only the streaming "
+                "datamodule reads. Compose "
+                "/datamodule/streaming@datamodule: default_streaming_datamodule."
+            )
 
         if split == SplitType.TRAIN and self.resumable_train_sampler:
             return self._build_resumable_train_dataloader(dataset, config)
@@ -333,7 +340,6 @@ class DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
                 dataset, shuffle=shuffle, weights=weights, seed=seed
             ),
             collate_fn=dataset.collate_fn,
-            allow_layout_change=self.allow_resume_layout_change,
             **kwargs,
         )
         return self._attach_train_loader(loader)

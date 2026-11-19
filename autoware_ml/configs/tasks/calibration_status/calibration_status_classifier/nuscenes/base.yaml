@@ -21,8 +21,10 @@ datamodule:
 # Every nuScenes camera image is 900 x 1600, the TensorRT profile of the export.
 deploy:
   tensorrt:
-    input_shapes:
-      input:
-        min_shape: [1, 5, 900, 1600]
-        opt_shape: [1, 5, 900, 1600]
-        max_shape: [1, 5, 900, 1600]
+    modules:
+      end_to_end:
+        input_shapes:
+          input:
+            min_shape: [1, 5, 900, 1600]
+            opt_shape: [1, 5, 900, 1600]
+            max_shape: [1, 5, 900, 1600]
