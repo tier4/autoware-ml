@@ -47,7 +47,6 @@ dependencies = [
     "torch==2.9.1+cu128",
     "torchvision==0.24.1+cu128",
     "transforms3d==0.4.2",
-    "universal-pathlib==0.3.10",
     "zstandard==0.25.0"
 ]
 
@@ -110,9 +109,7 @@ setuptools = "*"
 wheel = "*"
 
 [tool.pixi.tasks]
-# av2 is installed here with --no-deps instead of being locked: it requires opencv-python, which
-# clashes with opencv-python-headless, and CI's `pixi install --locked` ignores a dependency override.
-install-project ="python -m pip install --no-cache-dir --no-build-isolation --no-deps -e . av2==0.3.6"
+install-project = "python -m pip install --no-cache-dir --no-build-isolation --no-deps -e ."
 install-bash-completion = "bash -lc 'mkdir -p \"${HOME}/.local/share/bash-completion/completions\" && autoware-ml --show-completion bash > \"${HOME}/.local/share/bash-completion/completions/autoware-ml\"'"
 setup-project = { depends-on = ["install-project", "install-bash-completion"] }
 test = "pytest autoware_ml/ -v"
