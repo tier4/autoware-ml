@@ -17,8 +17,9 @@ taxonomy:
   detection3d:
     class_names: [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier]
 
-# The range of the T4 stages too, so the learned reference points carry over to stage 2.
-point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+# The range of the T4 stages too, so the learned reference points carry over to stage 2; z is
+# measured from the ground as the T4 base_link does, which keeps the centers of the tall vehicles.
+point_cloud_range: [-51.2, -51.2, -3.0, 51.2, 51.2, 5.0]
 post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 image_size: [320, 800]
 camera_names: [CAM_FRONT, CAM_FRONT_RIGHT, CAM_FRONT_LEFT, CAM_BACK, CAM_BACK_LEFT, CAM_BACK_RIGHT]
@@ -119,7 +120,9 @@ datasets:
 
           point_cloud_range: ${point_cloud_range}
 
-# The sampler shuffles the scenes; evaluation runs one lane per rank so the fewest scenes are cut.
+# The streaming sampler keeps the frames of a scene in order and shuffles the scenes itself every
+# epoch, so the training dataloader must not shuffle. Evaluation runs one lane per rank so the
+# fewest scenes are cut.
 datamodule:
   train_dataloader:
     shuffle: false
