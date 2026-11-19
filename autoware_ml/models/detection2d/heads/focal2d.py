@@ -335,7 +335,7 @@ class FocalHead2D(nn.Module):
             if gt_annotated_class_masks is None
             else gt_annotated_class_masks & real_samples
         )
-        ground_truth = self._ground_truth(
+        ground_truth = self._flatten_ground_truth(
             outputs, gt_detections_2d, padding_mask.repeat_interleave(num_cams)
         )
         targets = self._build_targets(outputs, ground_truth)
@@ -363,7 +363,7 @@ class FocalHead2D(nn.Module):
         return losses
 
     @staticmethod
-    def _ground_truth(
+    def _flatten_ground_truth(
         outputs: FocalHead2DOutputs,
         gt_detections_2d: Detection2DGTBatch,
         padding_mask: Bool[torch.Tensor, " num_images"],
@@ -390,8 +390,6 @@ class FocalHead2D(nn.Module):
         max_num_boxes = int(counts.max()) if counts.numel() > 0 else 0
         rows, labels = rows[:, :max_num_boxes], labels[:, :max_num_boxes]
         valid_masks = torch.arange(max_num_boxes, device=device) < counts.unsqueeze(1)
-        edges = slice(Box2DFieldIndex.X_MIN, Box2DFieldIndex.Y_MAX + 1)
-        center = slice(Box2DFieldIndex.CENTER_X, Box2DFieldIndex.CENTER_Y + 1)
         image_extent = rows.new_tensor([outputs.image_width, outputs.image_height]).repeat(3)
         inside = torch.isfinite(rows) & (rows >= 0.0) & (rows <= image_extent)
         if not bool(inside.all(dim=-1)[valid_masks].all()):
@@ -401,9 +399,9 @@ class FocalHead2D(nn.Module):
                 "transform must drop the boxes it cannot project and clip the rest to the image."
             )
         return _GroundTruth2D(
-            bboxes=rows[..., edges],
+            bboxes=rows[..., Box2DFieldIndex.X_MIN : Box2DFieldIndex.Y_MAX + 1],
             labels=labels.masked_fill(~valid_masks, -1),
-            centers=rows[..., center],
+            centers=rows[..., Box2DFieldIndex.CENTER_X : Box2DFieldIndex.CENTER_Y + 1],
             valid_masks=valid_masks,
         )
 

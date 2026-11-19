@@ -126,7 +126,7 @@ class TestFocalHead2D(unittest.TestCase):
     ) -> Float32[torch.Tensor, "num_images num_classes feature_height feature_width"]:
         """The heatmaps of the given images on the 6 x 10 grid, one channel per class."""
         outputs = self.head(torch.randn(1, 1, 32, 6, 10), IMAGE_HEIGHT, IMAGE_WIDTH)
-        ground_truth = self.head._ground_truth(
+        ground_truth = self.head._flatten_ground_truth(
             outputs,
             self._batch(list(zip(boxes, labels, centers))),
             torch.zeros(len(boxes), dtype=torch.bool),
