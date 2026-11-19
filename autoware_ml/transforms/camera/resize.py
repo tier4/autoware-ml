@@ -198,9 +198,9 @@ class ImageAugmentationParameters(NamedTuple):
 class ImageAugmentationDraw:
     """Resize, crop, flip, and rotation drawn by ``ResizeCropFlipRotImage``, as plain values.
 
-    The draw depends on no image size, so it can be made before a frame is loaded and shared
-    by every camera and every frame of a stream. ``sample_augmentation`` turns it into the
-    pixel values of one camera image.
+    The draw depends on no image size, so it can be shared by the cameras of a sample and
+    kept for every frame of a stream. ``sample_augmentation`` turns it into the pixel values
+    of one camera image.
 
     Attributes:
         resize_fraction: Position of the resize factor within the resize range, in [0, 1].
@@ -496,14 +496,21 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
 
     The source image is resized once, then a crop box sized as the target is cut out of it,
     so the pixels are never stretched a second time and the image transform describes the
-    remapping exactly. The augmentation is sampled independently per camera. During
-    validation the sampling is replaced by the mean of every configured range, the crop is
-    centered along the width, and neither flip nor rotation is applied, so the transform is
-    deterministic.
+    remapping exactly. During validation the sampling is replaced by the mean of every
+    configured range, the crop is centered along the width, and neither flip nor rotation is
+    applied, so the transform is deterministic.
 
-    While the transform keeps the draw of a stream, see :meth:`draw_parameters`, that one
-    draw is applied to every camera of every frame instead, as Sparse4D keeps the image
-    augmentation of a sequence.
+    Two settings decide which images share a draw, and they are independent:
+
+    - ``per_camera_augmentation`` decides it between the cameras of a frame. Every camera
+      draws its own augmentation when it is set, and one draw is applied to all the cameras
+      otherwise, as Sparse4D applies one augmentation to every camera.
+    - The stream of a sample decides it between frames. While the transform keeps the draws
+      of a stream, see :meth:`draw_parameters`, a camera is augmented alike in every frame of
+      the stream, and outside a stream every frame draws again.
+
+    With both, the camera at one position of the camera order keeps a draw of its own over
+    the stream, so the camera order has to be the same in every frame of a stream.
     """
 
     _required_keys = ["camera_image_data"]
@@ -516,6 +523,7 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         training: bool,
         random_horizontal_flip: bool = False,
         rotation_range: Sequence[float] | None = None,
+        per_camera_augmentation: bool = True,
     ) -> None:
         """Initialize the ResizeCropFlipRotImage transform.
 
@@ -530,10 +538,18 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
             random_horizontal_flip: Whether the images can be flipped along their width.
             rotation_range: Minimum and maximum in-plane rotation in degrees, None to
                 never rotate.
+            per_camera_augmentation: Whether every camera of a frame draws its own
+                augmentation, False to apply one draw to all the cameras of a frame. It holds
+                inside a stream and outside of one.
         """
         super().__init__(probability=None)
-        # Draw kept for the frames of a stream, None to draw for every camera of every sample
-        self.parameters: ImageAugmentationDraw | None = None
+        # Draws kept for the frames of a stream, in camera order: one per camera, or the one
+        # shared draw. The draws of the cameras are added with the first frame, which tells
+        # their number. None outside a stream, where every sample draws.
+        self.parameters: Sequence[ImageAugmentationDraw] | None = None
+        # Seed the cameras of the kept stream draw from
+        self._camera_seed = 0
+        self.per_camera_augmentation = per_camera_augmentation
         self.target_size = tuple(target_size)
         self.resize_range = resize_range
         self.bottom_crop_ratio_range = bottom_crop_ratio_range
@@ -550,40 +566,82 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        # The kept draw of a stream is shared by the cameras, otherwise every camera draws
-        if self.parameters is not None:
-            return self.transform_with_parameters(model_gt_sample, self.parameters)
-
         # This is checked in the _validate_required_keys()
         camera_image_data: BaseImages = (
             model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
         )
+        num_cameras = len(camera_image_data.images)
 
-        images = camera_image_data.images
-        source_height, source_width = images.shape[-2:]
+        # The kept draws of a stream are applied again, otherwise the sample draws
+        if self.parameters is not None:
+            self.parameters = self._keep_camera_parameters(self.parameters, num_cameras)
+            return self.transform_with_parameters(model_gt_sample, self.parameters)
 
-        return self._augment_cameras(
-            model_gt_sample,
-            [self.sample_augmentation(source_height, source_width) for _ in images],
-        )
+        if self.per_camera_augmentation:
+            parameters = [self.sample_parameters() for _ in range(num_cameras)]
+        else:
+            shared_parameters = self.sample_parameters()
+            parameters = [shared_parameters for _ in range(num_cameras)]
+        return self.transform_with_parameters(model_gt_sample, parameters)
 
     def draw_parameters(self) -> bool:
-        """Draw one augmentation for every camera and keep it for the samples that follow.
+        """Draw the augmentation of a stream and keep it for the samples that follow.
+
+        With one draw for all the cameras, that draw is made here. With a draw per camera,
+        the number of cameras is unknown before a frame is loaded, so only the seed of the
+        cameras is drawn here and every camera draws from it with the first frame, see
+        :meth:`_keep_camera_parameters`.
 
         Returns:
             True, the transform keeps its parameters.
         """
-        self.parameters = self.sample_parameters()
+        if self.per_camera_augmentation:
+            self._camera_seed = int(np.random.randint(np.iinfo(np.int32).max))
+            self.parameters = ()
+        else:
+            self.parameters = (self.sample_parameters(),)
         return True
 
+    def _keep_camera_parameters(
+        self, parameters: Sequence[ImageAugmentationDraw], num_cameras: int
+    ) -> Sequence[ImageAugmentationDraw]:
+        """Return the kept draw of every camera, drawing for the cameras that have none yet.
+
+        The one draw shared by the cameras is repeated. A camera with its own draw draws from
+        ``np.random`` seeded by the kept stream and its position in the camera order, so
+        every dataloader worker draws the same values for it, and the random state of NumPy
+        is restored afterwards.
+
+        Args:
+            parameters: Draws already kept, in camera order.
+            num_cameras: Number of cameras of the sample.
+
+        Returns:
+            The draw of every camera of the sample, in camera order.
+        """
+        if len(parameters) >= num_cameras:
+            return parameters
+        if not self.per_camera_augmentation:
+            return tuple(parameters[0] for _ in range(num_cameras))
+        state = np.random.get_state()
+        try:
+            new_parameters = []
+            for camera_index in range(len(parameters), num_cameras):
+                np.random.seed([self._camera_seed, camera_index])
+                new_parameters.append(self.sample_parameters())
+        finally:
+            np.random.set_state(state)
+        return tuple(parameters) + tuple(new_parameters)
+
     def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: ImageAugmentationDraw
+        self, model_gt_sample: ModelGTSample, parameters: Sequence[ImageAugmentationDraw]
     ) -> ModelGTSample:
-        """Augment every camera image by the one given draw.
+        """Augment every camera image by its given draw.
 
         Args:
             model_gt_sample: ModelGTSample instance containing `camera_image_data`.
-            parameters: Augmentation drawn by :meth:`sample_parameters`, shared by the cameras.
+            parameters: Augmentation drawn by :meth:`sample_parameters` for every camera, in
+                camera order. Draws beyond the cameras of the sample are left unused.
 
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
@@ -594,8 +652,13 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         )
         images = camera_image_data.images
         source_height, source_width = images.shape[-2:]
-        camera_parameters = self.sample_augmentation(source_height, source_width, parameters)
-        return self._augment_cameras(model_gt_sample, [camera_parameters for _ in images])
+        return self._augment_cameras(
+            model_gt_sample,
+            [
+                self.sample_augmentation(source_height, source_width, camera_parameters)
+                for camera_parameters in parameters[: len(images)]
+            ],
+        )
 
     def _augment_cameras(
         self, model_gt_sample: ModelGTSample, parameters: Sequence[ImageAugmentationParameters]
@@ -627,7 +690,7 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         return model_gt_sample._replace(camera_image_data=augmented_camera_image_data)
 
     def sample_parameters(self) -> ImageAugmentationDraw:
-        """Draw the augmentation of one camera image or of one stream.
+        """Draw the augmentation of one camera image, or the one shared by the cameras.
 
         The resize, the bottom crop, the flip, the rotation and the crop position are drawn
         in this order. Validation draws nothing and returns the middle of every range.

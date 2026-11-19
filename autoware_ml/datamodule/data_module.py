@@ -58,7 +58,9 @@ class DataLoaderConfig:
         drop_last: Whether to drop the final incomplete batch.
         stream_consistent_augmentation: Whether a streaming datamodule augments every frame of
             a stream alike, with one draw per stream and epoch, instead of every frame on its
-            own.
+            own. It only shares the draws between frames: whether the cameras of a frame
+            share one is an option of the image transform, see ``per_camera_augmentation`` of
+            ``ResizeCropFlipRotImage``.
     """
 
     batch_size: int = 1
