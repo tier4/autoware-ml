@@ -93,19 +93,16 @@ class TestSharedEgoFrame(unittest.TestCase):
     """Unit tests for the ego frame that providers describing the same ego share."""
 
     def setUp(self) -> None:
-        """Serve stub maps and record every object the engine actually propagates."""
+        """Serve stub maps and count the objects the engine actually propagates."""
         self.enterContext(stubbed_lanelet_map_loader())
-        self.propagated: list[object] = []
-        propagated = self.propagated
-        propagate = EgoReachability._propagate
-
-        def counting(engine, obj):
-            propagated.append(obj)
-            return propagate(engine, obj)
-
-        patcher = mock.patch.object(EgoReachability, "_propagate", counting)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        self.propagate = self.enterContext(
+            mock.patch.object(
+                EgoReachability,
+                "_propagate",
+                autospec=True,
+                side_effect=EgoReachability._propagate,
+            )
+        )
 
     def test_two_suites_propagate_the_boxes_of_a_frame_once(self) -> None:
         """
@@ -122,10 +119,10 @@ class TestSharedEgoFrame(unittest.TestCase):
         labels = np.array([0, 8, 5])  # car, barrier, bicycle
 
         ttc = first.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)
-        self.assertEqual(len(self.propagated), 3)
+        self.assertEqual(self.propagate.call_count, 3)
         again = second.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)
 
-        self.assertEqual(len(self.propagated), 3)
+        self.assertEqual(self.propagate.call_count, 3)
         np.testing.assert_array_equal(again, ttc)
 
     def test_a_provider_with_another_ego_shares_nothing(self) -> None:
@@ -151,7 +148,7 @@ class TestSharedEgoFrame(unittest.TestCase):
 
         self.assertLessEqual(fast.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)[0], 4.0)
         self.assertEqual(slow.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)[0], inf)
-        self.assertEqual(len(self.propagated), 2)
+        self.assertEqual(self.propagate.call_count, 2)
 
 
 def test_adapter_empty_frame() -> None:

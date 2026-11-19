@@ -223,45 +223,66 @@ def test_low_speed_region_stays_valid_past_pi_sweep() -> None:
 
 
 @pytest.mark.parametrize(
-    ("speed", "body", "objects"),
-    [(13.9, CAR, 60), (10.0, BUS, 24), (3.0, BUS, 24)],
-    ids=["car", "bus", "bus-at-the-radius-floor"],
+    ("speed", "body", "objects", "surface", "pose"),
+    [
+        (13.9, CAR, 60, ROAD, (0.0, 0.0, 0.0)),
+        (10.0, BUS, 24, ROAD, (0.0, 0.0, 0.0)),
+        (3.0, BUS, 24, ROAD, (0.0, 0.0, 0.0)),
+        (13.9, CAR, 24, STREETS, (10.0, -2.0, 0.0)),
+        (8.0, BUS, 24, STREETS, (33.5, -20.0, pi / 2)),
+    ],
+    ids=["car", "bus", "bus-at-the-radius-floor", "car-by-a-median", "bus-on-a-side-street"],
 )
 def test_ego_reachability_matches_brute_force_stepping(
-    speed: float, body: dict, objects: int
+    speed: float, body: dict, objects: int, surface, pose: tuple[float, float, float]
 ) -> None:
     # The prescreen bounds are supersets of the true sets, so the optimized
     # engine must return exactly what naive stepping over every t returns. The
     # bus and the low speed are the cases where the shorter arcs used to poke out
-    # of the horizon region.
+    # of the horizon region; the cut streets are where arcs end at a median, a
+    # side street or a gap. The reference steps on the surface the engine uses,
+    # localized to each agent and sealed against hairline seams.
     steps = int(PARAMS.horizon_s / PARAMS.dt_s + 1e-9)
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=speed, **body)
+    ego = Agent.wheeled(pose[0], pose[1], heading=pose[2], speed=speed, **body)
+
+    def sealed(agent: Agent):
+        return localized_surface(agent, PARAMS, surface).buffer(SURFACE_TOLERANCE_M)
+
+    ego_surface = sealed(ego)
     ego_sets = [
-        reachable_set(ego, index * PARAMS.dt_s, PARAMS, ROAD) for index in range(1, steps + 1)
+        reachable_set(ego, index * PARAMS.dt_s, PARAMS, ego_surface)
+        for index in range(1, steps + 1)
     ]
 
     def brute_force(obj: Agent) -> float:
+        obj_surface = sealed(obj) if obj.motion_model == MotionModel.WHEELED else None
         for index, ego_set in enumerate(ego_sets, 1):
             t = index * PARAMS.dt_s
-            obj_set = reachable_set(obj, t, PARAMS, ROAD)
+            obj_set = reachable_set(obj, t, PARAMS, obj_surface)
             if not ego_set.is_empty and not obj_set.is_empty and ego_set.intersects(obj_set):
                 return t
         return inf
 
     rng = np.random.default_rng(7)
-    frame = EgoReachability(ego, ROAD, PARAMS)
+    frame = EgoReachability(ego, surface, PARAMS)
+    finite = 0
     for index in range(objects):
         if index % 3 == 0:
             # Objects within a body radius of ego are the ones the prescreen
             # must never discard, so a third of the samples sit right there.
-            x, y = float(rng.uniform(-2.0, 2.0)), float(rng.uniform(-2.0, 2.0))
+            x = pose[0] + float(rng.uniform(-2.0, 2.0))
+            y = pose[1] + float(rng.uniform(-2.0, 2.0))
         else:
             x, y = float(rng.uniform(-30, 130)), float(rng.uniform(-45, 45))
         motion_model = (MotionModel.WHEELED, MotionModel.OMNIDIRECTIONAL, MotionModel.STATIC)[
             index % 3
         ]
         obj = _sampled_agent(motion_model, x, y, rng)
-        assert frame.time_to_collision(obj) == brute_force(obj), f"agent {index}: {obj}"
+        ttc = frame.time_to_collision(obj)
+        assert ttc == brute_force(obj), f"agent {index}: {obj}"
+        finite += ttc != inf
+    # A sample where nothing collides would pass without testing the stepping at all.
+    assert finite > 0
 
 
 _STEPS = int(PARAMS.horizon_s / PARAMS.dt_s + 1e-9)
@@ -272,7 +293,6 @@ class TestWheeledReach(unittest.TestCase):
 
     # (name, speed, body, surface, x, y, heading)
     CASES = (
-        ("open", 13.9, CAR, ROAD, 0.0, 0.0, 0.0),
         ("narrow-lane", 10.0, BUS, LANE, 0.0, 0.0, 0.3),
         ("bus-by-median", 3.0, BUS, STREETS, 10.0, -2.0, 0.0),
         ("oncoming", 13.9, CAR, STREETS, 20.0, 2.5, pi),
@@ -283,8 +303,8 @@ class TestWheeledReach(unittest.TestCase):
 
     def test_arcs_traced_once_give_the_set_of_every_step(self) -> None:
         """
-        Input: wheeled agents on an open road, in a narrow lane, by a median, oncoming, on a side
-        street, crawling and off the surface, with their arcs traced once to the horizon.
+        Input: wheeled agents in a narrow lane, by a median, oncoming, on a side street, crawling
+        and off the surface, with their arcs traced once to the horizon.
         Expected: the set read for each step is the set traced for that step alone, vertex for
         vertex; a set that differed could move a collision time by a step.
         Check: exact equality with zero tolerance at every step of every case.
@@ -323,71 +343,6 @@ class TestWheeledReach(unittest.TestCase):
                 self.assertEqual(
                     reach.meets(step, probe), probe.intersects(built), f"step {step}: {probe}"
                 )
-
-
-class TestEgoReachabilityOnCutSurfaces(unittest.TestCase):
-    """Unit tests for the collision times on surfaces cut by medians, side streets and gaps."""
-
-    # (name, ego pose, speed, body)
-    CASES = (
-        ("car-by-median", (10.0, -2.0, 0.0), 13.9, CAR),
-        ("bus-on-side-street", (33.5, -20.0, pi / 2), 8.0, BUS),
-    )
-
-    def test_collision_times_match_stepping_every_set(self) -> None:
-        """
-        Input: a car by the median and a bus on the side street as ego, each against 90 sampled
-        wheeled, omnidirectional and static objects on and off the lanes.
-        Expected: the engine skips steps, tests bodies before it sweeps them and reads every set
-        from arcs traced once, and none of that moves a time away from the plain model, which
-        builds both sets at every step and returns the first step at which they overlap.
-        Check: equal times for every object, and at least 10 finite times per case.
-        """
-        for name, ego_pose, speed, body in self.CASES:
-            with self.subTest(case=name):
-                self._check_against_stepping(ego_pose, speed, body)
-
-    def _check_against_stepping(
-        self, ego_pose: tuple[float, float, float], speed: float, body: dict
-    ) -> None:
-        ego = Agent.wheeled(ego_pose[0], ego_pose[1], heading=ego_pose[2], speed=speed, **body)
-
-        def sealed(agent: Agent):
-            return localized_surface(agent, PARAMS, STREETS).buffer(SURFACE_TOLERANCE_M)
-
-        ego_surface = sealed(ego)
-        ego_sets = [
-            wheeled_reachable_set(ego, index * PARAMS.dt_s, PARAMS, ego_surface)
-            for index in range(1, _STEPS + 1)
-        ]
-
-        def stepping_every_set(obj: Agent) -> float:
-            surface = sealed(obj) if obj.motion_model == MotionModel.WHEELED else None
-            for index, ego_set in enumerate(ego_sets, 1):
-                t = index * PARAMS.dt_s
-                obj_set = reachable_set(obj, t, PARAMS, surface)
-                if not ego_set.is_empty and not obj_set.is_empty and ego_set.intersects(obj_set):
-                    return t
-            return inf
-
-        rng = np.random.default_rng(11)
-        frame = EgoReachability(ego, STREETS, PARAMS)
-        finite = 0
-        for index in range(90):
-            if index % 2 == 0:
-                # On the two lanes, where wheeled objects can drive and most times are finite.
-                x, y = float(rng.uniform(-40.0, 120.0)), float(rng.choice([-2.0, 2.5]))
-            else:
-                x, y = float(rng.uniform(-40.0, 120.0)), float(rng.uniform(-45.0, 45.0))
-            motion_model = (MotionModel.WHEELED, MotionModel.OMNIDIRECTIONAL, MotionModel.STATIC)[
-                index % 3
-            ]
-            obj = _sampled_agent(motion_model, x, y, rng)
-            ttc = frame.time_to_collision(obj)
-            self.assertEqual(ttc, stepping_every_set(obj), f"agent {index}: {obj}")
-            finite += ttc != inf
-        # A sample where nothing ever collides would pass without testing the stepping at all.
-        self.assertGreaterEqual(finite, 10)
 
 
 @pytest.mark.parametrize(

@@ -62,6 +62,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import cached_property
 from math import ceil, cos, hypot, inf, isfinite, pi, sin, tan
 
 import numpy as np
@@ -444,6 +445,26 @@ def _body_sweep(agent: Agent, poses: np.ndarray, drivable: BaseGeometry) -> Base
     return _connected_sweep(body, drivable, LineString(poses[:, :2]))
 
 
+def _start_body(agent: Agent, drivable: BaseGeometry, seed: Point) -> BaseGeometry:
+    """The body at the start pose, clipped like every sweep.
+
+    An agent that cannot move, or whose every arc leaves the surface at once, still owns it.
+    """
+    start = np.array([[agent.x, agent.y, agent.heading]])
+    return _connected_sweep(_body_polygons(agent, start)[0], drivable, seed)
+
+
+def _horizon_curvatures(agent: Agent, params: ReachabilityParams) -> np.ndarray:
+    """The curvatures of the arcs an agent is swept along.
+
+    Sized for the horizon, so every step samples the same curvatures and stays inside the
+    horizon set.
+    """
+    kmax = 1.0 / params.turn_radius(agent)
+    count = _curvature_count(agent, agent.speed * params.horizon_s, kmax, params.arc_samples)
+    return np.linspace(-kmax, kmax, count)
+
+
 def wheeled_reachable_set(
     agent: Agent, t: float, params: ReachabilityParams, drivable: BaseGeometry
 ) -> BaseGeometry:
@@ -476,20 +497,11 @@ def wheeled_reachable_set(
         The swept reachable set, empty when no arc is drivable.
     """
     seed = Point(agent.x, agent.y)
-    # The body at the start pose, clipped the same way: an agent that cannot move,
-    # or whose every arc leaves the surface at once, still owns it.
-    start = np.array([[agent.x, agent.y, agent.heading]])
-    pieces = [_connected_sweep(_body_polygons(agent, start)[0], drivable, seed)]
+    pieces = [_start_body(agent, drivable, seed)]
     reach = agent.speed * t
     if reach <= SURFACE_TOLERANCE_M:
         return pieces[0]
-    kmax = 1.0 / params.turn_radius(agent)
-    # Sized for the horizon so every step samples the same curvatures and stays
-    # inside the horizon set.
-    horizon_reach = agent.speed * params.horizon_s
-    kappas = np.linspace(
-        -kmax, kmax, _curvature_count(agent, horizon_reach, kmax, params.arc_samples)
-    )
+    kappas = _horizon_curvatures(agent, params)
     steps = int(t / params.dt_s + 1e-9)
     distances = np.arange(steps + 1) * agent.speed * params.dt_s
     if reach - distances[-1] > SURFACE_TOLERANCE_M:
@@ -532,28 +544,18 @@ class WheeledReach:
         self.params = params
         self._drivable = drivable
         self._seed = Point(agent.x, agent.y)
-        # The body at the start pose, clipped the same way: an agent that cannot move,
-        # or whose every arc leaves the surface at once, still owns it.
-        start = np.array([[agent.x, agent.y, agent.heading]])
-        self._start = _connected_sweep(_body_polygons(agent, start)[0], drivable, self._seed)
-        self._arcs: list[tuple[np.ndarray, np.ndarray]] | None = None
+        self._start = _start_body(agent, drivable, self._seed)
         self._complete: dict[int, BaseGeometry] = {}
 
-    def _trace(self) -> list[tuple[np.ndarray, np.ndarray]]:
+    @cached_property
+    def _arcs(self) -> list[tuple[np.ndarray, np.ndarray]]:
         """The driven poses of every drivable arc to the horizon, with the body at each pose.
 
         One pose per step, so the poses a step reaches are a prefix of these. An arc cut at the
         road edge ends with the pose at the edge, which every step past the cut includes.
         """
-        if self._arcs is not None:
-            return self._arcs
         agent, params = self.agent, self.params
-        kmax = 1.0 / params.turn_radius(agent)
-        kappas = np.linspace(
-            -kmax,
-            kmax,
-            _curvature_count(agent, agent.speed * params.horizon_s, kmax, params.arc_samples),
-        )
+        kappas = _horizon_curvatures(agent, params)
         steps = int(params.horizon_s / params.dt_s + 1e-9)
         distances = np.arange(steps + 1) * agent.speed * params.dt_s
         arcs = []
@@ -566,16 +568,21 @@ class WheeledReach:
                 driven = _drivable_poses(poses, self._seed, self._drivable)
                 if driven is not None:
                     arcs.append((driven, _body_polygons(agent, driven)))
-        self._arcs = arcs
-        # Flat views of every body, for testing all arcs against a geometry in one call.
-        self._bodies = np.concatenate([bodies for _, bodies in arcs]) if arcs else np.array([])
-        self._body_arc = np.repeat(np.arange(len(arcs)), [len(bodies) for _, bodies in arcs])
-        self._body_pose = (
-            np.concatenate([np.arange(len(bodies)) for _, bodies in arcs])
-            if arcs
-            else np.array([], dtype=np.int64)
-        )
         return arcs
+
+    @cached_property
+    def _flat_bodies(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Every body of every arc, with its arc and pose index, to test all arcs in one call."""
+        if not self._arcs:
+            return (
+                np.empty(0, dtype=object),
+                np.empty(0, dtype=np.int64),
+                np.empty(0, dtype=np.int64),
+            )
+        bodies = np.concatenate([bodies for _, bodies in self._arcs])
+        body_arc = np.repeat(np.arange(len(self._arcs)), [len(bodies) for _, bodies in self._arcs])
+        body_pose = np.concatenate([np.arange(len(bodies)) for _, bodies in self._arcs])
+        return bodies, body_arc, body_pose
 
     def _moves(self, index: int) -> bool:
         """Whether the agent travels at all by step ``index``."""
@@ -583,7 +590,7 @@ class WheeledReach:
 
     def _sweep(self, arc: int, index: int) -> BaseGeometry:
         """The body swept along one arc up to step ``index``, clipped and kept connected."""
-        poses, bodies = self._trace()[arc]
+        poses, bodies = self._arcs[arc]
         count = min(index, poses.shape[0] - 1) + 1
         complete = count == poses.shape[0]
         if complete and arc in self._complete:
@@ -607,9 +614,8 @@ class WheeledReach:
         """
         if not self._moves(index):
             return self._start
-        arcs = self._trace()
         return shapely.union_all(
-            [self._start, *(self._sweep(arc, index) for arc in range(len(arcs)))]
+            [self._start, *(self._sweep(arc, index) for arc in range(len(self._arcs)))]
         )
 
     def meets(self, index: int, other: BaseGeometry) -> bool:
@@ -626,12 +632,12 @@ class WheeledReach:
             return True
         if not self._moves(index):
             return False
-        self._trace()
-        reached = self._body_pose <= index
-        touching = shapely.intersects(other, self._bodies[reached])
+        bodies, body_arc, body_pose = self._flat_bodies
+        reached = body_pose <= index
+        touching = shapely.intersects(other, bodies[reached])
         return any(
             other.intersects(self._sweep(int(arc), index))
-            for arc in np.unique(self._body_arc[reached][touching])
+            for arc in np.unique(body_arc[reached][touching])
         )
 
 
@@ -864,6 +870,7 @@ class EgoReachability:
         start_gap = self._first_step(gap, ego.speed + obj.speed, ego.body_reach + obj.body_reach)
         if start_hat is None or start_gap is None:
             return inf
+        start = max(start_hat, start_gap)
         # A wheeled object's whole path must stay on the surface, so its feasibility
         # is checked against the full drivable localized to the object's own reach,
         # never against ego's clip (the approach can start outside it).
@@ -871,16 +878,15 @@ class EgoReachability:
             surface = localized_surface(obj, params, self._surface).buffer(SURFACE_TOLERANCE_M)
             shapely.prepare(surface)
             reach = WheeledReach(obj, params, surface)
-
-            def meets(index: int) -> bool:
-                return reach.meets(index, self._reachable_set(index))
-        else:
-
-            def meets(index: int) -> bool:
-                obj_set = reachable_set(obj, index * params.dt_s, params, None)
-                return not obj_set.is_empty and self._reachable_set(index).intersects(obj_set)
-
-        return self._first_meeting(max(start_hat, start_gap), meets)
+            return self._first_meeting(
+                start, lambda index: reach.meets(index, self._reachable_set(index))
+            )
+        return self._first_meeting(
+            start,
+            lambda index: self._reachable_set(index).intersects(
+                reachable_set(obj, index * params.dt_s, params, None)
+            ),
+        )
 
 
 def collision_weights(ttc: np.ndarray, decay: float) -> np.ndarray:
