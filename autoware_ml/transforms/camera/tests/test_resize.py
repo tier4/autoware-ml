@@ -14,6 +14,7 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
+from collections.abc import Sequence
 import unittest
 
 from jaxtyping import Float32
@@ -23,6 +24,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.cameras.base_images import BaseImages
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
     PadMultiViewImage,
@@ -580,6 +582,149 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         intrinsics = output.camera_image_data.augmented_camera_intrinsics
         self.assertFalse(torch.allclose(intrinsics[0], intrinsics[1]))
         self.assert_projection_is_consistent(output.camera_image_data)
+
+    def build_training_transform(
+        self, per_camera_augmentation: bool = True
+    ) -> ResizeCropFlipRotImage:
+        """A transform that draws every part of the augmentation, per camera or for all."""
+        return ResizeCropFlipRotImage(
+            target_size=[16, 24],
+            resize_range=[0.5, 1.5],
+            bottom_crop_ratio_range=[0.0, 0.3],
+            training=True,
+            random_horizontal_flip=True,
+            rotation_range=[-5.0, 5.0],
+            per_camera_augmentation=per_camera_augmentation,
+        )
+
+    def augmented_intrinsics(
+        self, pipeline: TransformsCompose, stream_seed: Sequence[int] | None = None
+    ) -> Float32[Tensor, "num_cameras 3 3"]:
+        """Augmented intrinsics the pipeline gives a fresh sample of a stream."""
+        output = pipeline(self.build_multi_task_gt_sample(), stream_seed=stream_seed)
+        assert output.camera_image_data is not None
+        self.assert_projection_is_consistent(output.camera_image_data)
+        return output.camera_image_data.augmented_camera_intrinsics
+
+    def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
+        """
+        Input: a training transform drawing resize, crop, flip and rotation with one draw
+        for all the cameras, two frames transformed with the seed of one stream and one
+        frame with the seed of another.
+        Expected: the draw the transform keeps augments every camera of every frame of its
+        stream, and another stream is augmented differently.
+        Check: the augmented intrinsics of the two frames are equal, the two cameras of a
+        frame are equal, and the frame of the other stream differs.
+        """
+        pipeline = TransformsCompose([self.build_training_transform(per_camera_augmentation=False)])
+
+        first = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        second = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        other = self.augmented_intrinsics(pipeline, (0, 0, 1))
+
+        self.assertTrue(torch.equal(first, second))
+        self.assertTrue(torch.equal(first[0], first[1]))
+        self.assertFalse(torch.equal(first, other))
+
+    def test_cameras_of_a_stream_keep_a_draw_of_their_own(self) -> None:
+        """
+        Input: a training transform drawing per camera, two frames transformed with the
+        seed of one stream and one frame with the seed of another, and a second pipeline
+        built alike reading the first stream, as another dataloader worker does.
+        Expected: every camera draws its own augmentation with the first frame of a stream
+        and keeps it over the later frames, with the same values in every worker.
+        Check: the augmented intrinsics of the two frames are equal, the two cameras of a
+        frame differ, the frame of the other stream differs, and the other worker gets the
+        intrinsics of the first frame.
+        """
+        pipeline = TransformsCompose([self.build_training_transform()])
+        other_worker = TransformsCompose([self.build_training_transform()])
+
+        first = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        second = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        other = self.augmented_intrinsics(pipeline, (0, 0, 1))
+
+        self.assertTrue(torch.equal(first, second))
+        self.assertFalse(torch.equal(first[0], first[1]))
+        self.assertFalse(torch.equal(first, other))
+        self.assertTrue(torch.equal(self.augmented_intrinsics(other_worker, (0, 0, 0)), first))
+
+    def test_cameras_share_one_draw_outside_a_stream_when_asked(self) -> None:
+        """
+        Input: a training transform with one draw for all the cameras, and two frames
+        transformed outside a stream.
+        Expected: the cameras of a frame share one draw, and every frame draws again.
+        Check: the two cameras of either frame get equal augmented intrinsics, and the two
+        frames get different ones.
+        """
+        np.random.seed(0)
+        pipeline = TransformsCompose([self.build_training_transform(per_camera_augmentation=False)])
+
+        first = self.augmented_intrinsics(pipeline)
+        second = self.augmented_intrinsics(pipeline)
+
+        self.assertTrue(torch.equal(first[0], first[1]))
+        self.assertTrue(torch.equal(second[0], second[1]))
+        self.assertFalse(torch.equal(first, second))
+
+    def test_cameras_draw_on_their_own_again_after_a_stream(self) -> None:
+        """
+        Input: a training transform that read a frame of a stream, and one frame outside
+        the stream transformed afterwards.
+        Expected: outside a stream every camera draws its own augmentation again.
+        Check: the two cameras of the frame get different augmented intrinsics, and the
+        frame is not augmented as the frame of the stream.
+        """
+        np.random.seed(0)
+        pipeline = TransformsCompose([self.build_training_transform()])
+
+        in_stream = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        intrinsics = self.augmented_intrinsics(pipeline)
+
+        self.assertFalse(torch.equal(intrinsics[0], intrinsics[1]))
+        self.assertFalse(torch.equal(intrinsics, in_stream))
+
+    def test_a_random_state_draws_the_augmentation_of_the_global_one(self) -> None:
+        """
+        Input: a training transform sampling the augmentation of a 32 x 48 image, once from
+        the global random state of NumPy seeded with 5 and once from a random state of its
+        own seeded with 5.
+        Expected: a frame of a stream is sampled as a frame on its own, only from the random
+        state it is given.
+        Check: both samples are the same resized size, crop box, flip and rotation.
+        """
+        transform = self.build_training_transform()
+
+        np.random.seed(5)
+        from_global = transform.sample_augmentation(self.image_height, self.image_width)
+        from_its_own = transform.sample_augmentation(
+            self.image_height, self.image_width, np.random.RandomState(5)
+        )
+
+        self.assertEqual(from_its_own, from_global)
+
+    def test_a_stream_in_validation_is_augmented_as_a_single_frame(self) -> None:
+        """
+        Input: a validation transform, one frame transformed on its own and one with the
+        seed of a stream.
+        Expected: validation keeps the middle of every range for a stream, the values it
+        applies to a single frame.
+        Check: both frames get the same augmented intrinsics.
+        """
+        pipeline = TransformsCompose(
+            [
+                ResizeCropFlipRotImage(
+                    target_size=[16, 24],
+                    resize_range=[0.5, 1.5],
+                    bottom_crop_ratio_range=[0.0, 0.3],
+                    training=False,
+                )
+            ]
+        )
+
+        single_frame = self.augmented_intrinsics(pipeline)
+
+        self.assertTrue(torch.equal(self.augmented_intrinsics(pipeline, (0, 0, 0)), single_frame))
 
     @staticmethod
     def intensity_centroid(
