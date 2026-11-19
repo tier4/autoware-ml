@@ -1,0 +1,371 @@
+# Copyright 2026 TIER IV, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Reader of the Argoverse 2 Motion Forecasting files.
+
+A scenario is a ``scenario_<id>.parquet`` file of agent tracks and a
+``log_map_archive_<id>.json`` static map; :class:`AV2MotionReader` reads them with
+:mod:`autoware_ml.databases.argoverse2.av2_motion_io` and turns them into the dataset agnostic
+samples of the motion task, in the city frame of the scenario.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from functools import cached_property
+from pathlib import Path
+from typing import NamedTuple
+
+import numpy as np
+import torch
+from jaxtyping import Float64, Int64
+
+from autoware_ml.databases.argoverse2.av2_motion_io import (
+    AV2Scenario,
+    AV2StaticMap,
+    AV2Track,
+    interp_arc,
+    load_scenario_parquet,
+    load_static_map_json,
+)
+from autoware_ml.databases.taxonomy import LabelTaxonomy
+from autoware_ml.dataclasses.batch.motion import AgentTracksSample, MapPolylinesSample
+from autoware_ml.types.motion import AgentRole, PolylineType
+
+# Number of points every map polyline is resampled to by default.
+DEFAULT_NUM_POINTS_PER_POLYLINE = 20
+
+
+class ScenarioMetadata(NamedTuple):
+    """
+    Named tuple with the metadata of one scenario, read when the records are generated.
+
+    Attributes:
+      scenario_id: Identifier of the scenario.
+      city: City the scenario was recorded in.
+      focal_track_id: Identifier of the focal agent.
+      timestamps_ns: Timestamp of every step of the window in nanoseconds, as the tracks
+        file stores it.
+      num_tracks: Number of agent tracks in the scenario.
+    """
+
+    scenario_id: str
+    city: str
+    focal_track_id: str
+    timestamps_ns: Int64[np.ndarray, " num_steps"]
+    num_tracks: int
+
+    @property
+    def num_steps(self) -> int:
+        """Number of steps in the window."""
+        return len(self.timestamps_ns)
+
+    @property
+    def timestamps_seconds(self) -> Float64[np.ndarray, " num_steps"]:
+        """Timestamp of every step of the window in seconds."""
+        return self.timestamps_ns / 1e9
+
+    @property
+    def step_seconds(self) -> float:
+        """Period between two steps in seconds."""
+        return step_seconds_of(self.timestamps_ns)
+
+
+def step_seconds_of(timestamps_ns: Int64[np.ndarray, " num_steps"]) -> float:
+    """
+    Period of a uniformly sampled time axis.
+
+    The periods are taken between the integer nanosecond timestamps and converted once. An
+    epoch timestamp in seconds carries a float64 rounding error of about 6e-8 s, so periods
+    taken in seconds come out as 0.10000002 rather than 0.1.
+
+    Args:
+      timestamps_ns: Timestamp of every step in nanoseconds, at least two of them.
+
+    Returns:
+      float: The period between two steps in seconds.
+
+    Raises:
+      ValueError: If there are fewer than two steps or the steps are not uniform.
+    """
+
+    if len(timestamps_ns) < 2:
+        raise ValueError(
+            f"A scenario needs at least two steps to have a period, got {len(timestamps_ns)}."
+        )
+    periods_ns = np.diff(np.asarray(timestamps_ns, dtype=np.int64))
+    step_ns = float(np.median(periods_ns))
+    if step_ns <= 0.0 or not np.allclose(periods_ns, step_ns, rtol=1e-3, atol=1e3):
+        raise ValueError(
+            "The steps of the scenario are not uniformly spaced, got periods between "
+            f"{periods_ns.min()} ns and {periods_ns.max()} ns."
+        )
+    return step_ns / 1e9
+
+
+class AV2MotionReader:
+    """
+    Reader of one Argoverse 2 Motion Forecasting scenario.
+
+    The files are parsed lazily and at most once: the tracks file when the metadata or the
+    agent tracks are first read, the map file when the vector map is first read.
+    """
+
+    def __init__(self, tracks_path: Path, map_path: Path | None = None) -> None:
+        """
+        Initialize the reader.
+
+        Args:
+          tracks_path: Path of the ``scenario_<id>.parquet`` file.
+          map_path: Path of the ``log_map_archive_<id>.json`` file, None when only the tracks
+            are read.
+        """
+
+        self.tracks_path = Path(tracks_path)
+        self.map_path = Path(map_path) if map_path is not None else None
+
+    @cached_property
+    def scenario(self) -> AV2Scenario:
+        """The scenario parsed from the tracks file."""
+        return load_scenario_parquet(self.tracks_path)
+
+    @cached_property
+    def static_map(self) -> AV2StaticMap:
+        """
+        The static map parsed from the map file.
+
+        Raises:
+          ValueError: If the reader was given no map file.
+        """
+        if self.map_path is None:
+            raise ValueError(f"The reader of {self.tracks_path} was given no map file.")
+        return load_static_map_json(self.map_path)
+
+    @property
+    def timestamps_ns(self) -> Int64[np.ndarray, " num_steps"]:
+        """Timestamp of every step of the window in nanoseconds."""
+        return np.asarray(self.scenario.timestamps_ns, dtype=np.int64)
+
+    def read_metadata(self) -> ScenarioMetadata:
+        """
+        Read the metadata of the scenario.
+
+        Returns:
+          ScenarioMetadata: The metadata of the scenario.
+        """
+
+        scenario = self.scenario
+        return ScenarioMetadata(
+            scenario_id=scenario.scenario_id,
+            city=scenario.city_name,
+            focal_track_id=scenario.focal_track_id,
+            timestamps_ns=self.timestamps_ns,
+            num_tracks=len(scenario.tracks),
+        )
+
+    def read_agent_tracks(
+        self, taxonomy: LabelTaxonomy, current_step_index: int
+    ) -> AgentTracksSample:
+        """
+        Read the agent tracks of the scenario.
+
+        Args:
+          taxonomy: Taxonomy the agent types are resolved with; an unlisted object type raises.
+          current_step_index: Index of the current step inside the window of the scenario.
+
+        Returns:
+          AgentTracksSample: The tracks, the focal agent first, in the city frame. The z
+            coordinate of ``positions`` is zero and ``sizes`` is None: the Argoverse 2 object
+            states record planar position, heading and velocity only.
+        """
+
+        scenario = self.scenario
+        num_steps = len(scenario.timestamps_ns)
+        if not 0 <= current_step_index < num_steps:
+            raise ValueError(
+                f"current_step_index must lie in [0, {num_steps}) for scenario "
+                f"{scenario.scenario_id}, got {current_step_index}."
+            )
+        tracks = _focal_first(scenario)
+        num_agents = len(tracks)
+
+        positions = np.zeros((num_agents, num_steps, 3), dtype=np.float32)
+        headings = np.zeros((num_agents, num_steps), dtype=np.float32)
+        velocities = np.zeros((num_agents, num_steps, 2), dtype=np.float32)
+        valid = np.zeros((num_agents, num_steps), dtype=bool)
+        agent_types = np.empty(num_agents, dtype=np.int64)
+        agent_roles = np.empty(num_agents, dtype=np.int64)
+        for agent_index, track in enumerate(tracks):
+            agent_types[agent_index] = taxonomy.resolve_index(track.object_type)
+            agent_roles[agent_index] = AgentRole(track.category)
+            steps = track.timesteps
+            outside = (steps < 0) | (steps >= num_steps)
+            if outside.any():
+                raise ValueError(
+                    f"Track {track.track_id} of scenario {scenario.scenario_id} has a "
+                    f"state at step {int(steps[outside][0])}, outside the window of "
+                    f"{num_steps} steps."
+                )
+            positions[agent_index, steps, :2] = track.positions
+            headings[agent_index, steps] = track.headings
+            velocities[agent_index, steps] = track.velocities
+            valid[agent_index, steps] = True
+
+        return AgentTracksSample(
+            positions=torch.from_numpy(positions),
+            headings=torch.from_numpy(headings),
+            velocities=torch.from_numpy(velocities),
+            valid=torch.from_numpy(valid),
+            agent_types=torch.from_numpy(agent_types),
+            agent_roles=torch.from_numpy(agent_roles),
+            track_ids=[track.track_id for track in tracks],
+            current_step_index=current_step_index,
+            step_seconds=step_seconds_of(self.timestamps_ns),
+            ignore_index=taxonomy.ignore_index,
+            sizes=None,
+        )
+
+    def read_vector_map(
+        self,
+        num_points_per_polyline: int = DEFAULT_NUM_POINTS_PER_POLYLINE,
+        polyline_types: Sequence[PolylineType] = tuple(PolylineType),
+    ) -> MapPolylinesSample:
+        """
+        Read the static map of the scenario as polylines of a fixed number of points.
+
+        A lane segment yields its centerline and its two boundaries, a pedestrian crossing its
+        two edges, and a drivable area its closed exterior boundary. Every polyline is
+        resampled to ``num_points_per_polyline`` points at equal arc length. Lane connectivity
+        is not exposed.
+
+        Args:
+          num_points_per_polyline: Number of points every polyline is resampled to.
+          polyline_types: Kinds of polylines to keep, in the order of the enum.
+
+        Returns:
+          MapPolylinesSample: The polylines, lane segments first, then crossings, then
+            drivable areas, each group in element id order.
+
+        Raises:
+          ValueError: If fewer than two points per polyline are asked for or the reader was
+            given no map file.
+        """
+
+        if num_points_per_polyline < 2:
+            raise ValueError(
+                f"num_points_per_polyline must be at least 2, got {num_points_per_polyline}."
+            )
+        kept_types = set(polyline_types)
+        static_map = self.static_map
+
+        points: list[np.ndarray] = []
+        types: list[int] = []
+        is_intersection: list[bool] = []
+        element_ids: list[str] = []
+
+        def add(
+            polyline: np.ndarray,
+            kind: PolylineType,
+            element_id: int,
+            intersection: bool,
+        ) -> None:
+            if kind not in kept_types:
+                return
+            points.append(
+                _resample(np.asarray(polyline, dtype=np.float64), num_points_per_polyline)
+            )
+            types.append(int(kind))
+            is_intersection.append(intersection)
+            element_ids.append(str(element_id))
+
+        for lane_id in sorted(static_map.lane_segments):
+            lane = static_map.lane_segments[lane_id]
+            left = _resample(lane.left_boundary, num_points_per_polyline)
+            right = _resample(lane.right_boundary, num_points_per_polyline)
+            add(
+                (left + right) / 2.0,
+                PolylineType.LANE_CENTERLINE,
+                lane_id,
+                lane.is_intersection,
+            )
+            add(left, PolylineType.LANE_LEFT_BOUNDARY, lane_id, lane.is_intersection)
+            add(right, PolylineType.LANE_RIGHT_BOUNDARY, lane_id, lane.is_intersection)
+        for crossing_id in sorted(static_map.pedestrian_crossings):
+            crossing = static_map.pedestrian_crossings[crossing_id]
+            add(crossing.edge1, PolylineType.CROSSWALK_EDGE, crossing_id, False)
+            add(crossing.edge2, PolylineType.CROSSWALK_EDGE, crossing_id, False)
+        for area_id in sorted(static_map.drivable_areas):
+            boundary = static_map.drivable_areas[area_id]
+            add(boundary, PolylineType.DRIVABLE_AREA_BOUNDARY, area_id, False)
+
+        num_polylines = len(points)
+        stacked = (
+            np.stack(points).astype(np.float32)
+            if num_polylines
+            else np.zeros((0, num_points_per_polyline, 3), dtype=np.float32)
+        )
+        return MapPolylinesSample(
+            points=torch.from_numpy(stacked),
+            valid=torch.ones((num_polylines, num_points_per_polyline), dtype=torch.bool),
+            polyline_types=torch.tensor(types, dtype=torch.int64),
+            is_intersection=torch.tensor(is_intersection, dtype=torch.bool),
+            element_ids=element_ids,
+        )
+
+
+def _focal_first(scenario: AV2Scenario) -> list[AV2Track]:
+    """
+    Order the tracks of a scenario with the focal track first.
+
+    Args:
+      scenario: The scenario.
+
+    Returns:
+      list[AV2Track]: The tracks, the focal one first and the others in track id order.
+
+    Raises:
+      ValueError: If the focal track is missing or listed more than once.
+    """
+
+    focal = [track for track in scenario.tracks if track.track_id == scenario.focal_track_id]
+    if len(focal) != 1:
+        raise ValueError(
+            f"Scenario {scenario.scenario_id} names the focal track "
+            f"{scenario.focal_track_id!r}, which appears {len(focal)} times in its tracks."
+        )
+    others = [track for track in scenario.tracks if track.track_id != scenario.focal_track_id]
+    return focal + others
+
+
+def _resample(polyline: Float64[np.ndarray, "num_points 3"], num_points: int) -> np.ndarray:
+    """
+    Resample a polyline to a fixed number of points at equal arc length.
+
+    Args:
+      polyline: Points of the polyline, at least one.
+      num_points: Number of points to resample to.
+
+    Returns:
+      np.ndarray: The resampled polyline of shape (num_points, 3).
+    """
+
+    if polyline.ndim != 2 or polyline.shape[1] != 3 or len(polyline) == 0:
+        raise ValueError(f"A polyline needs a non-empty (N, 3) array, got shape {polyline.shape}.")
+    # Consecutive duplicates have zero chord length and would divide by zero
+    keep = np.ones(len(polyline), dtype=bool)
+    keep[1:] = np.any(polyline[1:] != polyline[:-1], axis=1)
+    polyline = polyline[keep]
+    if len(polyline) == 1:
+        return np.repeat(polyline, num_points, axis=0)
+    return interp_arc(num_points, points=polyline)
