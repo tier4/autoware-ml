@@ -16,37 +16,33 @@
 
 from __future__ import annotations
 
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 
 import polars as pl
 
-if importlib.util.find_spec("av2") is None:
-    raise unittest.SkipTest("the av2 devkit is not installed")
-
-from autoware_ml.databases.argoverse2.av2_motion_database import AV2MotionDatabase  # noqa: E402
-from autoware_ml.databases.argoverse2.av2_motion_scenarios import AV2MotionScenarios  # noqa: E402
-from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
+from autoware_ml.databases.argoverse2.av2_motion_database import AV2MotionDatabase
+from autoware_ml.databases.argoverse2.av2_motion_scenarios import AV2MotionScenarios
+from autoware_ml.databases.argoverse2.tests.av2_fixtures import (
     FOCAL_TRACK_ID,
     av2_motion_taxonomy,
     av2_vocabulary,
     write_scenario,
 )
-from autoware_ml.databases.scenarios import DatasetParams  # noqa: E402
-from autoware_ml.databases.schemas.dataset_schemas import (  # noqa: E402
+from autoware_ml.databases.scenarios import DatasetParams
+from autoware_ml.databases.schemas.dataset_schemas import (
     DatasetRecord,
     DatasetTableSchema,
 )
-from autoware_ml.databases.schemas.motion import MotionDataModel  # noqa: E402
-from autoware_ml.datamodule.data_module import DataLoaderConfig, DataModule  # noqa: E402
-from autoware_ml.datamodule.motion.dataset import MotionDataset  # noqa: E402
-from autoware_ml.datamodule.sources import DatasetSource  # noqa: E402
-from autoware_ml.datamodule.splitters.dataset_record_splitter import ScenarioSplitter  # noqa: E402
-from autoware_ml.transforms.base import TransformsCompose  # noqa: E402
-from autoware_ml.transforms.motion.loading import LoadAgentTracks, LoadVectorMap  # noqa: E402
-from autoware_ml.types.dataset import DatasetFormat  # noqa: E402
+from autoware_ml.databases.schemas.motion import MotionDataModel
+from autoware_ml.datamodule.data_module import DataLoaderConfig, DataModule
+from autoware_ml.datamodule.motion.dataset import MotionDataset
+from autoware_ml.datamodule.sources import DatasetSource
+from autoware_ml.datamodule.splitters.dataset_record_splitter import ScenarioSplitter
+from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.transforms.motion.loading import LoadAgentTracks, LoadVectorMap
+from autoware_ml.types.dataset import DatasetFormat
 
 TRAIN_IDS = ("a0", "a1")
 VAL_IDS = ("b0",)
