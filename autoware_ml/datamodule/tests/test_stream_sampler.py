@@ -20,6 +20,8 @@ from collections.abc import Sequence
 import pickle
 import unittest
 
+import numpy as np
+
 from autoware_ml.datamodule.base_dataset import PaddingSlot, StreamPaddingSlot, StreamSlot
 from autoware_ml.datamodule.samplers import GroupStreamingSampler
 
@@ -150,6 +152,37 @@ class TestStreamSamplerConsistentAugmentation(unittest.TestCase):
 
         self.assertEqual(sorted(seeds), [0, 1, 2, 3])
         self.assertTrue(all(len(scene_seeds) == 1 for scene_seeds in seeds.values()))
+
+    def test_a_seed_numpy_cannot_take_is_rejected_when_the_sampler_is_built(self) -> None:
+        """
+        Input: samplers built with the seeds -1 and 4294967296, one below and one above the
+        range np.random.seed accepts, and with the two ends of the range, 0 and 4294967295.
+        Expected: a seed outside the range is rejected by the constructor, before a
+        dataloader worker hands a stream seed to NumPy, and the ends of the range are kept.
+        Check: both seeds outside the range raise a ValueError that names the seed, and the
+        first stream seed of either end is one np.random.seed accepts.
+        """
+        for seed in (-1, 4294967296):
+            with self.subTest(seed=seed), self.assertRaisesRegex(ValueError, str(seed)):
+                self.build_stream_sampler([2, 2], batch_size=2, seed=seed)
+
+        for seed in (0, 4294967295):
+            with self.subTest(seed=seed):
+                sampler = self.build_stream_sampler([2, 2], batch_size=2, seed=seed)
+                np.random.seed(list(self.stream_seeds(sampler, 0)[0]))
+
+    def test_a_seed_outside_the_range_is_kept_without_consistent_augmentation(self) -> None:
+        """
+        Input: a sampler built with the seed -1 and without consistent augmentation.
+        Expected: the seed only shuffles the scenes then and never reaches NumPy, so it is
+        not rejected.
+        Check: the sampler is built and serves its 4 frames.
+        """
+        sampler = self.build_stream_sampler(
+            [2, 2], batch_size=2, seed=-1, consistent_augmentation=False
+        )
+
+        self.assertEqual(len(list(iter(sampler))), 4)
 
     def test_a_padding_slot_keeps_the_stream_seed_of_the_frame_it_repeats(self) -> None:
         """

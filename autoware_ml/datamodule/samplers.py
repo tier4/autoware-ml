@@ -342,7 +342,12 @@ class GroupStreamingSampler(DistributedSampler):
 
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
+
+    Class Attributes:
+        MAX_STREAM_SEED: Largest seed a stream can carry, the largest ``np.random.seed`` takes.
     """
+
+    MAX_STREAM_SEED = 2**32 - 1
 
     def __init__(
         self,
@@ -364,7 +369,17 @@ class GroupStreamingSampler(DistributedSampler):
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
             consistent_augmentation: Whether every frame of a scene carries the seed of its
                 scene, so a dataset augments the frames of a scene alike.
+
+        Raises:
+            ValueError: If ``consistent_augmentation`` is set and ``seed`` is outside 0 to
+                ``MAX_STREAM_SEED``. The seed is part of every stream seed, which a pipeline
+                hands to ``np.random.seed``.
         """
+        if consistent_augmentation and not 0 <= seed <= self.MAX_STREAM_SEED:
+            raise ValueError(
+                f"GroupStreamingSampler with consistent_augmentation needs a seed from 0 to "
+                f"{self.MAX_STREAM_SEED}, the range np.random.seed accepts, but got {seed}."
+            )
         num_replicas, rank = _world_size_and_rank()
         # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
         # __iter__ below replace them.
