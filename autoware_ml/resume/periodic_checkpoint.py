@@ -29,6 +29,7 @@ import logging
 import math
 import os
 import shutil
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -118,7 +119,7 @@ class PeriodicCheckpoint(L.Callback):
         self.dirpath = trainer.strategy.broadcast(self.dirpath)
 
     def on_train_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
-        """Derive the save period from the length of an epoch in optimizer steps."""
+        """Derive the save period from the epoch length and catch up lagging epoch schedulers."""
         num_batches = trainer.num_training_batches
         if num_batches == float("inf"):
             raise ValueError(
@@ -135,6 +136,36 @@ class PeriodicCheckpoint(L.Callback):
                 self.every_n_steps,
                 self.dirpath,
             )
+        self._catch_up_epoch_schedulers(trainer)
+
+    def _catch_up_epoch_schedulers(self, trainer: L.Trainer) -> None:
+        """Step every epoch-interval scheduler a resumed checkpoint left behind its epoch.
+
+        Lightning steps them after the last batch of an epoch, behind the hooks that save.
+        A checkpoint written on that batch (a periodic save, or a stop request) holds the
+        epoch as finished but the scheduler one epoch late, and a resume from it would train
+        the whole next epoch at the previous epoch's rate.
+        """
+        for config in trainer.lr_scheduler_configs:
+            if config.interval != "epoch" or config.reduce_on_plateau:
+                continue
+            scheduler = config.scheduler
+            missing = trainer.current_epoch // config.frequency - scheduler.last_epoch
+            if missing <= 0:
+                continue
+            if trainer.is_global_zero:
+                logger.warning(
+                    "PeriodicCheckpoint: %s is at epoch %d in epoch %d; stepping it %d time(s).",
+                    type(scheduler).__name__,
+                    scheduler.last_epoch,
+                    trainer.current_epoch,
+                    missing,
+                )
+            with warnings.catch_warnings():
+                # stepping before this process's first optimizer step is the point here
+                warnings.filterwarnings("ignore", message="Detected call of `lr_scheduler.step")
+                for _ in range(missing):
+                    scheduler.step()
 
     def on_train_batch_end(
         self,
@@ -144,7 +175,10 @@ class PeriodicCheckpoint(L.Callback):
         batch: Any,
         batch_idx: int,
     ) -> None:
-        """Save right after every ``every_n_steps``-th optimizer step, or stop on request.
+        """Save after every ``every_n_steps``-th optimizer step, or stop on request.
+
+        A save step on the epoch's last batch is left to the end-of-epoch save, which runs
+        after the epoch's validation and scheduler step.
 
         Args:
             trainer: The running trainer.
@@ -160,8 +194,14 @@ class PeriodicCheckpoint(L.Callback):
         if step == self._last_seen_step:
             return  # gradient accumulation, no optimizer step happened
         self._last_seen_step = step
-        if self._is_save_step(step):
-            self._save(trainer)
+        if not self._is_save_step(step):
+            return
+        if self.save_on_train_epoch_end and batch_idx + 1 >= trainer.num_training_batches:
+            # The epoch's validation and scheduler step come after this hook; a save here
+            # would hold the epoch as finished without them, and the end-of-epoch save that
+            # follows them would be skipped as a duplicate of this step.
+            return
+        self._save(trainer)
 
     def _has_unsaved_progress(self, trainer: L.Trainer) -> bool:
         """Return whether optimizer steps were taken since the last save.

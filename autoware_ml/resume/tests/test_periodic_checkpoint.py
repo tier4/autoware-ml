@@ -26,7 +26,7 @@ from unittest import mock
 import lightning as L
 import torch
 from torch import nn
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 from autoware_ml.resume.atomic_checkpoint_io import AtomicCheckpointIO
 from autoware_ml.resume.checkpoint_locator import CheckpointLocator
@@ -79,6 +79,32 @@ class _RecordingModule(L.LightningModule):
         return torch.optim.SGD(self.parameters(), lr=0.01)
 
 
+class _ScheduledModule(_RecordingModule):
+    """Doubles the learning rate every epoch, records the rate of each epoch and validates."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.epoch_lrs: dict[int, float] = {}
+        self.validated_epochs: list[int] = []
+
+    def on_train_epoch_start(self) -> None:
+        self.epoch_lrs[self.current_epoch] = self.trainer.optimizers[0].param_groups[0]["lr"]
+
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> None:
+        self.log("val/metric", self.layer(batch.float().unsqueeze(1)).mean())
+
+    def on_validation_epoch_end(self) -> None:
+        self.validated_epochs.append(self.current_epoch)
+
+    def configure_optimizers(self) -> dict[str, Any]:
+        optimizer = torch.optim.SGD(self.parameters(), lr=0.01)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda epoch: 2.0**epoch)
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
+        }
+
+
 class _DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
     """Index datamodule carrying its loader position through the framework's mixin."""
 
@@ -94,6 +120,13 @@ class _DataModule(ResumableTrainLoaderMixin, L.LightningDataModule):
             dataset, sampler=sampler, batch_size=self.batch_size, collate_fn=torch.tensor
         )
         return self._attach_train_loader(loader)
+
+
+class _ValidatedDataModule(_DataModule):
+    """Index datamodule with a small validation loader."""
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(_IndexDataset(4), batch_size=2, collate_fn=torch.tensor)
 
 
 class _StopAfter(L.Callback):
@@ -234,6 +267,56 @@ class TestPeriodicCheckpoint(unittest.TestCase):
         self.assertEqual((ckpt_dir / "last.ckpt").resolve(), files[0].resolve())
         self.assertTrue(callback.stop_requested)
         self.assertEqual(_batches_done(files[0]), 7)
+
+    def test_no_batch_end_save_on_the_last_batch_of_an_epoch(self) -> None:
+        """Test that the end-of-epoch save replaces a periodic save on the epoch's last batch."""
+        # 12 steps an epoch saved every 3: the fourth periodic save would fall on the last
+        # batch, before the epoch's validation and scheduler step, and the end-of-epoch save
+        # that follows them would be skipped as a duplicate of that step.
+        ckpt_dir = self.root / "ckpt"
+        callback = PeriodicCheckpoint(dirpath=str(ckpt_dir), saves_per_epoch=4, keep_last=5)
+        _trainer(self.root, callback, max_epochs=1, max_steps=12).fit(
+            _ScheduledModule(), datamodule=_ValidatedDataModule(size=48, batch_size=4)
+        )
+        self.assertEqual(callback.every_n_steps, 3)
+        saved = torch.load(ckpt_dir / "last.ckpt", map_location="cpu", weights_only=False)
+        self.assertEqual(saved["global_step"], 12)
+        self.assertEqual(saved["lr_schedulers"][0]["last_epoch"], 1)
+
+        module = _ScheduledModule()
+        _trainer(self.root, PeriodicCheckpoint(dirpath=str(ckpt_dir)), max_epochs=2).fit(
+            module,
+            datamodule=_ValidatedDataModule(size=48, batch_size=4),
+            ckpt_path=str(ckpt_dir / "last.ckpt"),
+        )
+        self.assertEqual(module.epoch_lrs, {1: 0.02})
+        self.assertEqual(module.validated_epochs, [1])
+
+    def test_resume_steps_an_epoch_scheduler_the_checkpoint_left_behind(self) -> None:
+        """Test that a resumed run trains each epoch at that epoch's scheduled rate."""
+        # A checkpoint of epoch 0's end whose epoch scheduler was never stepped, as a save on
+        # an epoch's last batch writes: epoch 1 must still train at its own rate.
+        ckpt_dir = self.root / "ckpt"
+        _trainer(self.root, PeriodicCheckpoint(dirpath=str(ckpt_dir)), max_epochs=1).fit(
+            _ScheduledModule(), datamodule=_DataModule()
+        )
+        checkpoint = torch.load(
+            ckpt_dir / "periodic-epoch000-step00000010.ckpt", map_location="cpu", weights_only=False
+        )
+        (scheduler_state,) = checkpoint["lr_schedulers"]
+        self.assertEqual(scheduler_state["last_epoch"], 1)
+        scheduler_state["last_epoch"] = 0
+        scheduler_state["_last_lr"] = [0.01]
+        for group in checkpoint["optimizer_states"][0]["param_groups"]:
+            group["lr"] = 0.01
+        lagging = self.root / "lagging.ckpt"
+        torch.save(checkpoint, lagging)
+
+        module = _ScheduledModule()
+        _trainer(self.root, PeriodicCheckpoint(dirpath=str(ckpt_dir)), max_epochs=3).fit(
+            module, datamodule=_DataModule(), ckpt_path=str(lagging)
+        )
+        self.assertEqual(module.epoch_lrs, {1: 0.02, 2: 0.04})
 
     def test_stop_file_from_the_environment(self) -> None:
         """Test that the stop file defaults to the environment variable."""
