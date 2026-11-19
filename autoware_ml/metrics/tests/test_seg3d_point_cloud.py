@@ -21,6 +21,8 @@ pinned without a model or GPU.
 
 from __future__ import annotations
 
+import unittest
+
 import numpy as np
 import pytest
 from scipy.stats import rankdata
@@ -455,6 +457,50 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
         np.testing.assert_array_equal(
             tolerant_error_mask(coord, pred, target, radius), _reference(radius)
         )
+
+
+class TestTolerantErrorMask(unittest.TestCase):
+    """Tests the neighbourhood rescue at its radius and on a frame with a stray point."""
+
+    def test_rescues_at_exactly_the_radius(self) -> None:
+        """
+        Input: two wrong points, each the other's only candidate of its true class, once
+        exactly 0.25 m apart and once one float step further, with a 0.25 m radius.
+        Expected: a candidate at exactly the radius rescues, as the counting query did, and
+        one a step beyond does not.
+        Check: no error at the radius, both points errors one step beyond it.
+        """
+        target = np.array([0, 1])
+        pred = np.array([1, 0])
+        at_radius = np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]])
+        beyond = np.array([[0.0, 0.0, 0.0], [np.nextafter(0.25, 1.0), 0.0, 0.0]])
+
+        np.testing.assert_array_equal(
+            tolerant_error_mask(at_radius, pred, target, 0.25), [False, False]
+        )
+        np.testing.assert_array_equal(tolerant_error_mask(beyond, pred, target, 0.25), [True, True])
+
+    def test_ignores_a_point_far_from_the_scene(self) -> None:
+        """
+        Input: 600 random points with some errors, then the same points plus one correct
+        point 1e9 m away, of a class no other point has.
+        Expected: the stray point makes the candidate grid too large, so the search falls
+        back to every candidate and still gives the same mask; the stray point rescues no
+        one.
+        Check: the mask of the 600 points is unchanged and the stray point is no error.
+        """
+        rng = np.random.default_rng(11)
+        coord = rng.uniform(-5, 5, (600, 3))
+        target = rng.integers(0, 4, 600)
+        pred = np.where(rng.random(600) < 0.3, rng.integers(0, 4, 600), target)
+        expected = tolerant_error_mask(coord, pred, target, 0.6)
+        self.assertTrue(expected.any() and not expected.all())
+
+        far = np.vstack([coord, [[1.0e9, 0.0, 0.0]]])
+        mask = tolerant_error_mask(far, np.append(pred, 9), np.append(target, 9), 0.6)
+
+        np.testing.assert_array_equal(mask[:600], expected)
+        self.assertFalse(mask[600])
 
 
 def test_entropy_auroc_binned_matches_rankdata_reference() -> None:
