@@ -29,6 +29,7 @@ inside ``result`` at epoch end.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -39,23 +40,66 @@ from autoware_ml.metrics.base import EvalStage, MetricSuite
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.metrics.report import MetricReport
 
+logger = logging.getLogger(__name__)
+
+
+def resolve_suites(
+    suites: Sequence[MetricSuite] | None, metrics: Sequence[MetricSuite] | None
+) -> Sequence[MetricSuite] | None:
+    """The metric suites a model was given, under their name or the deprecated one.
+
+    Models took their suites as ``metrics``, which reads as if it held metric
+    components. The argument and the model config key are now ``suites``;
+    ``metrics`` keeps working until it is removed, and logs a warning so a config
+    that still uses it shows up in the run's output.
+
+    Args:
+        suites: Suites under their current name.
+        metrics: Suites under the deprecated name.
+
+    Returns:
+        Whichever of the two was given, ``None`` when neither was.
+
+    Raises:
+        ValueError: If both were given.
+    """
+    if metrics is None:
+        return suites
+    if suites is not None:
+        raise ValueError(
+            "Got metric suites as both `suites` and `metrics`. Pass them as `suites` only, "
+            "`metrics` is its deprecated name."
+        )
+    logger.warning(
+        "Passing metric suites as `metrics` is deprecated, pass them as `suites` "
+        "(in a model config: `suites: ${metrics}`)."
+    )
+    return metrics
+
 
 class MetricEvalMixin:
     """Owns the metric suites and the validation/test epoch lifecycle."""
 
     def __init__(
-        self, *args: Any, metrics: Sequence[MetricSuite] | None = None, **kwargs: Any
+        self,
+        *args: Any,
+        suites: Sequence[MetricSuite] | None = None,
+        metrics: Sequence[MetricSuite] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Clone the metric suites per stage and register them as submodules.
 
         Args:
-            metrics: Suites attached from config. Empty means only losses are
+            suites: Suites attached from config. Empty means only losses are
                 logged.
+            metrics: Deprecated name of ``suites``, still accepted with a logged
+                warning.
             *args: Positional arguments forwarded to the next base.
             **kwargs: Keyword arguments forwarded to the next base.
         """
         super().__init__(*args, **kwargs)
-        prototypes = list(metrics) if metrics else []
+        suites = resolve_suites(suites, metrics)
+        prototypes = list(suites) if suites else []
         for suite in prototypes:
             if not suite.prefix:
                 raise ValueError(

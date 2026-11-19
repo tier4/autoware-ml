@@ -185,6 +185,7 @@ class TransFusionDetection3DModel(ModuleBaseModel):
         log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
+        suites: Sequence[MetricSuite] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
         partial_annotations: PartialAnnotations | None = None,
     ) -> None:
@@ -201,7 +202,8 @@ class TransFusionDetection3DModel(ModuleBaseModel):
             log_dict_configs: Logging configuration for training and validation.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
-            metrics: Detection metrics accumulated during validation and test.
+            suites: Detection metric suites accumulated during validation and test.
+            metrics: Deprecated name of ``suites``.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the head must not supervise in that sample. None supervises every class.
 
@@ -212,6 +214,7 @@ class TransFusionDetection3DModel(ModuleBaseModel):
             data_preprocessor=data_preprocessor,
             optimizer=optimizer,
             scheduler=scheduler,
+            suites=suites,
             metrics=metrics,
             log_dict_configs=log_dict_configs,
         )

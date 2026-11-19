@@ -225,7 +225,7 @@ model:
   _target_: autoware_ml.models.my_task.my_model.MyModel
   num_classes: ${class_count:${taxonomy.segmentation3d.class_names}}
   ignore_index: ${taxonomy.segmentation3d.ignore_index}
-  metrics: ${metrics}
+  suites: ${metrics}
 
   encoder:
     _target_: torch.nn.Linear

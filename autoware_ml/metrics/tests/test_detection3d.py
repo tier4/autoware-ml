@@ -131,8 +131,8 @@ def _update(
 class _DummyDetection3DModel(MetricEvalMixin):
     """Minimal model exercising the metric lifecycle through the mixin."""
 
-    def __init__(self, metrics: list[Detection3DMetricSuite]) -> None:
-        super().__init__(metrics=metrics)
+    def __init__(self, suites: list[Detection3DMetricSuite]) -> None:
+        super().__init__(suites=suites)
         self.logged_metrics: list[dict[str, float]] = []
 
     @property
@@ -345,7 +345,7 @@ def test_non_integer_detection3d_range_suffixes_do_not_collide() -> None:
 
 
 def test_metric_eval_mixin_logs_test_map() -> None:
-    model = _DummyDetection3DModel(metrics=[_suite(thresholds=(0.5,))])
+    model = _DummyDetection3DModel(suites=[_suite(thresholds=(0.5,))])
     model.on_test_epoch_start()
     model.on_test_batch_end(
         {"model_outputs": [_prediction([(0.0, 0.0)], [0.9], [0])]},
@@ -361,7 +361,7 @@ def test_metric_eval_mixin_logs_test_map() -> None:
 
 
 def test_metric_eval_mixin_logs_val_map() -> None:
-    model = _DummyDetection3DModel(metrics=[_suite(thresholds=(0.5,))])
+    model = _DummyDetection3DModel(suites=[_suite(thresholds=(0.5,))])
     model.on_validation_epoch_start()
     model.on_validation_batch_end(
         {"model_outputs": [_prediction([(0.0, 0.0)], [0.9], [0])]},
@@ -381,7 +381,7 @@ def test_metric_eval_mixin_rejects_a_missing_eval_output_part() -> None:
         def build_eval_output(self, batch: dict[str, Any], outputs: Any) -> EvalOutput:
             return EvalOutput()  # no detection3d frames for a detection suite
 
-    model = _BadModel(metrics=[_suite(thresholds=(0.5,))])
+    model = _BadModel(suites=[_suite(thresholds=(0.5,))])
     model.on_validation_epoch_start()
     with pytest.raises(ValueError, match="detection3d frames"):
         model.on_validation_batch_end(
