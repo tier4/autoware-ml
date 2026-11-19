@@ -51,6 +51,23 @@ REQUIRES_SPARSE_CUDA = unittest.skipUnless(
 )
 
 
+class TestDeclarationKeepsTheModelMode(unittest.TestCase):
+    """Declaring the graphs changes nothing on the model."""
+
+    def test_declaring_the_graphs_leaves_the_live_voxel_encoder_in_training_mode(self) -> None:
+        """Test that declaring the graphs does not switch the module the graphs share with the model.
+
+        Input: the segmentation and the detection model in training mode.
+        Expected: the voxel encoder, the one live module the encoder graph wraps, is still in
+            training mode after the declaration; the framework switches modes at export only.
+        Check: ``voxel_encoder.training`` after ``deployment_declaration()``.
+        """
+        for model in (build_seg3d_model(), build_trans_model()):
+            model.train()
+            model.deployment_declaration()
+            self.assertTrue(model.voxel_encoder.training, type(model).__name__)
+
+
 @REQUIRES_SPARSE_CUDA
 class TestSeg3dDeployment(unittest.TestCase):
     """The segmentation model's deployment graphs and the export specs derived from them."""
