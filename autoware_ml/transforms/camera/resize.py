@@ -520,7 +520,7 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
                 inside a stream and outside of one.
         """
         super().__init__(probability=None)
-        self.per_camera_augmentation = per_camera_augmentation
+        self.per_camera_augmentation: bool = per_camera_augmentation
         self.target_size = tuple(target_size)
         self.resize_range = resize_range
         self.bottom_crop_ratio_range = bottom_crop_ratio_range

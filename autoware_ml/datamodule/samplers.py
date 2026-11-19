@@ -388,7 +388,7 @@ class GroupStreamingSampler(DistributedSampler):
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
-        self.consistent_augmentation = consistent_augmentation
+        self.consistent_augmentation: bool = consistent_augmentation
         self.total_frames = sum(len(group) for group in self.scene_groups)
         self._validate_lanes()
 
