@@ -27,8 +27,6 @@ from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.camera.resize import (
     CropAndScale,
-    ImageAugmentationDraw,
-    ImageAugmentationParameters,
     PadMultiViewImage,
     ResizeCropFlipRotImage,
     ResizeMultiviewImages,
@@ -686,40 +684,24 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         self.assertFalse(torch.equal(intrinsics[0], intrinsics[1]))
         self.assertFalse(torch.equal(intrinsics, in_stream))
 
-    def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
+    def test_a_random_state_draws_the_augmentation_of_the_global_one(self) -> None:
         """
-        Input: a 32 x 48 image, a resize range of 0.5 to 1.5, a target of 16 x 24 and a draw
-        a quarter into the resize range, dropping a quarter at the bottom, with the crop in
-        the middle of the free width, a flip and a rotation of 3 degrees.
-        Expected: the pixel values of the camera are built from the draw and the image size.
-        Check: the image is resized to 24 x 36 and cropped at row 2 and column 6, with the
-        flip and the rotation of the draw.
+        Input: a training transform sampling the augmentation of a 32 x 48 image, once from
+        the global random state of NumPy seeded with 5 and once from a random state of its
+        own seeded with 5.
+        Expected: a frame of a stream is sampled as a frame on its own, only from the random
+        state it is given.
+        Check: both samples are the same resized size, crop box, flip and rotation.
         """
         transform = self.build_training_transform()
-        draw = ImageAugmentationDraw(
-            resize_fraction=0.25,
-            bottom_crop_ratio=0.25,
-            horizontal_flip=True,
-            rotation=3.0,
-            crop_left_fraction=0.5,
+
+        np.random.seed(5)
+        from_global = transform.sample_augmentation(self.image_height, self.image_width)
+        from_its_own = transform.sample_augmentation(
+            self.image_height, self.image_width, np.random.RandomState(5)
         )
 
-        parameters = transform.sample_augmentation(self.image_height, self.image_width, draw)
-
-        # A quarter into the resize range of 0.5 to 1.5 is 0.75, so 32 x 48 becomes 24 x 36.
-        # Three quarters of the height are kept above the bottom crop, 18 rows, 2 more than
-        # the target, and the crop sits in the middle of the 12 free columns.
-        self.assertEqual(
-            parameters,
-            ImageAugmentationParameters(
-                resized_height=24,
-                resized_width=36,
-                crop_top=2,
-                crop_left=6,
-                horizontal_flip=True,
-                rotation=3.0,
-            ),
-        )
+        self.assertEqual(from_its_own, from_global)
 
     def test_a_stream_in_validation_is_augmented_as_a_single_frame(self) -> None:
         """

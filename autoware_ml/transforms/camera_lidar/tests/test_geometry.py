@@ -43,7 +43,6 @@ from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalBEVRandomFlip,
     GlobalRotScaleTrans,
     RandomRotateTargetAngle,
-    yaw_rotation_matrix,
 )
 from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.geometry import (
@@ -1283,24 +1282,23 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
     def test_the_parameters_of_a_stream_are_the_ones_applied(self) -> None:
         """
-        Input: the parameters the two transforms draw from the random states the pipeline
-        seeds for a stream, by the seed of the stream and the position of the transform, and
-        one frame of the stream.
+        Input: the rotation, scale and translation and the flips the two transforms sample
+        from the random states the pipeline seeds for a stream, by the seed of the stream
+        and the position of the transform, and one frame of the stream.
         Expected: the frame is moved by the yaw, scale and translation of the stream, then
         flipped along the axes of the stream.
         Check: the transformation matrix of the frame equals the one built here from the
-        drawn values.
+        sampled values.
         """
-        rot_scale_trans = self.pipeline.pipeline[0].sample_parameters(
-            np.random.RandomState([0, 0, 0, 0])
-        )
-        flips = self.pipeline.pipeline[1].sample_parameters(np.random.RandomState([0, 0, 0, 1]))
+        rot_scale_trans, flips = self.pipeline.pipeline
+        _, moved = rot_scale_trans.sample_rot_scale_trans(np.random.RandomState([0, 0, 0, 0]))
+        horizontal, vertical = flips.sample_flip(np.random.RandomState([0, 0, 0, 1]))
         flip = torch.diag(
-            torch.tensor([-1.0 if flips.vertical else 1.0, -1.0 if flips.horizontal else 1.0, 1.0])
+            torch.tensor([-1.0 if vertical else 1.0, -1.0 if horizontal else 1.0, 1.0])
         )
         expected = torch.eye(4)
-        expected[:3, :3] = flip @ yaw_rotation_matrix(rot_scale_trans.yaw) * rot_scale_trans.scale
-        expected[:3, 3] = flip @ torch.tensor(rot_scale_trans.translation)
+        expected[:3, :3] = flip @ moved.rotation_matrix * moved.scale_factor
+        expected[:3, 3] = flip @ moved.translation_vector.flatten()
 
         self.assertTrue(torch.allclose(self.augment((0, 0, 0)), expected, atol=1e-6))
 

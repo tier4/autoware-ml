@@ -33,7 +33,6 @@ the transformed one. They reject camera image data that already carries depth ma
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from functools import partial
 from typing import NamedTuple
 
@@ -192,28 +191,6 @@ class ImageAugmentationParameters(NamedTuple):
     horizontal_flip: bool
     # Counter-clockwise rotation angle in degrees applied about the image center.
     rotation: float
-
-
-@dataclass(frozen=True)
-class ImageAugmentationDraw:
-    """Resize, crop, flip, and rotation drawn by ``ResizeCropFlipRotImage``, as plain values.
-
-    The draw depends on no image size, so it can be shared by the cameras of a sample.
-    ``sample_augmentation`` turns it into the pixel values of one camera image.
-
-    Attributes:
-        resize_fraction: Position of the resize factor within the resize range, in [0, 1].
-        bottom_crop_ratio: Fraction of the resized image height dropped at its bottom.
-        horizontal_flip: Whether the crop is flipped along the image width.
-        rotation: Counter-clockwise rotation angle in degrees about the image center.
-        crop_left_fraction: Position of the crop box along the free width, in [0, 1].
-    """
-
-    resize_fraction: float
-    bottom_crop_ratio: float
-    horizontal_flip: bool
-    rotation: float
-    crop_left_fraction: float
 
 
 class CropAndScale(ImageSpaceTransform):
@@ -596,47 +573,49 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         camera_image_data: BaseImages = (
             model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
         )
-        parameters = self.sample_camera_parameters(len(camera_image_data.images), random_state)
+        parameters = self.sample_camera_parameters(camera_image_data, random_state)
         return model_gt_sample._replace(
             camera_image_data=self.augment_cameras(camera_image_data, parameters)
         )
 
     def sample_camera_parameters(
-        self, num_cameras: int, random_state: np.random.RandomState | None = None
-    ) -> Sequence[ImageAugmentationDraw]:
-        """Draw the augmentation of every camera of a sample: one each, or one for them all.
+        self, camera_image_data: BaseImages, random_state: np.random.RandomState | None = None
+    ) -> Sequence[ImageAugmentationParameters]:
+        """Sample the augmentation of every camera of a sample: one each, or one for them all.
 
         Args:
-            num_cameras: Number of cameras of the sample.
+            camera_image_data: Camera image data holding the images before the augmentation.
             random_state: Random state to draw from, the one of a stream or None for the
                 global one of NumPy.
 
         Returns:
-            The draw of every camera of the sample, in camera order.
+            The augmentation of every camera of the sample, in camera order.
         """
+        images = camera_image_data.images
+        source_height, source_width = images.shape[-2:]
         if self.per_camera_augmentation:
-            return [self.sample_parameters(random_state) for _ in range(num_cameras)]
-        shared_parameters = self.sample_parameters(random_state)
-        return [shared_parameters for _ in range(num_cameras)]
+            return [
+                self.sample_augmentation(source_height, source_width, random_state) for _ in images
+            ]
+        # The images of a sample share one size, so one augmentation fits every camera
+        shared_parameters = self.sample_augmentation(source_height, source_width, random_state)
+        return [shared_parameters for _ in images]
 
     def augment_cameras(
-        self, camera_image_data: BaseImages, parameters: Sequence[ImageAugmentationDraw]
+        self, camera_image_data: BaseImages, parameters: Sequence[ImageAugmentationParameters]
     ) -> BaseImages:
-        """Augment every camera image by its given draw and update the augmented intrinsics.
+        """Augment every camera image by its given augmentation and update the intrinsics.
 
         Args:
             camera_image_data: Camera image data holding the images before the augmentation.
-            parameters: Augmentation drawn by :meth:`sample_parameters` for every camera, in
-                camera order.
+            parameters: Augmentation of every camera image, in camera order.
 
         Returns:
             Camera image data holding the augmented images and the matching intrinsics.
         """
-        source_height, source_width = camera_image_data.images.shape[-2:]
         augmented_images = []
         image_transforms = []
-        for image, draw in zip(camera_image_data.images, parameters, strict=True):
-            camera_parameters = self.sample_augmentation(source_height, source_width, draw)
+        for image, camera_parameters in zip(camera_image_data.images, parameters, strict=True):
             augmented_image, image_transform = self.apply_augmentation(image, camera_parameters)
             augmented_images.append(augmented_image)
             image_transforms.append(image_transform)
@@ -647,62 +626,27 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
             image_transforms=torch.stack(image_transforms, dim=0),
         )
 
-    def sample_parameters(
-        self, random_state: np.random.RandomState | None = None
-    ) -> ImageAugmentationDraw:
-        """Draw the augmentation of one camera image, or the one shared by the cameras.
-
-        The resize, the bottom crop, the flip, the rotation and the crop position are drawn
-        in this order. Validation draws nothing and returns the middle of every range.
-
-        Args:
-            random_state: Random state to draw from, the one of a stream or None for the
-                global one of NumPy.
-
-        Returns:
-            The drawn augmentation as plain values that depend on no image size.
-        """
-        if not self.training:
-            return ImageAugmentationDraw(
-                resize_fraction=0.5,
-                bottom_crop_ratio=float(np.mean(self.bottom_crop_ratio_range)),
-                horizontal_flip=False,
-                rotation=0.0,
-                crop_left_fraction=0.5,
-            )
-        random = random_source(random_state)
-        resize_fraction = float(random.uniform())
-        bottom_crop_ratio = float(
-            random.uniform(self.bottom_crop_ratio_range[0], self.bottom_crop_ratio_range[1])
-        )
-        horizontal_flip = self.random_horizontal_flip and bool(random.randint(2))
-        rotation = float(random.uniform(self.rotation_range[0], self.rotation_range[1]))
-        return ImageAugmentationDraw(
-            resize_fraction=resize_fraction,
-            bottom_crop_ratio=bottom_crop_ratio,
-            horizontal_flip=horizontal_flip,
-            rotation=rotation,
-            crop_left_fraction=float(random.uniform()),
-        )
-
     def sample_augmentation(
         self,
         source_height: int,
         source_width: int,
-        draw: ImageAugmentationDraw | None = None,
+        random_state: np.random.RandomState | None = None,
     ) -> ImageAugmentationParameters:
-        """Build the augmentation applied to a single camera image.
+        """Sample the augmentation applied to a single camera image.
+
+        The resize, the bottom crop, the flip, the rotation and the crop position are drawn
+        in this order. Validation draws nothing and takes the middle of every range.
 
         Args:
             source_height: Height of the image before the augmentation.
             source_width: Width of the image before the augmentation.
-            draw: The drawn augmentation, None to draw it here.
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
 
         Returns:
             Resized size, crop box, flip, and rotation applied to the image.
         """
-        if draw is None:
-            draw = self.sample_parameters()
+        random = random_source(random_state)
         target_height, target_width = self.target_size
 
         if isinstance(self.resize_range, (int, float)):
@@ -718,10 +662,17 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
             resize_range = (self.resize_range[0], self.resize_range[1])
 
         if self.training:
-            # The factor np.random.uniform draws over the range for the same random number
-            resize = resize_range[0] + (resize_range[1] - resize_range[0]) * draw.resize_fraction
+            resize = float(random.uniform(resize_range[0], resize_range[1]))
+            bottom_crop_ratio = float(
+                random.uniform(self.bottom_crop_ratio_range[0], self.bottom_crop_ratio_range[1])
+            )
+            horizontal_flip = self.random_horizontal_flip and bool(random.randint(2))
+            rotation = float(random.uniform(self.rotation_range[0], self.rotation_range[1]))
         else:
             resize = float(np.mean(resize_range))
+            bottom_crop_ratio = float(np.mean(self.bottom_crop_ratio_range))
+            horizontal_flip = False
+            rotation = 0.0
 
         # The resized size is rounded to whole pixels, the image transform is then derived
         # from it rather than from `resize` so it holds the scale actually applied.
@@ -730,18 +681,16 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         # The bottom edge of the crop box sits `bottom_crop_ratio` of the resized height
         # above the bottom of the resized image, dropping the ego vehicle and keeping the
         # road. Along the width the box is placed at random in training, centered otherwise.
-        crop_top = int((1.0 - draw.bottom_crop_ratio) * resized_height) - target_height
+        crop_top = int((1.0 - bottom_crop_ratio) * resized_height) - target_height
         max_crop_left = max(0, resized_width - target_width)
-        crop_left = (
-            int(max_crop_left * draw.crop_left_fraction) if self.training else max_crop_left // 2
-        )
+        crop_left = int(random.uniform(0, max_crop_left)) if self.training else max_crop_left // 2
         return ImageAugmentationParameters(
             resized_height=resized_height,
             resized_width=resized_width,
             crop_top=crop_top,
             crop_left=crop_left,
-            horizontal_flip=draw.horizontal_flip,
-            rotation=draw.rotation,
+            horizontal_flip=horizontal_flip,
+            rotation=rotation,
         )
 
     def apply_augmentation(
