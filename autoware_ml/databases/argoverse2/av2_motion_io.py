@@ -1,3 +1,4 @@
+# Copyright (c) 2022 Argo AI
 # Copyright 2026 TIER IV, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,6 +12,31 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# interp_arc is adapted from av2/geometry/interpolate.py of av2 0.3.6
+# (https://github.com/argoverse/av2-api), released under the MIT License:
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# Changes in this port: renamed arguments and variables, a new error message, and boolean masks
+# and broadcasting in place of np.where and reshape; the computation is unchanged. The parquet
+# and static map readers are not derived from av2: they only read the same file formats.
 
 """Readers of the Argoverse 2 Motion Forecasting files, without the ``av2`` devkit.
 
@@ -243,8 +269,8 @@ def interp_arc(num_points: int, points: Float64[np.ndarray, "n d"]) -> np.ndarra
     """
     Resample a polyline to points spread evenly along its length, by linear interpolation.
 
-    Ported from ``av2.geometry.interpolate.interp_arc`` of ``av2==0.3.6``
-    (Copyright (c) 2022 Argo AI, MIT License), which follows the chordal parameterization of
+    Adapted from ``av2.geometry.interpolate.interp_arc`` of ``av2==0.3.6``, see the license
+    notice at the top of the file. It follows the chordal parameterization of
     https://www.mathworks.com/matlabcentral/fileexchange/34874-interparc. Consecutive duplicate
     points have zero length and divide by zero, so the caller removes them.
 
