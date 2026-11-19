@@ -35,8 +35,9 @@ from autoware_ml.types.dataset import DatasetFormat
 logger = logging.getLogger(__name__)
 
 # Number of observed steps at the start of every scenario window. The current step of a record
-# is the last observed one; the steps after it are the future to forecast. The test split ships
-# only the observed steps, so its windows end at the current step.
+# is the last observed one; the steps after it are the future to forecast. The test split keeps
+# the 110 timestamps of every split but withholds the future states, so its windows have the
+# same shape and every agent is invalid after the current step.
 OBSERVED_STEPS = 50
 
 

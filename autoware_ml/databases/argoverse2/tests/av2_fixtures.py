@@ -81,6 +81,7 @@ def write_scenario(
     num_steps: int = 110,
     object_types: dict[str, str] | None = None,
     start_timestamp_ns: int = 1_000_000_000,
+    num_state_steps: int | None = None,
 ) -> Path:
     """
     Write one synthetic scenario with its tracks file and its map file.
@@ -92,15 +93,19 @@ def write_scenario(
     Args:
       split_path: The split directory, created when missing.
       scenario_id: Identifier of the scenario, also the name of its directory.
-      num_steps: Number of steps of the window, 110 for train / val and 50 for test.
+      num_steps: Number of timestamps of the window, 110 for every split of the dataset.
       object_types: Object type of every track by track id, the default three tracks when None.
       start_timestamp_ns: Timestamp of the first step in nanoseconds.
+      num_state_steps: Number of leading steps the tracks carry states at, every step when
+        None. A test split scenario keeps all 110 timestamps but has states at the first 50
+        steps only.
 
     Returns:
       Path: The scenario directory.
     """
 
     object_types = TRACK_OBJECT_TYPES if object_types is None else object_types
+    state_steps = num_steps if num_state_steps is None else num_state_steps
 
     # Track category values of the dataset: 0 fragment, 1 unscored, 2 scored, 3 focal
     schedules = {
@@ -125,6 +130,7 @@ def write_scenario(
                 "velocity_y": 0.0 if along_x else 10.0,
             }
             for step in steps
+            if step < state_steps
         )
 
     scenario_path = split_path / scenario_id
