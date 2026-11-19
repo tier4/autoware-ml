@@ -32,6 +32,12 @@ from scipy.spatial import cKDTree
 # prefilter and searches every candidate.
 _MAX_PREFILTER_CELLS = 1 << 24
 
+# Relative amount by which a prefilter cell is wider than the rescue radius. A cell
+# exactly ``radius`` wide would already keep two points within ``radius`` in the same
+# or adjacent cells; the margin keeps that true when rounding nudges a coordinate
+# across a cell border.
+_PREFILTER_CELL_MARGIN = 1e-6
+
 
 def tolerant_error_mask(
     coord: np.ndarray, pred: np.ndarray, target: np.ndarray, radius: float
@@ -105,11 +111,12 @@ def _prefilter_cells(xy: np.ndarray, radius: float) -> tuple[np.ndarray | None, 
         The flat cell index per point and the grid shape, or ``None`` and an empty
         shape when the points span too wide an area (or are not finite) for a grid.
     """
+    cell_side = radius * (1.0 + _PREFILTER_CELL_MARGIN)
     low = xy.min(axis=0)
-    span = (xy.max(axis=0) - low) / (radius * (1.0 + 1e-6))
+    span = (xy.max(axis=0) - low) / cell_side
     if not np.all(np.isfinite(span)) or (span[0] + 3.0) * (span[1] + 3.0) > _MAX_PREFILTER_CELLS:
         return None, (0, 0)
-    index = np.floor((xy - low) / (radius * (1.0 + 1e-6))).astype(np.int64) + 1
+    index = np.floor((xy - low) / cell_side).astype(np.int64) + 1
     shape = (int(index[:, 0].max()) + 2, int(index[:, 1].max()) + 2)
     return index[:, 0] * shape[1] + index[:, 1], shape
 
