@@ -784,16 +784,22 @@ class Cpe(PointSequential):
         )
 
     @torch.no_grad()
-    def fold_bias(self) -> None:
-        """Fold the bias of the convolution into the linear layer after it.
+    def fold_linear(self) -> None:
+        """Fold the linear layer into the convolution before it.
 
-        ``Linear(W, b)(conv(x) + c)`` equals ``Linear(W, b + W c)(conv(x))``, so the convolution
-        runs without a bias. Meant for an export copy, the parameters change in place.
+        The submanifold convolution is linear in its weights, so ``Linear(W1, b1)(conv_W(x) + b0)``
+        equals ``conv_{W1 W}(x) + W1 b0 + b1``, with ``W1`` applied along the output channels of
+        the KRSC weight ``[C_out, kd, kh, kw, C_in]``. The encoding then runs as the convolution
+        followed by its layer norm. Meant for an export copy, the parameters change in place.
         """
         conv, linear, _ = self.children()
-        bias = linear.bias.double() + linear.weight.double() @ conv.bias.double()
-        linear.bias.copy_(bias.to(linear.bias.dtype))
-        conv.bias = None
+        weight = conv.weight.double()
+        linear_weight = linear.weight.double()
+        folded = (linear_weight @ weight.reshape(weight.shape[0], -1)).reshape(weight.shape)
+        bias = linear.bias.double() + linear_weight @ conv.bias.double()
+        conv.weight.copy_(folded.to(conv.weight.dtype))
+        conv.bias.copy_(bias.to(conv.bias.dtype))
+        self.add_module("1", nn.Identity())
 
 
 class Block(PointModule):
@@ -1226,7 +1232,7 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
         if hasattr(child, "shuffle_orders"):
             child.shuffle_orders = False
         if isinstance(child, Cpe):
-            child.fold_bias()
+            child.fold_linear()
 
 
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:
