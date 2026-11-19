@@ -23,14 +23,18 @@ math.
 from __future__ import annotations
 
 import numpy as np
+from jaxtyping import Bool, Float, Int, Int64
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 
 def tolerant_error_mask(
-    coord: np.ndarray, pred: np.ndarray, target: np.ndarray, radius: float
-) -> np.ndarray:
+    coord: Float[np.ndarray, "num_points num_coord"],
+    pred: Int[np.ndarray, " num_points"],
+    target: Int[np.ndarray, " num_points"],
+    radius: float,
+) -> Bool[np.ndarray, " num_points"]:
     """Misclassified points that have no correct-class neighbour within ``radius``.
 
     A point ``p`` counts as an error only when it is wrong (``pred != target``)
@@ -73,7 +77,9 @@ def tolerant_error_mask(
     return mask
 
 
-def cluster_sizes(coord: np.ndarray, radius: float) -> np.ndarray:
+def cluster_sizes(
+    coord: Float[np.ndarray, "num_points num_coord"], radius: float
+) -> Int64[np.ndarray, " num_clusters"]:
     """Sizes of the connected components of the radius-neighbour graph.
 
     Two points are linked when they lie within ``radius`` and a cluster is a

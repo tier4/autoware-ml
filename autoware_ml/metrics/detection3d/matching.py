@@ -29,6 +29,7 @@ from math import pi
 
 import numpy as np
 import torch
+from jaxtyping import Bool, Float, Float64, Int, Int64
 
 from autoware_ml.metrics.base import MetricRange
 from autoware_ml.metrics.detection3d.geometry import (
@@ -45,8 +46,20 @@ from autoware_ml.metrics.detection3d.structures import (
 )
 from autoware_ml.types.metrics import MatchCost
 
+# Cost of pairing every prediction with every ground truth box of one frame and class.
+CostFunction = Callable[
+    [
+        Float64[np.ndarray, "num_predictions num_box_params"],
+        Float64[np.ndarray, "num_gt_boxes num_box_params"],
+    ],
+    Float64[np.ndarray, "num_predictions num_gt_boxes"],
+]
 
-def cost_center(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+
+def cost_center(
+    pred_boxes: Float64[np.ndarray, "num_predictions num_box_params"],
+    gt_boxes: Float64[np.ndarray, "num_gt_boxes num_box_params"],
+) -> Float64[np.ndarray, "num_predictions num_gt_boxes"]:
     """BEV center distance for every prediction and ground-truth pair, ``(P, G)``.
 
     Args:
@@ -59,7 +72,10 @@ def cost_center(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
     return np.linalg.norm(pred_boxes[:, None, :2] - gt_boxes[None, :, :2], axis=2)
 
 
-def cost_corner(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+def cost_corner(
+    pred_boxes: Float64[np.ndarray, "num_predictions num_box_params"],
+    gt_boxes: Float64[np.ndarray, "num_gt_boxes num_box_params"],
+) -> Float64[np.ndarray, "num_predictions num_gt_boxes"]:
     """Mean BEV corner distance for every prediction and ground-truth pair, ``(P, G)``.
 
     Args:
@@ -72,7 +88,7 @@ def cost_corner(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
     return corner_displacement_matrix(pred_boxes, gt_boxes)
 
 
-def cost_function(match_cost: MatchCost) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+def cost_function(match_cost: MatchCost) -> CostFunction:
     """Return the matching cost function of a cost.
 
     Args:
@@ -89,10 +105,10 @@ def cost_function(match_cost: MatchCost) -> Callable[[np.ndarray, np.ndarray], n
 
 
 def _distance_mask(
-    boxes: torch.Tensor,
+    boxes: Float[torch.Tensor, "num_boxes num_box_params"],
     min_distance: float,
     max_distance: float | None,
-) -> torch.Tensor:
+) -> Bool[torch.Tensor, " num_boxes"]:
     """Boolean mask selecting boxes within a radial distance window (XY norm)."""
     if boxes.numel() == 0:
         return torch.zeros((boxes.shape[0],), dtype=torch.bool, device=boxes.device)
@@ -105,13 +121,13 @@ def _distance_mask(
 
 
 def gt_keep_mask(
-    gt_boxes: torch.Tensor,
-    gt_labels: torch.Tensor,
-    gt_num_points: torch.Tensor | None,
+    gt_boxes: Float[torch.Tensor, "num_gt_boxes num_box_params"],
+    gt_labels: Int64[torch.Tensor, " num_gt_boxes"],
+    gt_num_points: Int[torch.Tensor, " num_gt_boxes"] | None,
     class_names: tuple[str, ...],
     max_distances: dict[str, float] | None,
     min_num_points: int,
-) -> torch.Tensor:
+) -> Bool[torch.Tensor, " num_gt_boxes"]:
     """Build the per-frame GT keep mask applied at accumulation time.
 
     Combines per-class distance caps and the minimum LiDAR point count into one
@@ -150,8 +166,8 @@ def gt_keep_mask(
 
 def _slice_sample(
     sample: Detection3DSample,
-    gt_keep: torch.Tensor,
-    pred_keep: torch.Tensor,
+    gt_keep: Bool[torch.Tensor, " num_gt_boxes"],
+    pred_keep: Bool[torch.Tensor, " num_predictions"],
 ) -> Detection3DSample:
     """Return a new sample with GT and predictions sliced by boolean masks."""
     return Detection3DSample(
@@ -235,7 +251,7 @@ class PreparedLabel:
         "gt_flat_index",
     )
 
-    def __init__(self, samples: list[Detection3DSample], label: int, cost_fn) -> None:
+    def __init__(self, samples: list[Detection3DSample], label: int, cost_fn: CostFunction) -> None:
         """Mask, convert and cost the label's boxes across all frames, in score order.
 
         Args:
@@ -252,8 +268,6 @@ class PreparedLabel:
         self.total_gt = 0
         gt_offset = 0
         for sample in samples:
-            _validate_box_tensor(sample.gt_boxes, "gt_boxes")
-            _validate_box_tensor(sample.pred_boxes, "pred_boxes")
             gt_boxes = sample.gt_boxes[sample.gt_labels == label].numpy().astype(np.float64)
             self.total_gt += int(gt_boxes.shape[0])
             pred_mask = sample.pred_labels == label
@@ -375,7 +389,7 @@ def match_by_cost(
     samples: list[Detection3DSample],
     label: int,
     threshold: float,
-    cost_fn,
+    cost_fn: CostFunction,
 ) -> MatchCurve:
     """Greedy score-ordered matching for one class and threshold under ``cost_fn``.
 
@@ -396,11 +410,6 @@ def match_by_cost(
         The score-ordered match curve.
     """
     return PreparedLabel(samples, label, cost_fn).match(threshold)
-
-
-def _validate_box_tensor(boxes: torch.Tensor, name: str) -> None:
-    if boxes.ndim != 2 or boxes.shape[1] < 7:
-        raise ValueError(f"{name} must have shape (N, 7+) but got {tuple(boxes.shape)}.")
 
 
 def curve_metrics(curve: MatchCurve) -> CurveMetrics:
@@ -447,10 +456,13 @@ def curve_metrics(curve: MatchCurve) -> CurveMetrics:
 
 
 def _precision_recall(
-    cumulative_tp: np.ndarray,
-    cumulative_fp: np.ndarray,
+    cumulative_tp: Int[np.ndarray, " num_predictions"] | Float64[np.ndarray, " num_predictions"],
+    cumulative_fp: Int[np.ndarray, " num_predictions"],
     total_gt: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[
+    Float64[np.ndarray, " num_predictions"],
+    Float64[np.ndarray, " num_predictions"],
+]:
     denominator = cumulative_tp + cumulative_fp
     precision = np.divide(
         cumulative_tp,
@@ -463,8 +475,8 @@ def _precision_recall(
 
 
 def _interpolated_ap(
-    precision: np.ndarray,
-    recall: np.ndarray,
+    precision: Float64[np.ndarray, " num_predictions"],
+    recall: Float64[np.ndarray, " num_predictions"],
     total_gt: int,
     num_predictions: int,
     min_recall: float = 0.1,
@@ -484,7 +496,10 @@ def _interpolated_ap(
     return float(np.mean(filtered_precision)) / (1.0 - min_precision)
 
 
-def _f1_scores(precision: np.ndarray, recall: np.ndarray) -> np.ndarray:
+def _f1_scores(
+    precision: Float64[np.ndarray, " num_predictions"],
+    recall: Float64[np.ndarray, " num_predictions"],
+) -> Float64[np.ndarray, " num_predictions"]:
     denominator = precision + recall
     return np.divide(
         2.0 * precision * recall,
@@ -494,7 +509,7 @@ def _f1_scores(precision: np.ndarray, recall: np.ndarray) -> np.ndarray:
     )
 
 
-def _max_f1_index(f1_scores: np.ndarray) -> int:
+def _max_f1_index(f1_scores: Float64[np.ndarray, " num_predictions"]) -> int:
     if f1_scores.shape[0] == 0 or np.all(np.isnan(f1_scores)):
         return -1
     return int(np.nanargmax(f1_scores))
@@ -533,7 +548,9 @@ def select_optimal_tp_errors(curve: MatchCurve, optimal_index: int) -> SelectedT
     return _selected_error_values(curve, tp_indices)
 
 
-def _selected_error_values(curve: MatchCurve, tp_indices: np.ndarray) -> SelectedTpErrors:
+def _selected_error_values(
+    curve: MatchCurve, tp_indices: Int64[np.ndarray, " num_selected"]
+) -> SelectedTpErrors:
     errors = TpErrorSet(
         ate=_mean_or_one(curve.translation_error[tp_indices]),
         aoe=_mean_or_one(curve.orientation_error[tp_indices]),
@@ -576,17 +593,25 @@ def nds(mean_ap: float, errors: TpErrorSet) -> float:
     return (5.0 * mean_ap + error_score) / 10.0
 
 
-def _orientation_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+def _orientation_errors(
+    pred_boxes: Float64[np.ndarray, "num_matches num_box_params"],
+    gt_boxes: Float64[np.ndarray, "num_matches num_box_params"],
+) -> Float64[np.ndarray, " num_matches"]:
     """Absolute yaw error wrapped to ``[0, pi]``, per matched pair."""
     diff = np.abs(pred_boxes[:, 6] - gt_boxes[:, 6])
     return np.abs((diff + pi) % (2.0 * pi) - pi)
 
 
-def _heading_scores(orientation_errors: np.ndarray) -> np.ndarray:
+def _heading_scores(
+    orientation_errors: Float64[np.ndarray, " num_matches"],
+) -> Float64[np.ndarray, " num_matches"]:
     return np.round(np.clip(1.0 - orientation_errors / pi, 0.0, 1.0), 10)
 
 
-def _scale_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+def _scale_errors(
+    pred_boxes: Float64[np.ndarray, "num_matches num_box_params"],
+    gt_boxes: Float64[np.ndarray, "num_matches num_box_params"],
+) -> Float64[np.ndarray, " num_matches"]:
     """``1 - IoU`` of the aligned (center- and yaw-matched) 3D dimensions."""
     pred_dims = np.maximum(pred_boxes[:, 3:6], 0.0)
     gt_dims = np.maximum(gt_boxes[:, 3:6], 0.0)
@@ -598,13 +623,16 @@ def _scale_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
     return errors
 
 
-def _velocity_errors(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+def _velocity_errors(
+    pred_boxes: Float64[np.ndarray, "num_matches num_box_params"],
+    gt_boxes: Float64[np.ndarray, "num_matches num_box_params"],
+) -> Float64[np.ndarray, " num_matches"]:
     if pred_boxes.shape[1] < 9 or gt_boxes.shape[1] < 9:
         return np.ones(pred_boxes.shape[0], dtype=np.float64)
     return np.linalg.norm(pred_boxes[:, 7:9] - gt_boxes[:, 7:9], axis=1)
 
 
-def _mean_or_one(values: np.ndarray) -> float:
+def _mean_or_one(values: Float64[np.ndarray, " num_selected"]) -> float:
     valid = values[~np.isnan(values)]
     if valid.shape[0] == 0:
         return 1.0

@@ -24,13 +24,16 @@ re-deriving the marginals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import cached_property
 
 import torch
+from jaxtyping import Bool, Float, Float64, Int64
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
-def macro(values: torch.Tensor, has_support: torch.Tensor) -> float:
+def macro(
+    values: Float[torch.Tensor, " num_classes"], has_support: Bool[torch.Tensor, " num_classes"]
+) -> float:
     """Mean over classes with ground-truth support, or NaN when none have it.
 
     Args:
@@ -60,52 +63,71 @@ def class_name_token(class_index: int, class_names: tuple[str, ...] | None) -> s
     return f"class_{class_index}"
 
 
-@dataclass
-class ConfusionState:
-    """Synced confusion matrix for one bucket, with cached marginals.
+class ConfusionState(BaseModel):
+    """
+    The synced confusion matrix of one bucket, with cached marginals.
 
-    In a grouped suite the matrix is already folded onto the behaviour taxonomy,
-    so ``class_names`` are the grouped names and every metric reads it exactly as
-    it reads the per-class matrix. ``num_frames`` is how many frames the suite
-    folded into this bucket's filter slice, the same for every range window.
+    In a grouped suite the matrix is already folded onto the behaviour taxonomy, so
+    ``class_names`` are the grouped names and every metric reads it exactly as it reads the
+    per-class matrix.
+
+    Attributes:
+      confusion: Point counts, the ground truth class along the rows and the predicted class
+        along the columns.
+      class_names: Class names in index order for the metric keys, or ``None``.
+      num_classes: Number of classes the matrix covers.
+      num_frames: Frames the suite folded into the filter slice of this bucket, the same for
+        every range window.
     """
 
-    confusion: torch.Tensor
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    confusion: Int64[torch.Tensor, "num_classes num_classes"]
     class_names: tuple[str, ...] | None
     num_classes: int
     num_frames: int
 
+    @model_validator(mode="after")
+    def _check_num_classes(self) -> ConfusionState:
+        """Check that the matrix covers exactly the declared classes."""
+        if self.confusion.shape[0] != self.num_classes:
+            raise ValueError(
+                f"confusion covers {self.confusion.shape[0]} classes, num_classes is "
+                f"{self.num_classes}."
+            )
+        return self
+
     @cached_property
-    def _double(self) -> torch.Tensor:
+    def _double(self) -> Float64[torch.Tensor, "num_classes num_classes"]:
         return self.confusion.double()
 
     @cached_property
-    def true_positive(self) -> torch.Tensor:
+    def true_positive(self) -> Float64[torch.Tensor, " num_classes"]:
         """Return per-class diagonal counts."""
         return self._double.diag()
 
     @cached_property
-    def predicted(self) -> torch.Tensor:
+    def predicted(self) -> Float64[torch.Tensor, " num_classes"]:
         """Return predicted counts per class."""
         return self._double.sum(dim=0)  # column sums: predicted count per class
 
     @cached_property
-    def actual(self) -> torch.Tensor:
+    def actual(self) -> Float64[torch.Tensor, " num_classes"]:
         """Return ground-truth counts per class."""
         return self._double.sum(dim=1)  # row sums: ground-truth count per class
 
     @cached_property
-    def total(self) -> torch.Tensor:
+    def total(self) -> Float64[torch.Tensor, ""]:
         """Return the total number of valid points in the matrix."""
         return self._double.sum()
 
     @cached_property
-    def has_support(self) -> torch.Tensor:
+    def has_support(self) -> Bool[torch.Tensor, " num_classes"]:
         """Return a mask for classes present in ground truth."""
         return self.actual > 0
 
     @cached_property
-    def frequency(self) -> torch.Tensor:
+    def frequency(self) -> Float64[torch.Tensor, " num_classes"]:
         """Return per-class ground-truth frequencies."""
         zeros = torch.zeros_like(self.actual)
         return self.actual / self.total if self.total > 0 else zeros
