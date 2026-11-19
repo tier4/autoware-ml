@@ -25,6 +25,7 @@ import pytest
 import torch
 import torch.nn as nn
 
+import autoware_ml.models.segmentation3d.encoders.ptv3 as ptv3_encoder_module
 import autoware_ml.utils.point_cloud.structures as point_structures
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
@@ -75,6 +76,7 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.utils.deploy import ExportSpec
 
 
 def test_serialized_attention_requires_supported_flash_configuration() -> None:
@@ -1424,3 +1426,59 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
         assert all(next(block.cpe.children()).bias is None for block in blocks), name
     for key, value in model.state_dict().items():
         assert torch.equal(value, state[key]), key
+
+
+def _assert_export_fold_keeps_the_outputs(monkeypatch, fold_name: str) -> dict[str, ExportSpec]:
+    """Export a jittered model with and without one encoder fold and compare the outputs.
+
+    Returns:
+        The export specs built with the fold, for checks of what the fold changed.
+    """
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    model = build_seg3d_model()
+    _jitter_affine_parameters(model)
+    model = model.to(device).eval()
+    batch = build_inputs(device=device)
+    state = {key: value.clone() for key, value in model.state_dict().items()}
+
+    folded = model.build_export_specs(batch)
+    monkeypatch.setattr(ptv3_encoder_module, fold_name, lambda module: None)
+    reference = model.build_export_specs(batch)
+
+    for name in ("ptv3_encoder", "ptv3_seg3d_head"):
+        with torch.no_grad():
+            folded_outputs = folded[name].module(*folded[name].args)
+            reference_outputs = reference[name].module(*reference[name].args)
+        for folded_output, reference_output in zip(folded_outputs, reference_outputs, strict=True):
+            if folded_output.is_floating_point():
+                torch.testing.assert_close(folded_output, reference_output, rtol=1e-5, atol=1e-5)
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, state[key]), key
+    return folded
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_export_folds_the_layer_norm_affine_into_the_linear_layers(monkeypatch) -> None:
+    """
+    Input: a small PTv3 segmentation model with every bias and normalization set to a
+    non-trivial value, exported with and without the layer norm affine fold.
+    Expected: the fold changes no export output and no model parameter, and it leaves every
+    pre-norm layer norm of the encoder with a unit affine.
+    Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
+    the model's state_dict is unchanged, and every encoder block's layer norms hold
+    ``weight = 1`` and ``bias = 0``.
+    """
+    folded = _assert_export_fold_keeps_the_outputs(monkeypatch, "fold_ln_affine")
+    blocks = [
+        module for module in folded["ptv3_encoder"].module.modules() if isinstance(module, Block)
+    ]
+    assert blocks
+    for block in blocks:
+        for norm in (block.norm1, block.norm2):
+            layer_norm = next(norm.children())
+            assert torch.equal(layer_norm.weight, torch.ones_like(layer_norm.weight))
+            assert torch.equal(layer_norm.bias, torch.zeros_like(layer_norm.bias))

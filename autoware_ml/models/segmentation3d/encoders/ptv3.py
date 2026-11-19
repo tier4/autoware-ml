@@ -1214,6 +1214,50 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
             child.fold_cpe_bias()
 
 
+@torch.no_grad()
+def fold_ln_affine(module: nn.Module) -> None:
+    """Fold the affine of every pre-norm layer norm into the linear layer it feeds.
+
+    ``Linear(W, b)(gamma * n + beta)`` equals ``Linear(W diag(gamma), b + W beta)(n)``, so
+    ``norm1`` folds into ``attn.qkv`` (the point gather in between is row-wise) and ``norm2``
+    into ``mlp.fc1``; the layer norms keep ``gamma = 1`` and ``beta = 0``. Meant for an
+    export copy, the parameters change in place.
+
+    Args:
+        module: Module hierarchy whose :class:`Block` children are folded in place.
+    """
+    # The folded norms share one unit affine per width, so the export carries no
+    # duplicated constant initializers.
+    unit_affines: dict[tuple[Any, ...], tuple[nn.Parameter, nn.Parameter]] = {}
+    for block in module.modules():
+        if not isinstance(block, Block) or block.attn is None or not block.pre_norm:
+            continue
+        mlp = next(block.mlp.children())
+        for norm, linear in ((block.norm1, block.attn.qkv), (block.norm2, mlp.fc1)):
+            layer_norm = next(norm.children())
+            if not layer_norm.elementwise_affine:
+                continue
+            gamma = layer_norm.weight.double()
+            beta = torch.zeros_like(gamma) if layer_norm.bias is None else layer_norm.bias.double()
+            weight = linear.weight.double()
+            bias = weight @ beta
+            if linear.bias is None:
+                linear.bias = nn.Parameter(bias.to(linear.weight.dtype))
+            else:
+                linear.bias.copy_((linear.bias.double() + bias).to(linear.bias.dtype))
+            linear.weight.copy_((weight * gamma).to(linear.weight.dtype))
+            unit = layer_norm.weight
+            key = (unit.shape, unit.dtype, unit.device)
+            if key not in unit_affines:
+                unit_affines[key] = (
+                    nn.Parameter(torch.ones_like(unit)),
+                    nn.Parameter(torch.zeros_like(unit)),
+                )
+            layer_norm.weight = unit_affines[key][0]
+            if layer_norm.bias is not None:
+                layer_norm.bias = unit_affines[key][1]
+
+
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:
     """Deep-copy a module while detaching loaded flash-attention handles.
 
@@ -1398,6 +1442,7 @@ class PointTransformerV3Encoder(PointModule):
         export_encoder.set_serialization_order(order)
         export_encoder.shuffle_orders = False
         prepare_point_module_for_export(export_encoder)
+        fold_ln_affine(export_encoder)
         return export_encoder
 
     def export_forward(self, data_dict: dict[str, torch.Tensor]) -> Point:
