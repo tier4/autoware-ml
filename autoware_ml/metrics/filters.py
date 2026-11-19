@@ -35,6 +35,7 @@ from jaxtyping import Bool, Float
 import numpy as np
 import shapely
 import torch
+from torch import Tensor
 
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.metrics.base import MetricFilter, number_token
@@ -72,11 +73,25 @@ def as_numpy(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
-def _to_map_xy(xyz: np.ndarray, ego2global: Any) -> np.ndarray:
-    """Transform base_link ``xyz`` (N, 3+) to map-frame xy via ``ego2global``."""
+def _to_map_xy(xyz: np.ndarray | Tensor, ego2global: Any) -> np.ndarray | Tensor:
+    """Transform base_link ``xyz`` (N, 3+) to map-frame xy via ``ego2global``.
+
+    A tensor is transformed on its own device, in float64 like an array is: map
+    coordinates run to tens of kilometers, where float32 resolves a few millimeters.
+    """
+    if isinstance(xyz, Tensor):
+        transform = torch.as_tensor(ego2global, dtype=torch.float64, device=xyz.device)
+        return xyz[:, :3].to(torch.float64) @ transform[:2, :3].T + transform[:2, 3]
     transform = as_numpy(ego2global).astype(np.float64)
     homogeneous = np.concatenate([xyz[:, :3], np.ones((xyz.shape[0], 1))], axis=1)
     return (homogeneous @ transform.T)[:, :2]
+
+
+def _no_points(points: np.ndarray | Tensor) -> np.ndarray | Tensor:
+    """The mask of a frame without points, of the kind the points came in."""
+    if isinstance(points, Tensor):
+        return torch.zeros(0, dtype=torch.bool, device=points.device)
+    return np.zeros((0,), dtype=bool)
 
 
 def ego2global_pose(ego2global: Any) -> tuple[float, float, float]:
@@ -246,21 +261,27 @@ class RegionFilter(MetricFilter):
         return f"region:{region}:{self.margin:g}"
 
     def keep_points(
-        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
-    ) -> Bool[np.ndarray, " num_points"]:
+        self,
+        points: Float[np.ndarray, "num_points 3"] | Float[Tensor, "num_points 3"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_points"] | Bool[Tensor, " num_points"]:
         """Mask of the points inside the region (point-in-polygon).
 
+        A tensor is transformed to the map frame and looked up on its own device, so
+        the points of a frame never leave the GPU for this filter.
+
         Args:
-            points: Point positions in base_link.
+            points: Point positions in base_link, an array or a tensor.
             frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
 
         Returns:
             Boolean mask of the points in the region.
         """
-        points = np.asarray(points, dtype=np.float64)
+        if not isinstance(points, Tensor):
+            points = np.asarray(points, dtype=np.float64)
         frame_meta = self.require_frame_meta(frame_meta)
         if points.shape[0] == 0:
-            return np.zeros((0,), dtype=bool)
+            return _no_points(points)
         lanelet_map = LaneletMap.from_osm(frame_meta.lanelet_map_path)
         map_xy = _to_map_xy(points, frame_meta.ego2global)
         return lanelet_map.contains(self.region, map_xy, self.margin)
@@ -332,17 +353,24 @@ class CorridorFilter(MetricFilter):
         return f"corridor:w{self.width_m:g}"
 
     def keep_points(
-        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
-    ) -> Bool[np.ndarray, " num_points"]:
+        self,
+        points: Float[np.ndarray, "num_points 3"] | Float[Tensor, "num_points 3"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_points"] | Bool[Tensor, " num_points"]:
         """Mask of the points inside the strip.
 
         Args:
-            points: Point positions in base_link.
+            points: Point positions in base_link, an array or a tensor.
             frame_meta: Unused, the strip lives in the ego frame.
 
         Returns:
             Boolean mask of the points inside the strip.
         """
+        if isinstance(points, Tensor):
+            # float64 as for an array, so a point at the strip's edge falls on the
+            # same side whichever way it came in.
+            lateral = points[:, 1].to(torch.float64)
+            return (points[:, 0] >= 0.0) & (lateral.abs() <= self.width_m / 2.0)
         points = np.asarray(points, dtype=np.float64)
         if points.shape[0] == 0:
             return np.zeros((0,), dtype=bool)
@@ -457,17 +485,24 @@ class CollisionFilter(MetricFilter):
         )
 
     def keep_points(
-        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
-    ) -> Bool[np.ndarray, " num_points"]:
+        self,
+        points: Float[np.ndarray, "num_points 3"] | Float[Tensor, "num_points 3"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_points"] | Bool[Tensor, " num_points"]:
         """Mask of the points inside the ego collision area.
 
         Args:
-            points: Point positions in base_link.
+            points: Point positions in base_link, an array or a tensor.
             frame_meta: Metadata of the frame, with the ego pose and lanelet map path.
 
         Returns:
             Boolean mask of the points inside the collision area.
         """
+        if isinstance(points, Tensor):
+            # The area is a shapely polygon built for this one ego pose, so the test
+            # runs on the CPU and only the mask goes back to the points' device.
+            keep = self.keep_points(as_numpy(points), frame_meta)
+            return torch.from_numpy(keep).to(points.device)
         points = np.asarray(points, dtype=np.float64)
         frame_meta = self.require_frame_meta(frame_meta)
         if points.shape[0] == 0:
