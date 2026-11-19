@@ -1401,14 +1401,14 @@ def _jitter_affine_parameters(model: nn.Module) -> None:
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
+def test_export_folds_the_cpe_linear_layer_into_the_convolution(monkeypatch) -> None:
     """
     Input: a small PTv3 segmentation model with every bias and normalization set to a
-    non-trivial value, exported with and without the CPE bias fold.
+    non-trivial value, exported with and without the CPE linear fold.
     Expected: the fold changes no export output and no model parameter, and it removes the
-    bias of every CPE convolution in the encoder and the seg3d head.
+    linear layer of every CPE in the encoder and the seg3d head.
     Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
-    both export modules hold CPE blocks and none of their convolutions keeps a bias, and the
+    both export modules hold CPE blocks and none of their CPEs keeps a linear layer, and the
     model's state_dict is unchanged.
     """
     torch.manual_seed(0)
@@ -1420,7 +1420,7 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
     state = {key: value.clone() for key, value in model.state_dict().items()}
 
     folded = model.build_export_specs(batch)
-    monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
+    monkeypatch.setattr(Block, "fold_cpe_linear", lambda block: None)
     reference = model.build_export_specs(batch)
 
     for name in ("ptv3_encoder", "ptv3_seg3d_head"):
@@ -1436,7 +1436,8 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
             if isinstance(block, Block) and block.cpe is not None
         ]
         assert blocks, name
-        assert all(next(block.cpe.children()).bias is None for block in blocks), name
+        for block in blocks:
+            assert not any(isinstance(module, nn.Linear) for module in block.cpe.modules()), name
     for key, value in model.state_dict().items():
         assert torch.equal(value, state[key]), key
 
