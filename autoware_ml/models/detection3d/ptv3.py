@@ -397,7 +397,7 @@ def build_det3d_head_graph(
             bev_neck=deepcopy(bev_neck).eval(),
             bbox_head=bbox_head.prepare_for_export(bev_shape=bev_neck.bev_projector.output_shape),
             output_names=output_names,
-        ).eval(),
+        ),
         input_names=tuple(det3d_head_export_input_names(stage_count)),
         output_names=output_names,
         onnx_dynamic_axes=det3d_head_export_dynamic_axes(stage_count),

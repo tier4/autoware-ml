@@ -442,7 +442,7 @@ class PTv3BaseModel(ModuleBaseModel):
                 voxel_encoder=self.voxel_encoder,
                 sparse_shape=sparse_shape,
                 serialized_depth=serialization_depth,
-            ).eval(),
+            ),
             input_names=input_names,
             output_names=tuple(stage_feature_names(stage_count)),
             onnx_dynamic_axes=build_ptv3_encoder_dynamic_axes(input_names, stage_count),
@@ -466,7 +466,7 @@ class PTv3BaseModel(ModuleBaseModel):
             SEG3D_HEAD_GRAPH,
             module=_PTv3Seg3DHeadExportModule(
                 head, stage_count, sparse_shape, tuple(self.encoder.stride)
-            ).eval(),
+            ),
             input_names=tuple(seg3d_head_export_input_names(stage_count, head.dec_depths)),
             output_names=SEG3D_HEAD_OUTPUT_NAMES,
             onnx_dynamic_axes=dynamic_axes,

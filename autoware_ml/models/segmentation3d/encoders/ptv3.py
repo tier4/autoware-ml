@@ -98,6 +98,8 @@ def replace_submconv3d_for_export(module: nn.Module) -> None:
                 device=child.weight.device, dtype=child.weight.dtype
             )
             exportable_child.load_state_dict(child.state_dict())
+            # A fresh module starts in training mode; the export copy it joins is in eval mode.
+            exportable_child.train(child.training)
             module._modules[name] = exportable_child
             continue
         replace_submconv3d_for_export(child)
