@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,9 +31,6 @@ from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.transforms.motion.loading import LoadAgentTracks, LoadVectorMap
 from autoware_ml.types.dataset import DatasetFormat
 from autoware_ml.types.motion import PolylineType
-
-# The transforms import the av2 devkit lazily; only the tests that read a scenario need it
-_AV2_AVAILABLE = importlib.util.find_spec("av2") is not None
 
 
 def _source(scenario_path: Path, with_map: bool = True) -> MotionSourceSample:
@@ -102,7 +98,6 @@ class TestMotionLoadingArguments(unittest.TestCase):
             LoadVectorMap(polyline_types=["river"])
 
 
-@unittest.skipUnless(_AV2_AVAILABLE, "the av2 devkit is not installed")
 class TestMotionLoading(unittest.TestCase):
     """The transforms load the tracks and the map of a synthetic Argoverse 2 scenario."""
 
