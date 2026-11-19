@@ -47,6 +47,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
+    Embedding,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -1516,3 +1517,27 @@ def test_fold_pool_bn_rejects_a_scale_that_is_not_positive() -> None:
         norm.weight[3] = -0.5
     with pytest.raises(ValueError, match="positive scales"):
         fold_pool_bn(pooling)
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_export_folds_the_stem_batch_norm_into_the_linear_stem(monkeypatch) -> None:
+    """
+    Input: a small PTv3 segmentation model with every bias and normalization set to a
+    non-trivial value, exported with and without the stem batch norm fold.
+    Expected: the fold changes no export output and no model parameter, and it removes the
+    batch norm of the encoder's embedding stem.
+    Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
+    the model's state_dict is unchanged, and no encoder embedding holds a batch norm.
+    """
+    folded = _assert_export_fold_keeps_the_outputs(monkeypatch, "fold_stem_bn")
+    embeddings = [
+        module
+        for module in folded["ptv3_encoder"].module.modules()
+        if isinstance(module, Embedding)
+    ]
+    assert embeddings
+    for embedding in embeddings:
+        assert not any(isinstance(module, nn.BatchNorm1d) for module in embedding.modules())

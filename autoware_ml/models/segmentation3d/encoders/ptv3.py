@@ -1290,6 +1290,29 @@ def fold_pool_bn(module: nn.Module) -> None:
         pooling.norm = PointSequential(nn.Identity())
 
 
+@torch.no_grad()
+def fold_stem_bn(module: nn.Module) -> None:
+    """Fold the batch norm of every linear embedding stem into the linear layer.
+
+    The evaluation-mode batch norm is ``s * y + t`` per channel, so ``BN(Linear(W, b))``
+    equals ``Linear(s W, s b + t)``. Meant for an export copy, the parameters change in place.
+
+    Args:
+        module: Module hierarchy whose :class:`Embedding` children are folded in place.
+    """
+    for embedding in module.modules():
+        if not isinstance(embedding, Embedding):
+            continue
+        (_, linear), (norm_name, norm), _ = embedding.stem.named_children()
+        if not isinstance(linear, nn.Linear) or not isinstance(norm, nn.BatchNorm1d):
+            continue
+        scale = norm.weight.double() / torch.sqrt(norm.running_var.double() + norm.eps)
+        shift = norm.bias.double() - norm.running_mean.double() * scale
+        linear.weight.copy_((linear.weight.double() * scale[:, None]).to(linear.weight.dtype))
+        linear.bias.copy_((linear.bias.double() * scale + shift).to(linear.bias.dtype))
+        embedding.stem.add_module(norm_name, nn.Identity())
+
+
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:
     """Deep-copy a module while detaching loaded flash-attention handles.
 
@@ -1476,6 +1499,7 @@ class PointTransformerV3Encoder(PointModule):
         prepare_point_module_for_export(export_encoder)
         fold_ln_affine(export_encoder)
         fold_pool_bn(export_encoder)
+        fold_stem_bn(export_encoder)
         return export_encoder
 
     def export_forward(self, data_dict: dict[str, torch.Tensor]) -> Point:
