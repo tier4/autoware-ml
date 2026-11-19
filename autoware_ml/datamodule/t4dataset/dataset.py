@@ -331,7 +331,9 @@ class T4Dataset(BaseDataset):
             sensor_to_frame_matrix=torch.from_numpy(sensor_to_frame),
         )
 
-    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def apply_transforms(
+        self, model_gt_sample: ModelGTSample, stream_seed: Sequence[int] | None = None
+    ) -> ModelGTSample:
         """Run the transform pipeline and label the points of a corpus whose masks are unused.
 
         Every point of such a corpus gets the ignore index. The labels are written after the
@@ -339,11 +341,13 @@ class T4Dataset(BaseDataset):
 
         Args:
             model_gt_sample: ModelGTSample instance.
+            stream_seed: Integers naming the stream of the sample, None for a sample augmented
+                on its own.
 
         Returns:
             Transformed ModelGTSample instance.
         """
-        model_gt_sample = super().apply_transforms(model_gt_sample)
+        model_gt_sample = super().apply_transforms(model_gt_sample, stream_seed)
         if TaskType.SEGMENTATION3D not in self.dataset_tasks:
             return model_gt_sample
         if self.seg3d_supervised:

@@ -140,7 +140,8 @@ prediction writer drops them by the mask it gets with the batch. Anything that w
 frames is refused: frame sampling, a shuffling dataloader and `trainer.overfit_batches` (shorten a
 run with `limit_train_batches` / `limit_val_batches` instead). A model config switches to it by
 composing `/datamodule/streaming@datamodule: default_streaming_datamodule` after its database
-datamodule.
+datamodule. A dataloader of it can augment every frame of a scene alike, see
+[Stream-consistent augmentation](#stream-consistent-augmentation).
 
 ### Dataset
 
@@ -208,6 +209,85 @@ Public transform targets should reference the concrete implementation module, fo
 `autoware_ml.transforms.camera_lidar.geometry.GlobalBEVRandomFlip`. Avoid package-level re-export
 layers in `__init__.py`. Imports and Hydra `_target_` paths should point at the implementation
 module directly.
+
+#### Stream-consistent augmentation
+
+A temporal model carries a memory from one frame of a scene to the next, so an augmentation that
+moves the scene has to be the same in every frame of it. A dataloader of the `StreamingDataModule`
+turns this on with one flag, off by default:
+
+```yaml
+datamodule:
+  train_dataloader:
+    stream_consistent_augmentation: true
+```
+
+The sampler then hands every frame the seed of its stream, the experiment seed, the epoch and the
+scene, and the pipeline seeds a random state from it for every transform that supports it. The
+frames of a scene draw the same values in every dataloader worker and on every rank, the next scene
+and the same scene in the next epoch draw new ones. The experiment `seed` has to be from 0 to
+2**32 - 1 with the flag on.
+
+The flag only changes the transforms that support it. These draw once per scene:
+
+| Transform                  | Alike in every frame of a scene                                    |
+| -------------------------- | ------------------------------------------------------------------ |
+| `GlobalRotScaleTrans`      | yaw, scale and translation                                         |
+| `RandomRotateTargetAngle`  | yaw                                                                |
+| `GlobalBEVRandomFlip`      | horizontal and vertical flip                                       |
+| `ResizeCropFlipRotImage`   | resize, crop, flip and rotation of every camera                    |
+| their `probability`        | whether the transform is applied, decided for the whole scene      |
+
+These draw for every frame on its own, with the flag on as well:
+
+| Transform                       | Drawn per frame                                               |
+| ------------------------------- | ------------------------------------------------------------- |
+| `CalibrationMisalignment`       | rotation and translation noise of the calibration             |
+| `Affine`                        | affine distortion of the images                               |
+| `ShuffleCameraOrder`            | order of the cameras                                          |
+| `CropAndScale`                  | crop box of every camera                                      |
+| `PhotometricDistortion`         | brightness, contrast, saturation and hue                      |
+| `RandomJitter`                  | noise of every point                                          |
+| `RandomStrengthJitter`          | gamma, scale and shift of the intensity                       |
+| `RandomDropout`                 | points dropped                                                |
+| `PointsRandomShuffle`           | order of the points                                           |
+| `LoadMultiSweepPointsFromFile`  | sweeps picked with a random `selection`                       |
+| their `probability`             | whether the transform is applied                              |
+
+Every other transform draws nothing. `CalibrationMisalignment` therefore gives every frame of a
+scene another miscalibration, which a real drive does not have. `ShuffleCameraOrder` has to run
+after a per-camera `ResizeCropFlipRotImage` in a consistent stream: the image augmentation of a
+camera belongs to its position in the camera order, which the shuffle changes from frame to frame.
+
+`ResizeCropFlipRotImage` has `per_camera_augmentation`, true by default, to choose whether the
+cameras of one frame draw their own augmentation or share one. It holds with and without the flag:
+
+|                       | `per_camera_augmentation: true`                        | `per_camera_augmentation: false`           |
+| --------------------- | ------------------------------------------------------ | ------------------------------------------ |
+| **No stream**         | every camera of every frame draws its own              | one draw per frame, shared by its cameras  |
+| **Consistent stream** | every camera has its own draw, alike over the scene    | one draw for all cameras of the scene      |
+
+A transform supports it by setting `stream_consistent` and implementing `transform_in_stream`,
+which draws from the random state it is given instead of the global one of NumPy:
+
+```python
+class MyTransform(BaseTransform):
+    stream_consistent = True
+
+    def sample_angle(self, random_state: np.random.RandomState | None = None) -> float:
+        return float(random_source(random_state).uniform(-0.3, 0.3))
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        return self.rotate(model_gt_sample, self.sample_angle())
+
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
+    ) -> ModelGTSample:
+        return self.rotate(model_gt_sample, self.sample_angle(random_state))
+```
+
+Every draw has to come from `random_state`, in an order and a number that do not depend on the
+sample, so every frame of a scene draws the same values.
 
 ### Runtime Data Preprocessing
 
