@@ -122,6 +122,7 @@ class LabelTaxonomy:
         class_names: Sequence[str],
         class_mapping: Mapping[str, str | None],
         ignore_index: int,
+        class_sets: Mapping[str, Sequence[str]] | None = None,
     ) -> None:
         """
         Initialize the taxonomy.
@@ -129,10 +130,18 @@ class LabelTaxonomy:
         Args:
           vocabulary: Raw label names mapped onto fine label names.
           class_names: Classes the model trains, in index order.
-          class_mapping: Fine label name to class name, null for a fine label the model does not
-            train. Every fine name of the vocabulary needs an entry. A class no fine label
-            coarsens to is a placeholder the model trains without data.
+          class_mapping: Fine label name to class name or label set name, null for a fine label
+            the model does not train. Every fine name of the vocabulary needs an entry. A class
+            no fine label coarsens to is a placeholder the model trains without data.
           ignore_index: Label index of a label outside the trained classes.
+          class_sets: The label sets of the taxonomy, set name to at least two trained classes.
+            A label set is a coarser label for a dataset annotated at a coarser specification
+            than the trained classes: a point labelled with it belongs to one of the set's
+            classes, but the annotation does not say which (for example an old ``manmade``
+            covering both ``building`` and ``pole``). A fine label is mapped to a set in
+            ``class_mapping`` like to a class. Its points get the index ``num_classes + k`` for
+            the set at position ``k``, train the summed probability of the set's classes and
+            are left out of the metrics.
         """
 
         if not len(class_names):
@@ -156,12 +165,14 @@ class LabelTaxonomy:
                 f"{sorted(fine_names - coarsened_names)}, unknown "
                 f"{sorted(coarsened_names - fine_names)}."
             )
+        sets = {name: tuple(members) for name, members in (class_sets or {}).items()}
+        self._validate_class_sets(class_names, sets, ignore_index)
         class_set = set(class_names)
         for fine_name, class_name in class_mapping.items():
-            if class_name is not None and class_name not in class_set:
+            if class_name is not None and class_name not in class_set and class_name not in sets:
                 raise ValueError(
                     f"Fine label {fine_name!r} coarsens to {class_name!r}, which is not a trained "
-                    f"class of {list(class_names)}."
+                    f"class of {list(class_names)} nor a label set."
                 )
 
         self._vocabulary = vocabulary
@@ -169,6 +180,47 @@ class LabelTaxonomy:
         self._class_mapping = dict(class_mapping)
         self._ignore_index = ignore_index
         self._class_indices = {name: index for index, name in enumerate(self._class_names)}
+        self._class_sets = sets
+        self._set_indices = {
+            name: len(self._class_names) + position for position, name in enumerate(sets)
+        }
+
+    @staticmethod
+    def _validate_class_sets(
+        class_names: Sequence[str], sets: Mapping[str, Sequence[str]], ignore_index: int
+    ) -> None:
+        """
+        Check the label sets and that the ignore index lies past their indices.
+
+        Args:
+          class_names: Trained classes, in index order.
+          sets: Label sets, set name to its classes, in set index order.
+          ignore_index: Label index of a label outside the trained classes.
+
+        Raises:
+          ValueError: Raised when a set name collides with a class, a set lists fewer than two
+            distinct classes or names an unknown class, or the ignore index collides with a
+            set index.
+        """
+
+        trained_classes = set(class_names)
+        for set_name, members in sets.items():
+            if set_name in trained_classes:
+                raise ValueError(f"Label set {set_name!r} collides with a trained class.")
+            if len(members) < 2 or len(set(members)) != len(members):
+                raise ValueError(
+                    f"Label set {set_name!r} must list at least two distinct classes, got "
+                    f"{list(members)}."
+                )
+            unknown = [member for member in members if member not in trained_classes]
+            if unknown:
+                raise ValueError(f"Label set {set_name!r} lists {unknown}, which are not trained.")
+        num_labels = len(class_names) + len(sets)
+        if 0 <= ignore_index < num_labels:
+            raise ValueError(
+                f"The ignore index {ignore_index} collides with the class and label set indices "
+                f"0..{num_labels - 1}."
+            )
 
     @property
     def vocabulary(self) -> LabelVocabulary:
@@ -189,6 +241,11 @@ class LabelTaxonomy:
     def ignore_index(self) -> int:
         """Label index of a label outside the trained classes."""
         return self._ignore_index
+
+    @property
+    def class_sets(self) -> Mapping[str, tuple[str, ...]]:
+        """Label sets, set name to its classes, in set index order."""
+        return MappingProxyType(self._class_sets)
 
     @property
     def class_mapping(self) -> Mapping[str, str | None]:
@@ -239,6 +296,8 @@ class LabelTaxonomy:
         class_name = self.class_name(fine_name)
         if class_name is None:
             return self._ignore_index
+        if class_name in self._set_indices:
+            return self._set_indices[class_name]
         return self._class_indices[class_name]
 
     def resolve_index(self, raw_name: str) -> int:
@@ -260,10 +319,17 @@ class LabelTaxonomy:
             f"{fine_name}: {class_name}"
             for fine_name, class_name in sorted(self._class_mapping.items())
         )
+        # Named only when there are sets, so the hash of every other taxonomy is unchanged.
+        class_sets = ""
+        if self._class_sets:
+            entries = ", ".join(
+                f"{name}: {list(members)}" for name, members in self._class_sets.items()
+            )
+            class_sets = f"class_sets=({entries}), "
         return (
             f"{self.__class__.__name__}(class_names={list(self._class_names)}, "
             f"ignore_index={self._ignore_index}, class_mapping=({class_mapping}), "
-            f"vocabulary={self._vocabulary})"
+            f"{class_sets}vocabulary={self._vocabulary})"
         )
 
     def __eq__(self, other: object) -> bool:

@@ -158,11 +158,35 @@ class Scenarios(BaseModel):
         raise NotImplementedError("Subclasses must implement build_scenarios!")
 ```
 
-### Schema
+### Label sets, category aliases and dataset options
 
-`process_scenario_records()` — Process scenarios/samples from a database to a parquet file and save it. `BaseDatabase.get_polars_schema()` delegates to `DatasetTableSchema` so records can be serialized to Parquet via `DatasetRecord.to_dictionary()`.
+A dataset may be annotated at a coarser specification than the classes a model trains: an
+older annotation specification may label `manmade` for what the trained classes split into
+buildings, poles, signs and barriers. A taxonomy declares such coarser labels as `class_sets`,
+each a *label set*: a name for at least two of its classes. A fine label mapped to a label set
+says that a point belongs to one of the set's classes, but not to which one.
 
-The schema is defined in the `autoware_ml/databases/schemas/` package and covers basic frame metadata, nested LiDAR structs, and annotation fields such as category mapping and 3D boxes. The 3D box payload is modeled by `Box3DDataModel` with its struct layout defined in `Box3DDatasetSchema`, and is stored in the top-level `boxes_3d` list column. See [Dataset Schema](schemas.md) for the full column layout, nested data models, and extension guide.
+- Its points get the label index `num_classes + k` for the set at position `k`.
+- The segmentation head trains them on the summed probability of the set's classes (cross
+  entropy of the marginal, also after the voxel reduction of the targets) and leaves them out
+  of the Lovasz term.
+- Every metric skips them, because their index is outside the class range.
+
+So the dataset supervises exactly what it knows instead of forcing a guess.
+
+Raw category names are shared across datasets, but their meaning is not: `sidewalk` in an
+older specification may still contain the curbs, in a newer one not. A dataset's
+`DatasetParams.category_aliases` renames such raw names (`sidewalk` to `legacy_sidewalk`) when
+its record table is generated. The vocabulary lists the renamed categories as fine names of
+their own, and the taxonomy maps them to the class or label set they mean there. A dataset with
+aliases therefore needs a vocabulary that lists them.
+
+`DatasetParams` has one more dataset option, `require_semantic_mask`: keep only the samples
+whose LiDAR frame has a semantic mask, for a dataset labelled at a lower rate than it was
+recorded.
+
+The dataset options and the label sets enter the database hash only when they differ from their
+defaults, so the record tables of every other database keep their hash.
 
 ### Packed LiDAR frames
 
