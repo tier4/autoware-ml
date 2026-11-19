@@ -63,10 +63,12 @@ class _HeadModule(torch.nn.Module):
 class _ExportModel(ModuleBaseModel):
     """A model exporting its head once per configured module name."""
 
-    def __init__(
-        self,
-        module_names: Sequence[str] = ("head",),
-    ) -> None:
+    def __init__(self, module_names: Sequence[str] = ("head",)) -> None:
+        """Build the model around one head.
+
+        Args:
+            module_names: The module names the model exports its head under, one spec each.
+        """
         super().__init__(
             log_dict_configs=LogDictConfigs(prog_bar=False),
             data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
