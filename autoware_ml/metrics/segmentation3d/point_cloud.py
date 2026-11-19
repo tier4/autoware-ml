@@ -534,24 +534,20 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         # arrays instead of copying them, so those are frozen below: an accidental
         # in-place edit in a component must not corrupt the epoch's cache.
         whole = bool(keep.all())
-        sliced = [
-            array if whole else array[keep]
-            for array in (
-                coord_np,
-                pred.numpy(),
-                target.numpy(),
-                confidence_values.numpy(),
-                entropy_values.numpy(),
-            )
-        ]
+        pred_np = pred.numpy()
+        target_np = target.numpy()
+        confidence_np = confidence_values.numpy()
+        entropy_np = entropy_values.numpy()
+        if not whole:
+            coord_np = coord_np[keep]
+            pred_np = pred_np[keep]
+            target_np = target_np[keep]
+            confidence_np = confidence_np[keep]
+            entropy_np = entropy_np[keep]
         if fold_lut is not None:
-            sliced[1] = fold_labels(sliced[1], fold_lut)
-            sliced[2] = fold_labels(sliced[2], fold_lut)
-        if whole:
-            for array in (*sliced, boxes_np, labels_np):
-                array.flags.writeable = False
-        coord_np, pred_np, target_np, confidence_np, entropy_np = sliced
-        return FramePoints(
+            pred_np = fold_labels(pred_np, fold_lut)
+            target_np = fold_labels(target_np, fold_lut)
+        frame = FramePoints(
             coord=coord_np,
             pred=pred_np,
             target=target_np,
@@ -560,6 +556,10 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             gt_boxes=boxes_np,
             gt_box_labels=labels_np,
         )
+        if whole:
+            for name in FramePoints.model_fields:
+                getattr(frame, name).flags.writeable = False
+        return frame
 
     def _filter_masks(
         self,
