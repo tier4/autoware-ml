@@ -187,9 +187,12 @@ class CollisionTTC:
             return ttc
 
         lanelet_map = LaneletMap.from_osm(lanelet_map_path)
+        ego_x, ego_y, ego_heading = ego2global_pose(ego2global)
         frame = _ego_frame(
             lanelet_map,
-            *ego2global_pose(ego2global),
+            ego_x,
+            ego_y,
+            ego_heading,
             self.max_speed_mps,
             self.vehicle,
             self.region,

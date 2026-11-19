@@ -108,11 +108,12 @@ class TestSharedEgoFrame(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_two_suites_propagate_the_boxes_of_a_frame_once(self) -> None:
-        """Test that a second suite reads the first one's times without propagating again.
-
-        Suites that report the same boxes under another prefix each hold a provider of their
-        own. The second one asks about the same ego frame and the same boxes, so it must get
-        the same times without propagating anything again.
+        """
+        Input: two identically configured providers, as two suites that report the same boxes
+        under different prefixes hold them, asked for the same three boxes in the same ego frame.
+        Expected: the first provider propagates each box once, the second reads the times of the
+        shared ego frame and propagates nothing.
+        Check: three propagations after both calls, and equal time arrays.
         """
         first, second = _adapter(), _adapter()
         boxes = np.array(
@@ -128,10 +129,13 @@ class TestSharedEgoFrame(unittest.TestCase):
         np.testing.assert_array_equal(again, ttc)
 
     def test_a_provider_with_another_ego_shares_nothing(self) -> None:
-        """Test that a provider with a different ego propagates the same boxes itself.
-
-        The shared frame is keyed by everything that shapes the ego side. A provider whose ego
-        is slower reaches less, so it must not reuse the faster provider's times.
+        """
+        Input: a barrier 30 m ahead, asked of a provider with the default ego and of one whose
+        ego is capped at 2 m/s.
+        Expected: the shared frame is keyed by everything that shapes the ego side, so the slow
+        provider propagates the box itself instead of reusing the fast provider's time.
+        Check: a time within the 4 s horizon for the fast ego, inf for the slow one, and two
+        propagations.
         """
         fast = _adapter()
         slow = CollisionTTC(

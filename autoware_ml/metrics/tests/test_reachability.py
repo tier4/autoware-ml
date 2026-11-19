@@ -282,10 +282,12 @@ class TestWheeledReach(unittest.TestCase):
     )
 
     def test_arcs_traced_once_give_the_set_of_every_step(self) -> None:
-        """Test that reading a step from the horizon arcs does not change a single vertex.
-
-        The collision time is the first step at which two sets meet, so a set that differs from
-        the one traced for that step alone could move a time by a step.
+        """
+        Input: wheeled agents on an open road, in a narrow lane, by a median, oncoming, on a side
+        street, crawling and off the surface, with their arcs traced once to the horizon.
+        Expected: the set read for each step is the set traced for that step alone, vertex for
+        vertex; a set that differed could move a collision time by a step.
+        Check: exact equality with zero tolerance at every step of every case.
         """
         for name, speed, body, surface, x, y, heading in self.CASES:
             with self.subTest(case=name):
@@ -300,11 +302,12 @@ class TestWheeledReach(unittest.TestCase):
                     )
 
     def test_meeting_a_geometry_is_decided_as_on_the_built_set(self) -> None:
-        """Test that ``meets`` answers as an overlap test against the built set would.
-
-        The object side of a collision test never builds its set, it only asks whether the set
-        overlaps ego's. Probes scattered over the surface, at every step, cover the arcs that
-        touch a probe with one body only, the ones cut at an edge and the start pose.
+        """
+        Input: a car on the cut surface and 61 square probes, 60 scattered over the surface and
+        one on the start pose.
+        Expected: at every step ``meets`` answers as an overlap test against the built set
+        would, also for arcs that touch a probe with one body only and arcs cut at an edge.
+        Check: ``meets`` against ``intersects`` on the built set, for every step and probe.
         """
         agent = Agent.wheeled(10.0, -2.0, heading=0.2, speed=9.0, **CAR)
         reach = WheeledReach(agent, PARAMS, STREETS)
@@ -332,11 +335,13 @@ class TestEgoReachabilityOnCutSurfaces(unittest.TestCase):
     )
 
     def test_collision_times_match_stepping_every_set(self) -> None:
-        """Test that the engine's shortcuts never move a collision time.
-
-        The engine skips steps, tests bodies before it sweeps them and reads every set from
-        arcs traced once. Each object is therefore compared with the plain model: build both
-        sets at every step, return the first step at which they overlap.
+        """
+        Input: a car by the median and a bus on the side street as ego, each against 90 sampled
+        wheeled, omnidirectional and static objects on and off the lanes.
+        Expected: the engine skips steps, tests bodies before it sweeps them and reads every set
+        from arcs traced once, and none of that moves a time away from the plain model, which
+        builds both sets at every step and returns the first step at which they overlap.
+        Check: equal times for every object, and at least 10 finite times per case.
         """
         for name, ego_pose, speed, body in self.CASES:
             with self.subTest(case=name):
