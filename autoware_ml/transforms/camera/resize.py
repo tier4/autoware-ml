@@ -560,9 +560,7 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        return self.transform_with_parameters(
-            model_gt_sample, self.sample_camera_parameters(model_gt_sample)
-        )
+        return self._draw_and_augment(model_gt_sample, None)
 
     def transform_in_stream(
         self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
@@ -579,14 +577,12 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
         Returns:
             Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
-        return self.transform_with_parameters(
-            model_gt_sample, self.sample_camera_parameters(model_gt_sample, random_state)
-        )
+        return self._draw_and_augment(model_gt_sample, random_state)
 
-    def sample_camera_parameters(
-        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState | None = None
-    ) -> Sequence[ImageAugmentationDraw]:
-        """Draw the augmentation of every camera of a sample: one each, or one for them all.
+    def _draw_and_augment(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState | None
+    ) -> ModelGTSample:
+        """Draw the augmentation of every camera of a sample and apply it.
 
         Args:
             model_gt_sample: ModelGTSample instance containing `camera_image_data`.
@@ -594,73 +590,62 @@ class ResizeCropFlipRotImage(ImageSpaceTransform):
                 global one of NumPy.
 
         Returns:
-            The draw of every camera of the sample, in camera order.
+            Updated ModelGTSample instance with an augmented `camera_image_data`.
         """
         # This is checked in the _validate_required_keys()
         camera_image_data: BaseImages = (
             model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
         )
-        num_cameras = len(camera_image_data.images)
+        parameters = self.sample_camera_parameters(len(camera_image_data.images), random_state)
+        return model_gt_sample._replace(
+            camera_image_data=self.augment_cameras(camera_image_data, parameters)
+        )
+
+    def sample_camera_parameters(
+        self, num_cameras: int, random_state: np.random.RandomState | None = None
+    ) -> Sequence[ImageAugmentationDraw]:
+        """Draw the augmentation of every camera of a sample: one each, or one for them all.
+
+        Args:
+            num_cameras: Number of cameras of the sample.
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
+
+        Returns:
+            The draw of every camera of the sample, in camera order.
+        """
         if self.per_camera_augmentation:
             return [self.sample_parameters(random_state) for _ in range(num_cameras)]
         shared_parameters = self.sample_parameters(random_state)
         return [shared_parameters for _ in range(num_cameras)]
 
-    def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: Sequence[ImageAugmentationDraw]
-    ) -> ModelGTSample:
-        """Augment every camera image by its given draw.
+    def augment_cameras(
+        self, camera_image_data: BaseImages, parameters: Sequence[ImageAugmentationDraw]
+    ) -> BaseImages:
+        """Augment every camera image by its given draw and update the augmented intrinsics.
 
         Args:
-            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
+            camera_image_data: Camera image data holding the images before the augmentation.
             parameters: Augmentation drawn by :meth:`sample_parameters` for every camera, in
                 camera order.
 
         Returns:
-            Updated ModelGTSample instance with an augmented `camera_image_data`.
+            Camera image data holding the augmented images and the matching intrinsics.
         """
-        # This is checked in the _validate_required_keys()
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
-        )
-        images = camera_image_data.images
-        source_height, source_width = images.shape[-2:]
-        return self._augment_cameras(
-            model_gt_sample,
-            [
-                self.sample_augmentation(source_height, source_width, camera_parameters)
-                for camera_parameters in parameters
-            ],
-        )
-
-    def _augment_cameras(
-        self, model_gt_sample: ModelGTSample, parameters: Sequence[ImageAugmentationParameters]
-    ) -> ModelGTSample:
-        """Apply one augmentation per camera image and update the augmented intrinsics.
-
-        Args:
-            model_gt_sample: ModelGTSample instance containing `camera_image_data`.
-            parameters: Augmentation of every camera image, in camera order.
-
-        Returns:
-            Updated ModelGTSample instance with an augmented `camera_image_data`.
-        """
-        camera_image_data: BaseImages = (
-            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
-        )
+        source_height, source_width = camera_image_data.images.shape[-2:]
         augmented_images = []
         image_transforms = []
-        for image, camera_parameters in zip(camera_image_data.images, parameters, strict=True):
+        for image, draw in zip(camera_image_data.images, parameters, strict=True):
+            camera_parameters = self.sample_augmentation(source_height, source_width, draw)
             augmented_image, image_transform = self.apply_augmentation(image, camera_parameters)
             augmented_images.append(augmented_image)
             image_transforms.append(image_transform)
 
-        augmented_camera_image_data = self.apply_image_space_transform(
+        return self.apply_image_space_transform(
             camera_image_data=camera_image_data,
             images=torch.stack(augmented_images, dim=0),
             image_transforms=torch.stack(image_transforms, dim=0),
         )
-        return model_gt_sample._replace(camera_image_data=augmented_camera_image_data)
 
     def sample_parameters(
         self, random_state: np.random.RandomState | None = None

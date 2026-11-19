@@ -20,23 +20,28 @@ pipelines and provides sequential composition helpers.
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from types import ModuleType
 
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 
 
-def random_source(random_state: np.random.RandomState | None) -> np.random.RandomState:
+# A random state of its own, or the ``np.random`` module, whose functions draw from the global
+# random state of NumPy through the same interface.
+RandomSource = np.random.RandomState | ModuleType
+
+
+def random_source(random_state: np.random.RandomState | None) -> RandomSource:
     """Return the random state a transform draws from.
 
     Args:
         random_state: Random state of a stream, None outside a stream.
 
     Returns:
-        The given random state, or the functions of ``np.random``, which draw from the global
-        random state of NumPy through the same interface.
+        The given random state, or ``np.random`` outside a stream.
     """
-    return np.random if random_state is None else random_state  # type: ignore[return-value]
+    return np.random if random_state is None else random_state
 
 
 class BaseTransform(ABC):
