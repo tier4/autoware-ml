@@ -41,7 +41,7 @@ import dataclasses
 import logging
 import math
 import os
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,6 +51,13 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 logger = logging.getLogger(__name__)
+
+# How to get past a refused resume in another layout, for every component that checks it.
+LAYOUT_CHANGE_HINT = (
+    "Resume with the same number of GPUs, batch size and gradient accumulation, or set "
+    "datamodule.allow_resume_layout_change=true (not recommended: another global batch "
+    "changes the optimization, see docs/user-guide/preemption_resume.md)."
+)
 
 
 @dataclass(frozen=True)
@@ -244,6 +251,7 @@ class ResumableDataLoader(DataLoader):
         *,
         sampler: ResumableDistributedSampler,
         batch_size: int,
+        allow_layout_change: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the loader.
@@ -252,6 +260,8 @@ class ResumableDataLoader(DataLoader):
             dataset: Dataset to load.
             sampler: The resumable sampler drawing the order.
             batch_size: Samples per batch.
+            allow_layout_change: Accept a saved position of another batch size or number of
+                ranks and convert it. Off by default: a resume then fails instead.
             **kwargs: Remaining :class:`~torch.utils.data.DataLoader` arguments.
 
         Raises:
@@ -267,6 +277,12 @@ class ResumableDataLoader(DataLoader):
         super().__init__(dataset, batch_size=batch_size, sampler=sampler, **kwargs)
         self._batches_yielded = 0
         self._resume_position: LoaderPosition | None = None
+        self.allow_layout_change = allow_layout_change
+        # Called with the batch a resumed iterator starts at, on its first fetch. Lightning
+        # counts the restored position in batches of the saved layout; after a resume on
+        # another number of ranks or another batch size the trainer has to be told where the
+        # loader really is.
+        self.resume_listener: Callable[[int], None] | None = None
 
     @property
     def resumable_sampler(self) -> ResumableDistributedSampler:
@@ -300,7 +316,19 @@ class ResumableDataLoader(DataLoader):
 
         Args:
             position: Position saved by an earlier run.
+
+        Raises:
+            ValueError: Raised when the position was saved with another batch size or number
+                of ranks and the loader does not allow a layout change.
         """
+        batch_size = self.samples_per_batch
+        num_replicas = int(self.resumable_sampler.num_replicas)
+        if not self.allow_layout_change and not position.has_layout(batch_size, num_replicas):
+            raise ValueError(
+                f"The checkpoint was saved with batch_size={position.batch_size} on "
+                f"{position.num_replicas} ranks, this run uses batch_size={batch_size} on "
+                f"{num_replicas} ranks. {LAYOUT_CHANGE_HINT}"
+            )
         self._resume_position = position
         self.resumable_sampler.set_epoch(position.epoch)
 
@@ -318,6 +346,21 @@ class ResumableDataLoader(DataLoader):
             KeyError: Raised when the state misses a required key.
         """
         self.resume_from(LoaderPosition.from_dict(state_dict))
+
+    def pending_start_batch(self, epoch: int) -> int:
+        """Return the batch a pending resume position continues epoch ``epoch`` at.
+
+        Args:
+            epoch: Epoch the trainer is about to iterate.
+
+        Returns:
+            Index of the first batch the next iterator yields, 0 when no position is pending
+            or it belongs to another epoch.
+        """
+        position = self._resume_position
+        if position is None or position.epoch != epoch:
+            return 0
+        return position.batches_to_skip(self.samples_per_batch, self.resumable_sampler.num_replicas)
 
     def _consume_resume_position(self) -> int:
         """Apply a pending resume position to the sampler, once.
@@ -353,6 +396,8 @@ class ResumableDataLoader(DataLoader):
             )
         self.resumable_sampler.skip_samples(start * batch_size)
         logger.info("Resuming the training dataloader at batch %d of epoch %d.", start, epoch)
+        if self.resume_listener is not None:
+            self.resume_listener(start)
         return start
 
     def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
@@ -386,8 +431,40 @@ class ResumableTrainLoaderMixin:
         """
         if self._train_loader_state is not None:
             loader.resume_from(self._train_loader_state)
+        loader.resume_listener = self._align_trainer_batch_progress
         self._train_loader = loader
         return loader
+
+    def _align_trainer_batch_progress(self, batch: int) -> None:
+        """Move the trainer's position in the epoch to where the resumed loader continues.
+
+        Lightning restores its batch counter from the checkpoint in batches of the saved layout
+        and ends the epoch once its fetch count, seeded from that counter, reaches the loader's
+        length. After a resume on another number of ranks or another batch size the loader
+        skips a different number of batches, so the epoch ran out of batches before Lightning
+        saw its last one: the end-of-epoch validation and the epoch's scheduler step were
+        skipped, and an epoch-wise learning rate lagged one epoch from then on. Called from the
+        first fetch of the resumed iterator, after the epoch loop's reset has settled the
+        restored counters.
+
+        Args:
+            batch: Index of the first batch the resumed iterator yields.
+        """
+        trainer = getattr(self, "trainer", None)
+        if trainer is None:
+            return
+        current = trainer.fit_loop.epoch_loop.batch_progress.current
+        if current.ready != batch:
+            logger.warning(
+                "Moving the trainer's position in the epoch from batch %d to the resumed "
+                "dataloader's batch %d.",
+                current.ready,
+                batch,
+            )
+        current.ready = current.started = current.processed = current.completed = batch
+        data_fetcher = trainer.fit_loop._data_fetcher
+        if data_fetcher is not None:
+            data_fetcher.fetched = batch
 
     def state_dict(self) -> dict[str, Any]:
         """Return the training loader position for the checkpoint.

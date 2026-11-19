@@ -56,6 +56,7 @@ def _loader(
     weights: list[float] | None = None,
     num_workers: int = 0,
     seed: int = 3,
+    allow_layout_change: bool = False,
 ) -> ResumableDataLoader:
     """Resumable loader over an index dataset of ``size`` samples."""
     dataset = _IndexDataset(size)
@@ -67,6 +68,7 @@ def _loader(
         collate_fn=_collate,
         num_workers=num_workers,
         persistent_workers=num_workers > 0,
+        allow_layout_change=allow_layout_change,
     )
 
 
@@ -217,12 +219,20 @@ class TestResumableDataLoader(unittest.TestCase):
 
     def test_changed_batch_size_resumes_at_the_same_sample_position(self) -> None:
         """Test that 30 consumed samples in batches of 10 skip 6 batches of 5."""
-        loader = _loader(40, 5)
+        loader = _loader(40, 5, allow_layout_change=True)
         loader.resume_from(
             LoaderPosition(epoch=0, batches_yielded=3, batch_size=10, num_replicas=1)
         )
 
         self.assertEqual(len(_batches(loader)), 8 - 6)
+
+    def test_changed_layout_is_refused_by_default(self) -> None:
+        """Test that a position of another batch size fails the resume unless allowed."""
+        loader = _loader(40, 5)
+        position = LoaderPosition(epoch=0, batches_yielded=3, batch_size=10, num_replicas=1)
+
+        with self.assertRaisesRegex(ValueError, "allow_resume_layout_change"):
+            loader.resume_from(position)
 
     def test_load_state_dict_requires_every_key(self) -> None:
         """Test that an incomplete loader state is rejected by name."""
