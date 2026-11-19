@@ -382,13 +382,18 @@ class PTv3BaseModel(ModuleBaseModel):
                 not follow the layout the voxel encoder reads.
             RuntimeError: If the voxelizer dropped occupied voxels.
         """
+        # Checked on the batch, not on the voxels: an empty second sample leaves no voxel behind.
+        if multi_task_batch_inputs.batch_size() != 1:
+            raise ValueError(
+                "PTv3 export supports only single-sample batches, got "
+                f"{multi_task_batch_inputs.batch_size()} samples."
+            )
         voxels_data, time_lag_column = self.voxel_inputs(multi_task_batch_inputs)
         voxels, num_points = voxels_data.voxels, voxels_data.num_points
         self.validate_voxel_inputs(voxels, voxels_data.num_dropped_voxels, time_lag_column)
         encoder_inputs = self.build_encoder_inputs(
             voxels, num_points, voxels_data.batch_xyz_coords()
         )
-        require_single_sample_export_batch(encoder_inputs)
         _, serialization_depth = self.compute_export_geometry(voxels.device)
         patch_sizes = export_patch_sizes(self)
         point, _ = serialize_point_cloud_batch(
@@ -532,26 +537,6 @@ def export_patch_sizes(model: PTv3BaseModel) -> list[int]:
             "disagree; the deployed graphs share one patch_order per level."
         )
     return patch_sizes
-
-
-def require_single_sample_export_batch(batch: Mapping[str, torch.Tensor]) -> None:
-    """Reject a multi-sample export batch.
-
-    The export graphs pad and offset a single frame; a second sample would silently share
-    attention windows with the first.
-
-    Args:
-        batch: Encoder inputs with an ``offset`` entry.
-
-    Raises:
-        ValueError: If the batch holds more than one sample.
-    """
-    sample_count = int(batch["offset"].numel())
-    if sample_count != 1:
-        raise ValueError(
-            "PTv3 export supports only single-sample export batches, got "
-            f"{sample_count} samples (offset entries)."
-        )
 
 
 def _serialized_pooling_dynamic_axis(input_name: str) -> dict[int, str]:
