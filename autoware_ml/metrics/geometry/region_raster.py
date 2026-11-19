@@ -17,17 +17,17 @@
 A segmentation frame asks, for a few hundred thousand points, whether each lies in a
 lanelet region. Testing every point against the shapely polygon costs a quarter of a
 second per frame and filter. The region is fixed per map, so this module turns it into
-a raster once and answers each point with array lookups, on the CPU (NumPy) or on the
-device the points already live on (torch), with the same result as ``shapely.contains``:
+a raster once and answers each point with array lookups, on the device the points live
+on, with the same result as ``shapely.contains``:
 
-* A cell that no polygon edge touches lies wholly inside or wholly outside the region.
-  Such cells are classified per 4-connected component by one shapely test of a
-  representative cell centre, at build time.
+* A cell that no polygon edge touches lies wholly inside or wholly outside the region,
+  so shapely's verdict on its centre, taken at build time, holds for all of it.
 * A cell that an edge touches (a conservative superset of them) keeps the list of the
-  edges that touch it and one reference point off every edge, whose membership shapely
+  edges that touch it, and its centre as a reference point whose membership shapely
   decides at build time. A point in that cell is inside exactly when the reference is
   inside XOR the segment from the point to the reference crosses an odd number of the
   cell's edges. The segment never leaves the convex cell, so no other edge can cross it.
+  The rare cell whose centre lies on one of its edges leaves its points to shapely.
 
 Cells are stored in square tiles. A tile without any edge-touched cell is uniform and
 stored as one value, so a map several kilometres across costs memory only along the
@@ -39,17 +39,12 @@ from __future__ import annotations
 from collections import OrderedDict
 
 import numpy as np
-import scipy.ndimage
 import shapely
 import torch
 
 # Cell codes. A non-negative code is the index of an edge-touched ("border") cell.
 OUTSIDE = -1
 INSIDE = -2
-
-# Fractions of a cell, tried in turn as a border cell's reference point until one lies
-# off every edge of the cell. The centre almost always does.
-_REFERENCE_OFFSETS = ((0.5, 0.5), (0.3141, 0.7183), (0.8414, 0.2718), (0.1732, 0.4142))
 
 # Rasters whose tables currently sit on a device, most recently used last. A test run
 # visits scenes one after another, so only the last few maps' tables stay resident and
@@ -62,9 +57,22 @@ _device_resident: OrderedDict[int, "RegionRaster"] = OrderedDict()
 # not trusted.
 _ORIENTATION_TOLERANCE = 1e-14
 
-# 4-connectivity inside each tile, no connection between stacked tiles.
-_IN_TILE_STRUCTURE = np.zeros((3, 3, 3), dtype=bool)
-_IN_TILE_STRUCTURE[1] = [[0, 1, 0], [1, 1, 1], [0, 1, 0]]
+# Distance, as a fraction of the cell side, below which a cell centre counts as lying on
+# an edge and cannot serve as the cell's reference point.
+_REFERENCE_CLEARANCE = 1e-6
+
+# The tables a lookup reads. NumPy lookups use them as built, tensor lookups use copies
+# on the device the points arrive on.
+_TABLES = (
+    "tile_codes",
+    "blocks",
+    "edges",
+    "edge_offsets",
+    "edge_list",
+    "reference",
+    "reference_inside",
+    "exact",
+)
 
 
 class RegionRaster:
@@ -91,12 +99,14 @@ class RegionRaster:
         self.origin = (min_x - cell, min_y - cell)
         self.tiles_x = int(np.ceil((max_x + cell - self.origin[0]) / (cell * tile)))
         self.tiles_y = int(np.ceil((max_y + cell - self.origin[1]) / (cell * tile)))
+        self.cells_x = self.tiles_x * tile
         self.cells_y = self.tiles_y * tile
 
         self.edges = _ring_edges(geometry)
         border_cells, self.edge_offsets, self.edge_list = self._touched_cells()
-        self._build_tiles(geometry, border_cells)
-        self.reference, self.reference_inside = self._references(geometry, border_cells)
+        self._build_tiles(border_cells)
+        self._build_references(border_cells)
+        self._host_tables = {name: getattr(self, name) for name in _TABLES}
 
     # ------------------------------------------------------------------ build
     def _touched_cells(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -130,94 +140,73 @@ class RegionRaster:
         offsets = np.append(first, len(pairs)).astype(np.int64)
         return border_cells, offsets, pair_edge.astype(np.int64)
 
-    def _build_tiles(self, geometry, border_cells: np.ndarray) -> None:
-        """Tile codes (uniform value or block index) and the cell blocks of mixed tiles."""
-        cell, tile = self.cell_size, self.tile_cells
+    def _build_tiles(self, border_cells: np.ndarray) -> None:
+        """Tile codes (uniform value or block index) and the cell blocks of mixed tiles.
+
+        No edge touches a uniform tile or a cell that is not a border cell, so each lies
+        wholly on one side of the boundary and shapely's verdict on its centre decides
+        all of it.
+        """
+        tile = self.tile_cells
         column, row = np.divmod(border_cells, self.cells_y)
         tile_of_border = (column // tile) * self.tiles_y + (row // tile)
         mixed_tiles = np.unique(tile_of_border)
 
-        # Uniform tiles: one representative each, the tile centre.
-        tile_codes = np.empty(self.tiles_x * self.tiles_y, dtype=np.int32)
-        tile_x, tile_y = np.divmod(np.arange(tile_codes.size), self.tiles_y)
-        centre_x = self.origin[0] + (tile_x + 0.5) * tile * cell
-        centre_y = self.origin[1] + (tile_y + 0.5) * tile * cell
-        uniform = np.ones(tile_codes.size, dtype=bool)
-        uniform[mixed_tiles] = False
-        inside = shapely.contains_xy(geometry, centre_x[uniform], centre_y[uniform])
-        tile_codes[uniform] = np.where(inside, INSIDE, OUTSIDE)
+        tile_x, tile_y = np.divmod(np.arange(self.tiles_x * self.tiles_y), self.tiles_y)
+        tile_codes = self._side_of_centres(tile_x, tile_y, tile)
         tile_codes[mixed_tiles] = np.arange(len(mixed_tiles), dtype=np.int32)
 
-        # Mixed tiles: label the untouched cells per tile, one representative each.
+        local_x, local_y = np.divmod(np.arange(tile * tile), tile)
+        blocks = self._side_of_centres(
+            (mixed_tiles // self.tiles_y)[:, None] * tile + local_x,
+            (mixed_tiles % self.tiles_y)[:, None] * tile + local_y,
+            1,
+        )
         block_of_border = np.searchsorted(mixed_tiles, tile_of_border)
         local = (column % tile) * tile + (row % tile)
-        blocks = np.full((len(mixed_tiles), tile * tile), OUTSIDE, dtype=np.int32)
-        touched = np.zeros(blocks.shape, dtype=bool)
-        touched[block_of_border, local] = True
-        components, count = scipy.ndimage.label(
-            ~touched.reshape(-1, tile, tile), structure=_IN_TILE_STRUCTURE
-        )
-        components = components.reshape(blocks.shape)
-        if count:
-            flat = components.ravel()
-            order = np.argsort(flat, kind="stable")
-            first = order[np.searchsorted(flat[order], np.arange(1, count + 1))]
-            block, local_first = np.divmod(first, tile * tile)
-            local_x, local_y = np.divmod(local_first, tile)
-            cell_x = (mixed_tiles[block] // self.tiles_y) * tile + local_x
-            cell_y = (mixed_tiles[block] % self.tiles_y) * tile + local_y
-            component_inside = shapely.contains_xy(
-                geometry,
-                self.origin[0] + (cell_x + 0.5) * cell,
-                self.origin[1] + (cell_y + 0.5) * cell,
-            )
-            lookup = np.concatenate([[OUTSIDE], np.where(component_inside, INSIDE, OUTSIDE)])
-            blocks[~touched] = lookup[components[~touched]]
         blocks[block_of_border, local] = np.arange(len(border_cells), dtype=np.int32)
         self.tile_codes = tile_codes
         self.blocks = blocks.ravel()
 
-    def _references(self, geometry, border_cells: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """One point per border cell that lies off every edge, with its membership."""
-        cell = self.cell_size
-        column, row = np.divmod(border_cells, self.cells_y)
-        corner_x = self.origin[0] + column * cell
-        corner_y = self.origin[1] + row * cell
-        reference = np.full((len(border_cells), 2), np.nan)
-        pending = np.arange(len(border_cells))
-        for fraction_x, fraction_y in _REFERENCE_OFFSETS:
-            points = np.stack(
-                [corner_x[pending] + fraction_x * cell, corner_y[pending] + fraction_y * cell],
-                axis=1,
-            )
-            owner, edges = self._cell_edges(pending)
-            nearest = np.full(len(pending), np.inf)
-            np.minimum.at(nearest, owner, _segment_distance(points[owner], edges))
-            clear = nearest > 1e-6 * cell
-            reference[pending[clear]] = points[clear]
-            pending = pending[~clear]
-            if not len(pending):
-                break
-        if len(pending):
-            raise RuntimeError(
-                f"{len(pending)} raster cells have no reference point off their edges."
-            )
-        return reference, shapely.contains_xy(geometry, reference[:, 0], reference[:, 1])
+    def _side_of_centres(self, x: np.ndarray, y: np.ndarray, span: int) -> np.ndarray:
+        """``INSIDE`` or ``OUTSIDE`` for the centre of each ``span``-cell square at (x, y)."""
+        side = self.cell_size * span
+        inside = shapely.contains_xy(
+            self._geometry, self.origin[0] + (x + 0.5) * side, self.origin[1] + (y + 0.5) * side
+        )
+        return np.where(inside, INSIDE, OUTSIDE).astype(np.int32)
 
-    def _cell_edges(self, border: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """Pairs (index into ``border``, edge row) of every edge of the given border cells."""
-        start = self.edge_offsets[border]
-        count = self.edge_offsets[border + 1] - start
-        owner = np.repeat(np.arange(len(border)), count)
-        rank = np.arange(owner.size) - np.repeat(np.cumsum(count) - count, count)
-        return owner, self.edges[self.edge_list[start[owner] + rank]]
+    def _build_references(self, border_cells: np.ndarray) -> None:
+        """Each border cell's centre as reference point, with its membership.
+
+        A centre on or within rounding of one of the cell's edges is no use as a
+        reference, so such a cell is marked ``exact`` and its points go to shapely.
+        """
+        column, row = np.divmod(border_cells, self.cells_y)
+        reference = np.stack(
+            [
+                self.origin[0] + (column + 0.5) * self.cell_size,
+                self.origin[1] + (row + 0.5) * self.cell_size,
+            ],
+            axis=1,
+        )
+        owner = np.repeat(np.arange(len(border_cells)), np.diff(self.edge_offsets))
+        nearest = np.full(len(border_cells), np.inf)
+        np.minimum.at(
+            nearest, owner, _segment_distance(reference[owner], self.edges[self.edge_list])
+        )
+        self.reference = reference
+        self.reference_inside = shapely.contains_xy(
+            self._geometry, reference[:, 0], reference[:, 1]
+        )
+        self.exact = nearest <= _REFERENCE_CLEARANCE * self.cell_size
 
     # ----------------------------------------------------------------- lookup
     def contains(self, xy: np.ndarray) -> np.ndarray:
         """Whether each map-frame point lies in the region's interior.
 
         Args:
-            xy: Points ``(N, 2)``, float64.
+            xy: Points ``(N, 2)``.
 
         Returns:
             Boolean mask ``(N,)``, equal to ``shapely.contains`` of the region.
@@ -225,57 +214,51 @@ class RegionRaster:
         xy = np.asarray(xy, dtype=np.float64)
         if self.empty or xy.shape[0] == 0:
             return np.zeros(xy.shape[0], dtype=bool)
-        code = self._codes(xy, np)
+        tables = self._host_tables
+        code = self._codes(xy, tables)
         mask = code == INSIDE
         points = np.flatnonzero(code >= 0)
         if points.size:
             border = code[points].astype(np.int64)
-            owner, edges = self._cell_edges(border)
+            owner, edges = _cell_edges(border, tables)
             crossings, unsure = _crosses(xy[points[owner]], self.reference[border[owner]], edges)
             odd = np.bincount(owner, weights=crossings, minlength=points.size).astype(np.int64)
             mask[points] = self.reference_inside[border] ^ (odd % 2 == 1)
-            unsure_points = points[np.bincount(owner, weights=unsure, minlength=points.size) > 0]
-            if unsure_points.size:
-                mask[unsure_points] = self._shapely_contains(xy[unsure_points])
+            unsure_count = np.bincount(owner, weights=unsure, minlength=points.size)
+            exact_points = points[(unsure_count > 0) | self.exact[border]]
+            if exact_points.size:
+                mask[exact_points] = self._shapely_contains(xy[exact_points])
         return mask
 
     def contains_tensor(self, xy: torch.Tensor) -> torch.Tensor:
         """:meth:`contains` on the points' own device.
 
         Args:
-            xy: Points ``(N, 2)``, float64.
+            xy: Points ``(N, 2)``.
 
         Returns:
-            Boolean mask ``(N,)`` on the device of ``xy``.
+            Boolean mask ``(N,)`` on the device of ``xy``, equal to ``shapely.contains``.
         """
         if self.empty or xy.shape[0] == 0:
             return torch.zeros(xy.shape[0], dtype=torch.bool, device=xy.device)
         xy = xy.to(torch.float64)
-        tensors = self._tensors(xy.device)
-        code = self._codes(xy, torch, tensors)
+        tables = self._tensors(xy.device)
+        code = self._codes(xy, tables)
         mask = code == INSIDE
         points = torch.nonzero(code >= 0).squeeze(1)
         if points.numel():
             border = code[points].long()
-            start = tensors["edge_offsets"][border]
-            count = tensors["edge_offsets"][border + 1] - start
-            owner = torch.repeat_interleave(torch.arange(points.numel(), device=xy.device), count)
-            rank = torch.arange(owner.numel(), device=xy.device) - torch.repeat_interleave(
-                torch.cumsum(count, 0) - count, count
-            )
-            edges = tensors["edges"][tensors["edge_list"][start[owner] + rank]]
+            owner, edges = _cell_edges(border, tables)
             crossings, unsure = _crosses(
-                xy[points[owner]], tensors["reference"][border[owner]], edges
+                xy[points[owner]], tables["reference"][border[owner]], edges
             )
-            odd = torch.zeros(points.numel(), dtype=torch.int64, device=xy.device)
-            odd.index_add_(0, owner, crossings.long())
-            mask[points] = tensors["reference_inside"][border] ^ (odd % 2 == 1)
-            unsure_count = torch.zeros(points.numel(), dtype=torch.int64, device=xy.device)
-            unsure_count.index_add_(0, owner, unsure.long())
-            unsure_points = points[unsure_count > 0]
-            if unsure_points.numel():
-                exact = self._shapely_contains(xy[unsure_points].cpu().numpy())
-                mask[unsure_points] = torch.from_numpy(exact).to(xy.device)
+            odd = torch.zeros_like(border).index_add_(0, owner, crossings.long())
+            mask[points] = tables["reference_inside"][border] ^ (odd % 2 == 1)
+            unsure_count = torch.zeros_like(border).index_add_(0, owner, unsure.long())
+            exact_points = points[(unsure_count > 0) | tables["exact"][border]]
+            if exact_points.numel():
+                exact = self._shapely_contains(xy[exact_points].cpu().numpy())
+                mask[exact_points] = torch.from_numpy(exact).to(xy.device)
         return mask
 
     def _shapely_contains(self, xy: np.ndarray) -> np.ndarray:
@@ -287,28 +270,26 @@ class RegionRaster:
         self._device_tensors.clear()
         _device_resident.pop(id(self), None)
 
-    def _codes(self, xy, xp, tensors: dict[str, torch.Tensor] | None = None):
-        """Cell code of each point: ``INSIDE``, ``OUTSIDE`` or a border cell index."""
+    def _codes(self, xy, tables):
+        """Cell code of each point: ``INSIDE``, ``OUTSIDE`` or a border cell index.
+
+        Works on NumPy arrays with NumPy tables and on tensors with tensor tables.
+        """
+        xp = np if isinstance(xy, np.ndarray) else torch
         tile = self.tile_cells
-        if xp is np:
-            column = np.floor((xy[:, 0] - self.origin[0]) / self.cell_size).astype(np.int64)
-            row = np.floor((xy[:, 1] - self.origin[1]) / self.cell_size).astype(np.int64)
-            tile_codes, blocks = self.tile_codes, self.blocks
-        else:
-            column = torch.floor((xy[:, 0] - self.origin[0]) / self.cell_size).long()
-            row = torch.floor((xy[:, 1] - self.origin[1]) / self.cell_size).long()
-            tile_codes, blocks = tensors["tile_codes"], tensors["blocks"]
-        valid = (column >= 0) & (column < self.tiles_x * tile) & (row >= 0) & (row < self.cells_y)
+        column = _floor_index((xy[:, 0] - self.origin[0]) / self.cell_size)
+        row = _floor_index((xy[:, 1] - self.origin[1]) / self.cell_size)
+        valid = (column >= 0) & (column < self.cells_x) & (row >= 0) & (row < self.cells_y)
         column = xp.where(valid, column, 0)
         row = xp.where(valid, row, 0)
-        tile_code = tile_codes[(column // tile) * self.tiles_y + row // tile]
+        tile_code = tables["tile_codes"][(column // tile) * self.tiles_y + row // tile]
         block = xp.where(tile_code >= 0, tile_code, 0)
-        cell_code = blocks[block * (tile * tile) + (column % tile) * tile + row % tile]
+        cell_code = tables["blocks"][block * (tile * tile) + (column % tile) * tile + row % tile]
         code = xp.where(tile_code >= 0, cell_code, tile_code)
         return xp.where(valid, code, OUTSIDE)
 
     def _tensors(self, device: torch.device) -> dict[str, torch.Tensor]:
-        """The lookup tables on ``device``, copied on first use."""
+        """The lookup tables on ``device``, copied on first use (shared with NumPy on the CPU)."""
         _device_resident[id(self)] = self
         _device_resident.move_to_end(id(self))
         while len(_device_resident) > MAX_DEVICE_RESIDENT_RASTERS:
@@ -317,15 +298,7 @@ class RegionRaster:
         if key not in self._device_tensors:
             self._device_tensors[key] = {
                 name: torch.from_numpy(np.ascontiguousarray(getattr(self, name))).to(device)
-                for name in (
-                    "tile_codes",
-                    "blocks",
-                    "edges",
-                    "edge_offsets",
-                    "edge_list",
-                    "reference",
-                    "reference_inside",
-                )
+                for name in _TABLES
             }
         return self._device_tensors[key]
 
@@ -336,6 +309,31 @@ def _ring_edges(geometry) -> np.ndarray:
     coords, ring = shapely.get_coordinates(rings, return_index=True)
     same_ring = ring[1:] == ring[:-1]
     return np.concatenate([coords[:-1][same_ring], coords[1:][same_ring]], axis=1)
+
+
+def _floor_index(values):
+    """``floor`` of an array or tensor of coordinates, as int64 indices."""
+    if isinstance(values, np.ndarray):
+        return np.floor(values).astype(np.int64)
+    return torch.floor(values).long()
+
+
+def _cell_edges(border, tables):
+    """Pairs (index into ``border``, edge row) of every edge of the given border cells.
+
+    Works on a NumPy ``border`` with NumPy tables and on a tensor with tensor tables.
+    """
+    start = tables["edge_offsets"][border]
+    count = tables["edge_offsets"][border + 1] - start
+    if isinstance(border, np.ndarray):
+        owner = np.repeat(np.arange(border.size), count)
+        rank = np.arange(owner.size) - np.repeat(np.cumsum(count) - count, count)
+    else:
+        owner = torch.repeat_interleave(torch.arange(border.numel(), device=border.device), count)
+        rank = torch.arange(owner.numel(), device=border.device) - torch.repeat_interleave(
+            torch.cumsum(count, 0) - count, count
+        )
+    return owner, tables["edges"][tables["edge_list"][start[owner] + rank]]
 
 
 def _segment_distance(points: np.ndarray, edges: np.ndarray) -> np.ndarray:
@@ -360,7 +358,6 @@ def _crosses(points, references, edges):
     on or within rounding of the line (a point on the boundary is outside for
     ``shapely.contains``). Such pairs are flagged unsure, with a generous error bound
     of the orientation determinant, for the caller to decide exactly.
-    Works on NumPy arrays and on tensors alike.
     """
     ax, ay, bx, by = edges[:, 0], edges[:, 1], edges[:, 2], edges[:, 3]
     px, py = points[:, 0], points[:, 1]

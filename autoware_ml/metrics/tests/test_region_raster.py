@@ -106,6 +106,40 @@ class RegionRasterTest(unittest.TestCase):
             raster.contains_tensor(torch.from_numpy(far)).numpy(), expected
         )
 
+    def test_cells_whose_centre_lies_on_an_edge_are_exact(self) -> None:
+        """
+        Input: an L-shaped region whose inner vertical edge, x = 1.25, runs through the
+        centres of a column of 0.5 m cells (the raster starts one cell left of x = 0),
+        with its ring counter-clockwise and clockwise, probed on a fine grid, on that
+        edge and within 1e-9 m of it.
+        Expected: those cells cannot use their centre as the parity reference, so their
+        points are answered by shapely, and every answer equals shapely.contains in both
+        orientations. Without the fallback the clockwise ring gets 400 grid points wrong.
+        Check: at least one such cell, and the NumPy and tensor masks equal shapely's.
+        """
+        corners = [(0, 0), (4, 0), (4, 4), (1.25, 4), (1.25, 2), (0, 2)]
+        grid = np.stack(np.meshgrid(np.arange(-1, 5, 0.05), np.arange(-1, 5, 0.05)), -1)
+        edge_y = np.linspace(1.9, 4.1, 221)
+        points = np.concatenate(
+            [
+                grid.reshape(-1, 2),
+                np.stack([np.full_like(edge_y, 1.25), edge_y], 1),
+                np.stack([np.full_like(edge_y, 1.25 - 1e-9), edge_y], 1),
+                np.stack([np.full_like(edge_y, 1.25 + 1e-9), edge_y], 1),
+            ]
+        )
+        for orientation, ring in (("counter-clockwise", corners), ("clockwise", corners[::-1])):
+            with self.subTest(orientation=orientation):
+                region = Polygon(ring)
+                raster = RegionRaster(region, cell_size=0.5)
+                expected = shapely.contains_xy(region, points[:, 0], points[:, 1])
+
+                self.assertGreater(int(raster.exact.sum()), 0)
+                np.testing.assert_array_equal(raster.contains(points), expected)
+                np.testing.assert_array_equal(
+                    raster.contains_tensor(torch.from_numpy(points)).numpy(), expected
+                )
+
     def test_released_device_copies_are_rebuilt(self) -> None:
         raster = RegionRaster(self.region, cell_size=0.5)
         points = torch.from_numpy(self.points)
