@@ -169,8 +169,9 @@ class TransformsCompose:
     and returns the final result.
 
     For the frames of a stream it keeps the augmentation drawn for the stream, see
-    :meth:`keep_stream_parameters`: the transforms that keep parameters are copied once per
-    stream, the copies draw their parameters and hold them for every frame of the stream.
+    :meth:`stream_pipeline`: the transforms that keep parameters are copied once per stream,
+    the copies draw their parameters and hold them for every frame of the stream. The stream
+    of a sample is named by the call, so a call without one always draws for its sample.
 
     Class Attributes:
         MAX_KEPT_STREAMS: Number of streams whose augmentation is kept, the least recently
@@ -191,32 +192,29 @@ class TransformsCompose:
         self._stream_pipelines: OrderedDict[tuple[int, ...], Sequence[BaseTransform]] = (
             OrderedDict()
         )
-        # Seed of the stream of the next sample, None for a sample augmented on its own
-        self._stream_seed: tuple[int, ...] | None = None
 
-    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def __call__(
+        self, model_gt_sample: ModelGTSample, stream_seed: Sequence[int] | None = None
+    ) -> ModelGTSample:
         """Apply each transform in order.
 
         Args:
             model_gt_sample: ModelGTSample instance passed through the configured transforms.
+            stream_seed: Integers naming the stream of the sample, the same for every frame
+                of it. The sample then gets the augmentation kept for the stream. None for a
+                sample augmented on its own.
 
         Returns:
             Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
-        for transform in self.active_pipeline:
+        pipeline = self.pipeline if stream_seed is None else self.stream_pipeline(stream_seed)
+        for transform in pipeline:
             model_gt_sample = transform(model_gt_sample)
 
         return model_gt_sample
 
-    @property
-    def active_pipeline(self) -> Sequence[BaseTransform]:
-        """Transforms applied to the next sample, the ones of its stream when it has one."""
-        if self._stream_seed is None:
-            return self.pipeline
-        return self._stream_pipelines[self._stream_seed]
-
-    def keep_stream_parameters(self, stream_seed: Sequence[int]) -> None:
-        """Augment the samples that follow as the frames of one stream.
+    def stream_pipeline(self, stream_seed: Sequence[int]) -> Sequence[BaseTransform]:
+        """Return the transforms holding the augmentation of one stream.
 
         The first frame of a stream draws the augmentation of the stream, which is then kept
         and applied to every later frame of it, also when frames of other streams are read
@@ -225,6 +223,9 @@ class TransformsCompose:
 
         Args:
             stream_seed: Integers naming the stream, the same for every frame of it.
+
+        Returns:
+            The transforms to apply to the frames of the stream, in pipeline order.
         """
         stream_seed = tuple(stream_seed)
         if stream_seed not in self._stream_pipelines:
@@ -232,11 +233,7 @@ class TransformsCompose:
             if len(self._stream_pipelines) > self.MAX_KEPT_STREAMS:
                 self._stream_pipelines.popitem(last=False)
         self._stream_pipelines.move_to_end(stream_seed)
-        self._stream_seed = stream_seed
-
-    def clear_stream_parameters(self) -> None:
-        """Augment the samples that follow on their own again, the kept streams stay kept."""
-        self._stream_seed = None
+        return self._stream_pipelines[stream_seed]
 
     def _draw_stream_pipeline(self, stream_seed: tuple[int, ...]) -> Sequence[BaseTransform]:
         """Draw the augmentation of one stream into copies of the transforms that keep it.

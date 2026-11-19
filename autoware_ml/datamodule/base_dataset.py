@@ -64,7 +64,7 @@ class StreamSlot(int):
 
     Attributes:
         stream_seed: Integers naming the stream, see
-            ``TransformsCompose.keep_stream_parameters``.
+            ``TransformsCompose.stream_pipeline``.
     """
 
     stream_seed: tuple[int, ...]
@@ -257,8 +257,8 @@ class BaseDataset(Dataset):
         """
         start_time = time.perf_counter()
         model_gt_sample = self.get_data_sample(int(index))
-        self.update_stream_augmentation(index)
-        transformed_gt_sample = self.apply_transforms(model_gt_sample)
+        stream_seed = index.stream_seed if isinstance(index, StreamSlot) else None
+        transformed_gt_sample = self.apply_transforms(model_gt_sample, stream_seed)
         return transformed_gt_sample._replace(
             io_processing_time=time.perf_counter() - start_time,
             is_padding=isinstance(index, PaddingSlot),
@@ -275,34 +275,22 @@ class BaseDataset(Dataset):
             ModelGTSample instance consumed by the transform pipeline.
         """
 
-    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def apply_transforms(
+        self, model_gt_sample: ModelGTSample, stream_seed: Sequence[int] | None = None
+    ) -> ModelGTSample:
         """Apply the transform pipeline of the dataset to a metadata sample.
 
         Args:
             model_gt_sample: ModelGTSample instance.
+            stream_seed: Integers naming the stream of the sample, which is then augmented as
+                the other frames of the stream. None for a sample augmented on its own.
 
         Returns:
             Transformed ModelGTSample instance.
         """
         if self.transforms is None:
             return model_gt_sample
-        return self.transforms(model_gt_sample)
-
-    def update_stream_augmentation(self, index: int) -> None:
-        """Make the pipeline keep the augmentation of the stream of a sample, or of none.
-
-        The pipeline draws the augmentation of a stream with its first frame and keeps it for
-        the later ones, and goes back to drawing per sample for a plain index.
-
-        Args:
-            index: Sample index, a ``StreamSlot`` for a frame augmented as its stream.
-        """
-        if self.transforms is None:
-            return
-        if isinstance(index, StreamSlot):
-            self.transforms.keep_stream_parameters(index.stream_seed)
-        else:
-            self.transforms.clear_stream_parameters()
+        return self.transforms(model_gt_sample, stream_seed=stream_seed)
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
         """

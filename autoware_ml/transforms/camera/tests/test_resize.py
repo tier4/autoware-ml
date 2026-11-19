@@ -14,6 +14,7 @@
 
 """Unit tests for the camera image resize, crop, and padding transforms."""
 
+from collections.abc import Sequence
 import unittest
 
 from jaxtyping import Float32
@@ -596,10 +597,10 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         )
 
     def augmented_intrinsics(
-        self, pipeline: TransformsCompose
+        self, pipeline: TransformsCompose, stream_seed: Sequence[int] | None = None
     ) -> Float32[Tensor, "num_cameras 3 3"]:
-        """Augmented intrinsics the pipeline gives a fresh sample."""
-        output = pipeline(self.build_multi_task_gt_sample())
+        """Augmented intrinsics the pipeline gives a fresh sample of a stream."""
+        output = pipeline(self.build_multi_task_gt_sample(), stream_seed=stream_seed)
         assert output.camera_image_data is not None
         self.assert_projection_is_consistent(output.camera_image_data)
         return output.camera_image_data.augmented_camera_intrinsics
@@ -607,7 +608,7 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
     def test_frames_and_cameras_of_a_stream_get_the_same_augmentation(self) -> None:
         """
         Input: a training transform drawing resize, crop, flip and rotation, two frames
-        transformed after the draw of one stream and one frame after the draw of another.
+        transformed with the seed of one stream and one frame with the seed of another.
         Expected: the draw the transform keeps augments every camera of every frame of its
         stream, and another stream is augmented differently.
         Check: the augmented intrinsics of the two frames are equal, the two cameras of a
@@ -615,11 +616,9 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         """
         pipeline = TransformsCompose([self.build_training_transform()])
 
-        pipeline.keep_stream_parameters((0, 0, 0))
-        first = self.augmented_intrinsics(pipeline)
-        second = self.augmented_intrinsics(pipeline)
-        pipeline.keep_stream_parameters((0, 0, 1))
-        other = self.augmented_intrinsics(pipeline)
+        first = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        second = self.augmented_intrinsics(pipeline, (0, 0, 0))
+        other = self.augmented_intrinsics(pipeline, (0, 0, 1))
 
         self.assertTrue(torch.equal(first, second))
         self.assertTrue(torch.equal(first[0], first[1]))
@@ -637,8 +636,7 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         transform = self.build_training_transform()
         pipeline = TransformsCompose([transform])
 
-        pipeline.keep_stream_parameters((0, 0, 0))
-        pipeline.clear_stream_parameters()
+        self.augmented_intrinsics(pipeline, (0, 0, 0))
         intrinsics = self.augmented_intrinsics(pipeline)
 
         self.assertIsNone(transform.parameters)
@@ -681,8 +679,8 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
 
     def test_a_stream_in_validation_is_augmented_as_a_single_frame(self) -> None:
         """
-        Input: a validation transform, one frame transformed on its own and one after the
-        draw of a stream.
+        Input: a validation transform, one frame transformed on its own and one with the
+        seed of a stream.
         Expected: validation keeps the middle of every range for a stream, the values it
         applies to a single frame.
         Check: both frames get the same augmented intrinsics.
@@ -699,9 +697,8 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         )
 
         single_frame = self.augmented_intrinsics(pipeline)
-        pipeline.keep_stream_parameters((0, 0, 0))
 
-        self.assertTrue(torch.equal(self.augmented_intrinsics(pipeline), single_frame))
+        self.assertTrue(torch.equal(self.augmented_intrinsics(pipeline, (0, 0, 0)), single_frame))
 
     @staticmethod
     def intensity_centroid(

@@ -65,27 +65,27 @@ class _Noise(BaseTransform):
 class TestStreamAugmentation(unittest.TestCase):
     """The augmentation the transforms of a pipeline keep for the frames of a stream."""
 
-    def draws(self, pipeline: TransformsCompose) -> Sequence[Sequence[float]]:
-        """The draws every transform of the pipeline applies to a fresh sample."""
-        return pipeline(SimpleNamespace(draws=[])).draws
+    def draws(
+        self, pipeline: TransformsCompose, stream_seed: Sequence[int] | None = None
+    ) -> Sequence[Sequence[float]]:
+        """The draws every transform of the pipeline applies to a fresh sample of a stream."""
+        return pipeline(SimpleNamespace(draws=[]), stream_seed=stream_seed).draws
 
     def test_frames_of_one_stream_get_the_kept_augmentation_and_streams_differ(self) -> None:
         """
         Input: a pipeline of two transforms drawing 3 and 2 values, two frames transformed
-        after the draw of one stream and one frame after the draw of another.
+        with the seed of one stream and one frame with the seed of another.
         Expected: the transforms keep the values drawn for a stream and apply them to every
-        frame until another stream is drawn.
+        frame called with its seed.
         Check: both frames of the first stream record the kept values, and the frame of the
         other stream records different ones.
         """
         pipeline = TransformsCompose([_Draw(3), _Draw(2)])
 
-        pipeline.keep_stream_parameters((0, 0, 0))
-        kept = [transform.parameters for transform in pipeline.active_pipeline]
-        first = self.draws(pipeline)
-        second = self.draws(pipeline)
-        pipeline.keep_stream_parameters((0, 0, 1))
-        other = self.draws(pipeline)
+        kept = [transform.parameters for transform in pipeline.stream_pipeline((0, 0, 0))]
+        first = self.draws(pipeline, (0, 0, 0))
+        second = self.draws(pipeline, (0, 0, 0))
+        other = self.draws(pipeline, (0, 0, 1))
 
         self.assertEqual(first, kept)
         self.assertEqual(second, kept)
@@ -106,8 +106,7 @@ class TestStreamAugmentation(unittest.TestCase):
         frames: dict[int, list[Sequence[Sequence[float]]]] = {0: [], 1: []}
         for _ in range(3):
             for scene in (0, 1):
-                pipeline.keep_stream_parameters((0, 0, scene))
-                frames[scene].append(self.draws(pipeline))
+                frames[scene].append(self.draws(pipeline, (0, 0, scene)))
 
         self.assertEqual(len(transform.sampled), 2)
         self.assertEqual(frames[0], [[transform.sampled[0]] for _ in range(3)])
@@ -123,10 +122,7 @@ class TestStreamAugmentation(unittest.TestCase):
         """
         pipeline, other_worker = TransformsCompose([_Draw(3)]), TransformsCompose([_Draw(3)])
 
-        pipeline.keep_stream_parameters((0, 0, 0))
-        other_worker.keep_stream_parameters((0, 0, 0))
-
-        self.assertEqual(self.draws(other_worker), self.draws(pipeline))
+        self.assertEqual(self.draws(other_worker, (0, 0, 0)), self.draws(pipeline, (0, 0, 0)))
 
     def test_a_dropped_stream_is_drawn_with_the_same_values_again(self) -> None:
         """
@@ -140,32 +136,32 @@ class TestStreamAugmentation(unittest.TestCase):
         pipeline = TransformsCompose([_Draw(3)])
         pipeline.MAX_KEPT_STREAMS = 2
 
-        pipeline.keep_stream_parameters((0, 0, 0))
-        first = self.draws(pipeline)
-        pipeline.keep_stream_parameters((0, 0, 1))
-        pipeline.keep_stream_parameters((0, 0, 2))
+        first = self.draws(pipeline, (0, 0, 0))
+        self.draws(pipeline, (0, 0, 1))
+        self.draws(pipeline, (0, 0, 2))
         kept_streams = len(pipeline._stream_pipelines)
-        pipeline.keep_stream_parameters((0, 0, 0))
 
         self.assertEqual(kept_streams, 2)
-        self.assertEqual(self.draws(pipeline), first)
+        self.assertEqual(self.draws(pipeline, (0, 0, 0)), first)
 
     def test_frames_outside_a_stream_draw_on_their_own(self) -> None:
         """
-        Input: a pipeline of one transform drawing 3 values, two samples before any stream
-        and two samples after the parameters of a stream were cleared.
-        Expected: without kept parameters every sample draws its own augmentation.
-        Check: the two samples record different values, before the stream and after it.
+        Input: a pipeline of one transform drawing 3 values, two samples called without a
+        seed before any stream and two after a frame of a stream was transformed.
+        Expected: a call without a seed draws its own augmentation, whatever stream the
+        pipeline served before it.
+        Check: the two samples record different values, before the stream and after it, and
+        neither sample after the stream records the values of the stream.
         """
         pipeline = TransformsCompose([_Draw(3)])
 
         before = [self.draws(pipeline), self.draws(pipeline)]
-        pipeline.keep_stream_parameters((0, 0, 0))
-        pipeline.clear_stream_parameters()
+        in_stream = self.draws(pipeline, (0, 0, 0))
         after = [self.draws(pipeline), self.draws(pipeline)]
 
         self.assertNotEqual(before[0], before[1])
         self.assertNotEqual(after[0], after[1])
+        self.assertNotIn(in_stream, after)
 
     def test_a_transform_that_keeps_no_parameters_draws_for_every_frame(self) -> None:
         """
@@ -176,10 +172,9 @@ class TestStreamAugmentation(unittest.TestCase):
         different ones.
         """
         pipeline = TransformsCompose([_Draw(1), _Noise()])
-        pipeline.keep_stream_parameters((0, 0, 0))
 
-        first = self.draws(pipeline)
-        second = self.draws(pipeline)
+        first = self.draws(pipeline, (0, 0, 0))
+        second = self.draws(pipeline, (0, 0, 0))
 
         self.assertEqual(first[0], second[0])
         self.assertNotEqual(first[1], second[1])
@@ -196,8 +191,7 @@ class TestStreamAugmentation(unittest.TestCase):
 
         outcomes = set()
         for scene in range(40):
-            pipeline.keep_stream_parameters((0, 0, scene))
-            applied = {len(self.draws(pipeline)) for _ in range(5)}
+            applied = {len(self.draws(pipeline, (0, 0, scene))) for _ in range(5)}
             self.assertEqual(len(applied), 1)
             outcomes.update(applied)
 
@@ -215,7 +209,7 @@ class TestStreamAugmentation(unittest.TestCase):
         expected = np.random.uniform(size=3).tolist()
 
         np.random.seed(11)
-        pipeline.keep_stream_parameters((0, 0, 0))
+        pipeline.stream_pipeline((0, 0, 0))
 
         self.assertEqual(np.random.uniform(size=3).tolist(), expected)
 

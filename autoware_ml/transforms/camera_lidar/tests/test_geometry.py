@@ -21,6 +21,7 @@ the raw intrinsics, or touching the intrinsics) fails. The expected matrices are
 with numpy from the sampled yaw, scale and translation, independently of the transform.
 """
 
+from collections.abc import Sequence
 import math
 import unittest
 
@@ -1257,27 +1258,24 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
             ]
         )
 
-    def augment(self) -> Tensor:
-        """Augmentation matrix the pipeline applies to a fresh sample."""
-        output = self.pipeline(self.build_multi_task_gt_sample())
+    def augment(self, stream_seed: Sequence[int] | None = None) -> Tensor:
+        """Augmentation matrix the pipeline applies to a fresh sample of a stream."""
+        output = self.pipeline(self.build_multi_task_gt_sample(), stream_seed=stream_seed)
         assert output.lidar_transformation_sample is not None
         return output.lidar_transformation_sample.transformation_matrix
 
     def test_frames_of_a_stream_get_the_same_augmentation(self) -> None:
         """
         Input: a pipeline of a global rotation, scale and translation and a BEV flip, two
-        frames after the draw of one stream, one frame after the draw of another, and two
-        frames after the parameters were cleared.
+        frames with the seed of one stream, one frame with the seed of another, and two
+        frames without a seed afterwards.
         Expected: the frames of a stream are moved alike, another stream differently, and a
         frame outside a stream draws for itself.
         Check: two frames of one stream get the same transformation matrix, the frame of the
         other stream another one, and the two frames outside a stream differ.
         """
-        self.pipeline.keep_stream_parameters((0, 0, 0))
-        first, second = self.augment(), self.augment()
-        self.pipeline.keep_stream_parameters((0, 0, 1))
-        other = self.augment()
-        self.pipeline.clear_stream_parameters()
+        first, second = self.augment((0, 0, 0)), self.augment((0, 0, 0))
+        other = self.augment((0, 0, 1))
 
         self.assertTrue(torch.equal(first, second))
         self.assertFalse(torch.equal(first, other))
@@ -1292,9 +1290,8 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
         Check: the transformation matrix of the frame equals the one built here from the
         kept values.
         """
-        self.pipeline.keep_stream_parameters((0, 0, 0))
         rot_scale_trans, flips = (
-            transform.parameters for transform in self.pipeline.active_pipeline
+            transform.parameters for transform in self.pipeline.stream_pipeline((0, 0, 0))
         )
         assert rot_scale_trans is not None and flips is not None
         flip = torch.diag(
@@ -1304,7 +1301,7 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
         expected[:3, :3] = flip @ yaw_rotation_matrix(rot_scale_trans.yaw) * rot_scale_trans.scale
         expected[:3, 3] = flip @ torch.tensor(rot_scale_trans.translation)
 
-        self.assertTrue(torch.allclose(self.augment(), expected, atol=1e-6))
+        self.assertTrue(torch.allclose(self.augment((0, 0, 0)), expected, atol=1e-6))
 
     def test_a_stream_applies_or_skips_a_transform_in_every_frame(self) -> None:
         """
@@ -1320,9 +1317,11 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
 
         outcomes = set()
         for scene in range(20):
-            pipeline.keep_stream_parameters((0, 0, scene))
             rotated = {
-                pipeline(self.build_multi_task_gt_sample()).lidar_transformation_sample is not None
+                pipeline(
+                    self.build_multi_task_gt_sample(), stream_seed=(0, 0, scene)
+                ).lidar_transformation_sample
+                is not None
                 for _ in range(3)
             }
             self.assertEqual(len(rotated), 1)

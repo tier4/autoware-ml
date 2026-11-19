@@ -135,6 +135,24 @@ class TestStreamSlot(unittest.TestCase):
         self.assertNotEqual(first, other)
         self.assertEqual(len(self.dataset.rotate.sampled), 2)
 
+    def test_transforms_applied_outside_a_read_draw_on_their_own_after_a_stream(self) -> None:
+        """
+        Input: a dataset that served a stream slot, then two samples handed straight to
+        apply_transforms without a stream seed, as the preview does.
+        Expected: the stream of a sample is named by the call, so the stream served before
+        leaves nothing behind for a sample without one.
+        Check: the two samples record different values, neither the one of the stream.
+        """
+        in_stream = self.dataset.draw(StreamSlot(0, self.STREAM))
+        sample = self.dataset.get_data_sample(0)
+
+        self.dataset.apply_transforms(sample)
+        self.dataset.apply_transforms(sample)
+
+        on_their_own = self.dataset.rotate.draws[-2:]
+        self.assertNotEqual(on_their_own[0], on_their_own[1])
+        self.assertNotIn(in_stream, on_their_own)
+
     def test_a_dataset_without_a_pipeline_serves_a_stream_slot(self) -> None:
         """
         Input: a dataset without a transform pipeline, read with a stream slot.
