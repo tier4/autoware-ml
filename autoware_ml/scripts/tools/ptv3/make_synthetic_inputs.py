@@ -35,10 +35,7 @@ from autoware_ml.models.segmentation3d.encoders.voxel import (
     TIME_LAG_COLUMN,
     MeanVoxelFeatureEncoder,
 )
-from autoware_ml.models.segmentation3d.ptv3_base import (
-    PTv3BaseModel,
-    serialize_points,
-)
+from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.utils.deploy import validate_cuda_available
 from autoware_ml.utils.runtime import configure_torch_runtime, get_config_path, set_seed
 from autoware_ml.utils.synthetic_inputs import (
@@ -116,7 +113,7 @@ def main(cfg: DictConfig) -> None:
     )
     batch_inputs = model.on_after_batch_transfer(batch.to_device(model.device), dataloader_idx=0)
 
-    tensors = serialize_points(model, batch_inputs, model.device)
+    tensors = model.serialize_points(batch_inputs)
     stages = [
         tensors["grid_coord"],
         *(

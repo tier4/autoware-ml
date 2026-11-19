@@ -58,8 +58,6 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     SEG3D_HEAD_OUTPUT_NAMES,
     PTv3BaseModel,
-    build_ptv3_graphs,
-    build_seg3d_head_graph,
     split_block_parameters,
 )
 
@@ -356,8 +354,8 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         det3d_output_names = [
             name for name in self._export_output_names if name not in SEG3D_HEAD_OUTPUT_NAMES
         ]
-        return build_ptv3_graphs(
-            self,
-            build_seg3d_head_graph(self, self.seg3d_head),
+        return (
+            self.build_encoder_graph(),
+            self.build_seg3d_head_graph(self.seg3d_head),
             build_det3d_head_graph(self, self.bev_neck, self.bbox_head, det3d_output_names),
         )

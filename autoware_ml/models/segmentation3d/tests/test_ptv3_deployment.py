@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 import tempfile
 import unittest
@@ -24,20 +26,22 @@ import onnx
 import torch
 from omegaconf import OmegaConf
 
+from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
+from autoware_ml.deployment.graphs import GraphTensor
+from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_inputs,
     build_seg3d_model,
     build_trans_model,
+    whole_level_patch_sizes,
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
     ENCODER_EXPORT_INPUT_NAMES,
     ENCODER_GRAPH,
-    SEG3D_HEAD_OUTPUT_NAMES,
     SEG3D_HEAD_GRAPH,
-    build_seg3d_head_graph,
+    SEG3D_HEAD_OUTPUT_NAMES,
     encoder_graph_input_names,
-    serialize_points,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.utils.deploy import export_to_onnx
@@ -51,6 +55,11 @@ REQUIRES_SPARSE_CUDA = unittest.skipUnless(
 class TestSeg3dDeployment(unittest.TestCase):
     """The segmentation model's deployment graphs and the export specs derived from them."""
 
+    def setUp(self) -> None:
+        """Build the segmentation model and one batch on the GPU."""
+        self.model = build_seg3d_model().cuda().eval()
+        self.batch = build_inputs(device=torch.device("cuda"))
+
     def test_seg3d_declaration_names_the_runtime_modules_and_is_name_covered(self) -> None:
         """Test that the seg3d declaration names the runtime modules and every input is produced.
 
@@ -60,17 +69,13 @@ class TestSeg3dDeployment(unittest.TestCase):
         Check: the graph names, the encoder's leading input names, the head's output names, and
             the input names against the serialized tensors.
         """
-        model = build_seg3d_model().cuda().eval()
-        graphs = model.deployment_declaration().graphs
+        graphs = self.model.deployment_declaration().graphs
         self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, SEG3D_HEAD_GRAPH])
         encoder, head = graphs
         self.assertEqual(encoder.input_names[:5], ENCODER_EXPORT_INPUT_NAMES)
         self.assertFalse(any(name.endswith("_cluster") for name in encoder.input_names))
         self.assertEqual(head.output_names, ("pred_labels", "pred_probs"))
-        # The serialized points hold every graph input the encoder does not produce.
-        tensors = serialize_points(
-            model, build_inputs(device=torch.device("cuda")), torch.device("cuda")
-        )
+        tensors = self.model.serialize_points(self.batch)
         self.assertLessEqual(set(encoder.input_names), set(tensors))
         self.assertLessEqual(set(head.input_names), set(tensors) | set(encoder.output_names))
 
@@ -83,24 +88,20 @@ class TestSeg3dDeployment(unittest.TestCase):
         Check: the spec names and input names, the dynamic axis of ``voxels``, and the shapes
             of the level features and of the head's labels and probabilities.
         """
-        model = build_seg3d_model().cuda().eval()
-        batch = build_inputs(device=torch.device("cuda"))
-        specs = model.build_export_specs(batch)
-        self.assertEqual(list(specs), ["ptv3_encoder", "ptv3_seg3d_head"])
-        encoder_spec = specs["ptv3_encoder"]
+        specs = self.model.build_export_specs(self.batch)
+        self.assertEqual(list(specs), [ENCODER_GRAPH, SEG3D_HEAD_GRAPH])
+        encoder_spec, head_spec = specs[ENCODER_GRAPH], specs[SEG3D_HEAD_GRAPH]
         self.assertEqual(
-            encoder_spec.input_names, encoder_graph_input_names(len(model.encoder.stride))
+            encoder_spec.input_names,
+            list(encoder_graph_input_names(len(self.model.encoder.stride))),
         )
         self.assertIn("serialized_pooling_0_patch_order", encoder_spec.input_names)
-        self.assertFalse(any("_cluster" in name for name in encoder_spec.input_names))
         self.assertEqual(encoder_spec.dynamic_axes["voxels"], {0: "num_voxels"})
         with torch.no_grad():
             level_feats = encoder_spec.module(*encoder_spec.args)
-            pred_labels, pred_probs = specs["ptv3_seg3d_head"].module(
-                *specs["ptv3_seg3d_head"].args
-            )
-        num_voxels = batch.voxels_data.voxels.shape[0]
-        self.assertEqual(len(level_feats), len(model.encoder.stride) + 1)
+            pred_labels, pred_probs = head_spec.module(*head_spec.args)
+        num_voxels = self.batch.voxels_data.voxels.shape[0]
+        self.assertEqual(len(level_feats), len(self.model.encoder.stride) + 1)
         self.assertEqual(pred_labels.shape, (num_voxels,))
         self.assertEqual(pred_probs.shape[0], num_voxels)
 
@@ -108,47 +109,35 @@ class TestSeg3dDeployment(unittest.TestCase):
         """Test that each derived spec exports an ONNX with the graph's declared names and axes.
 
         Input: the segmentation model's specs, exported with the base config's ONNX settings.
-        Expected: each ONNX carries the graph's input and output names and its dynamic axes.
-        Check: the ONNX input and output names and the ``dim_param`` of every declared axis.
+        Expected: each ONNX carries the graph's input and output names and its dynamic axes,
+            the seg3d head's outputs included.
+        Check: the ONNX input and output names and the ``dim_param`` of every declared axis of
+            the inputs and the outputs.
         """
-        # forward() is no numeric reference: it reshuffles the serialization orders and adapts
-        # the attention windows, which the export copy pins.
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        tmp_path = Path(directory.name)
-        model = build_seg3d_model().cuda().eval()
-        batch = build_inputs(device=torch.device("cuda"))
-        graphs = {graph.name: graph for graph in model.deployment_graphs()}
+        graphs = {graph.name: graph for graph in self.model.deployment_graphs()}
+        self.assertLessEqual(
+            set(SEG3D_HEAD_OUTPUT_NAMES), set(graphs[SEG3D_HEAD_GRAPH].onnx_dynamic_axes)
+        )
         onnx_cfg = OmegaConf.create(
             {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
         )
-        for name, spec in model.build_export_specs(batch).items():
-            path = tmp_path / f"{name}.onnx"
+        for name, spec in self.model.build_export_specs(self.batch).items():
+            path = Path(directory.name) / f"{name}.onnx"
             export_to_onnx(spec, onnx_cfg, path)
-            graph = onnx.load(path).graph
+            onnx_graph = onnx.load(path).graph
+            declared = graphs[name]
             self.assertEqual(
-                [tensor.name for tensor in graph.input], list(graphs[name].input_names)
+                [tensor.name for tensor in onnx_graph.input], list(declared.input_names)
             )
             self.assertEqual(
-                [tensor.name for tensor in graph.output], list(graphs[name].output_names)
+                [tensor.name for tensor in onnx_graph.output], list(declared.output_names)
             )
-            for tensor in graph.input:
-                axes = graphs[name].onnx_dynamic_axes.get(tensor.name, {})
+            for tensor in [*onnx_graph.input, *onnx_graph.output]:
+                axes = declared.onnx_dynamic_axes.get(tensor.name, {})
                 dims = tensor.type.tensor_type.shape.dim
                 self.assertEqual({i: dims[i].dim_param for i in axes}, dict(axes), tensor.name)
-
-    def test_seg3d_head_graph_emits_its_output_names(self) -> None:
-        """Test that the seg3d head graph declares the head's output names and their axes.
-
-        Input: the seg3d head graph of the segmentation model.
-        Expected: the outputs are ``pred_labels`` and ``pred_probs`` with dynamic axes.
-        Check: the graph's output names and the keys of its dynamic axes.
-        """
-        model = build_seg3d_model().cuda().eval()
-        graph = build_seg3d_head_graph(model, model.seg3d_head)
-        self.assertEqual(graph.output_names, SEG3D_HEAD_OUTPUT_NAMES)
-        self.assertEqual(SEG3D_HEAD_OUTPUT_NAMES, ("pred_labels", "pred_probs"))
-        self.assertGreaterEqual(set(graph.onnx_dynamic_axes), set(SEG3D_HEAD_OUTPUT_NAMES))
 
 
 @REQUIRES_SPARSE_CUDA
@@ -166,7 +155,76 @@ class TestDet3dDeployment(unittest.TestCase):
         model = build_trans_model().cuda().eval()
         graphs = model.deployment_declaration().graphs
         self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
-        batch = build_inputs(device=torch.device("cuda"))
-        specs = model.build_export_specs(batch)
-        self.assertEqual(list(specs), ["ptv3_encoder", "ptv3_det3d_head"])
-        self.assertEqual(specs["ptv3_det3d_head"].output_names, list(model.export_output_names))
+        specs = model.build_export_specs(build_inputs(device=torch.device("cuda")))
+        self.assertEqual(list(specs), [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
+        self.assertEqual(specs[DET3D_HEAD_GRAPH].output_names, list(model.export_output_names))
+
+
+@REQUIRES_SPARSE_CUDA
+class TestDeploymentReproducesForward(unittest.TestCase):
+    """The deployed PTv3 models against forward() on one batch."""
+
+    def setUp(self) -> None:
+        """Build one batch and the windows under which forward() attends like the export."""
+        self.device = torch.device("cuda")
+        self.batch = build_inputs(device=self.device)
+        self.patch_sizes = whole_level_patch_sizes(self.batch)
+
+    @staticmethod
+    def _seg3d_tensors(outputs: ModelOutputs) -> dict[str, GraphTensor]:
+        """Return forward()'s labels and probabilities under the seg3d head graph's names.
+
+        Args:
+            outputs: The outputs of ``forward()``.
+
+        Returns:
+            The label and the class probabilities of every voxel.
+        """
+        probs = torch.softmax(outputs.segmentation3d().logits, dim=1)
+        return {"pred_labels": probs.argmax(dim=1), "pred_probs": probs}
+
+    @staticmethod
+    def _det3d_tensors(outputs: ModelOutputs, names: Sequence[str]) -> dict[str, GraphTensor]:
+        """Return forward()'s detection head outputs under the det3d head graph's names.
+
+        Args:
+            outputs: The outputs of ``forward()``.
+            names: The det3d head graph's output names.
+
+        Returns:
+            The head outputs by name.
+        """
+        head_outputs = outputs.detection3d().transfusion_head()
+        return dict(zip(names, head_outputs.export_tensors(names)))
+
+    def test_seg3d_deployment_reproduces_forward(self) -> None:
+        """Test that the segmentation deployment reproduces forward().
+
+        Input: a segmentation model whose window at every level is that level's voxel count,
+            and one batch.
+        Expected: the deployed labels equal forward()'s and the probabilities match to 1e-5.
+        Check: assert_deployment_reproduces_forward().
+        """
+        model = build_seg3d_model(patch_sizes=self.patch_sizes).cuda().eval()
+        assert_deployment_reproduces_forward(
+            model, self.batch, self.device, self._seg3d_tensors, rtol=1e-5, atol=1e-5
+        )
+
+    def test_det3d_deployment_reproduces_forward(self) -> None:
+        """Test that the detection deployment reproduces forward().
+
+        Input: a detection model whose window at every level is that level's voxel count, and
+            one batch.
+        Expected: every head output of the deployment matches forward()'s to 1e-5.
+        Check: assert_deployment_reproduces_forward().
+        """
+        model = build_trans_model(patch_sizes=self.patch_sizes).cuda().eval()
+        names = model.deployment_declaration().graphs[-1].output_names
+        assert_deployment_reproduces_forward(
+            model,
+            self.batch,
+            self.device,
+            partial(self._det3d_tensors, names=names),
+            rtol=1e-5,
+            atol=1e-5,
+        )

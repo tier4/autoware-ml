@@ -24,6 +24,7 @@ from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
@@ -63,8 +64,17 @@ POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
 
 def build_ptv3_encoder(
     in_channels: int = SweepSplitVoxelFeatureEncoder.out_channels,
+    patch_sizes: Sequence[int] = (4, 4),
 ) -> PointTransformerV3Encoder:
-    """Return a small PTv3 encoder suitable for unit tests."""
+    """Return a small PTv3 encoder suitable for unit tests.
+
+    Args:
+        in_channels: Channels of the voxel features the encoder embeds.
+        patch_sizes: Attention window of every level, the input level first.
+
+    Returns:
+        A two-level encoder with one block per level.
+    """
     return PointTransformerV3Encoder(
         in_channels=in_channels,
         order=("z",),
@@ -72,7 +82,7 @@ def build_ptv3_encoder(
         enc_depths=(1, 1),
         enc_channels=(8, 16),
         enc_num_head=(1, 2),
-        enc_patch_size=(4, 4),
+        enc_patch_size=tuple(patch_sizes),
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
@@ -89,9 +99,18 @@ def build_ptv3_encoder(
 
 
 def build_seg3d_head(
-    num_classes: int = 3, dec_depths: Sequence[int] = (1,)
+    num_classes: int = 3, dec_depths: Sequence[int] = (1,), patch_sizes: Sequence[int] = (4, 4)
 ) -> PTv3Seg3DDecoderHead:
-    """Return a small PTv3 segmentation decoder head matching the test encoder."""
+    """Return a small PTv3 segmentation decoder head matching the test encoder.
+
+    Args:
+        num_classes: Number of segmentation classes.
+        dec_depths: Blocks of the one decoder level.
+        patch_sizes: Attention window of every encoder level; the decoder level uses the first.
+
+    Returns:
+        A one-level decoder head over the test encoder's channels.
+    """
     return PTv3Seg3DDecoderHead(
         num_classes=num_classes,
         ignore_index=-1,
@@ -100,7 +119,7 @@ def build_seg3d_head(
         dec_depths=dec_depths,
         dec_channels=(8,),
         dec_num_head=(1,),
-        dec_patch_size=(4,),
+        dec_patch_size=(patch_sizes[0],),
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
@@ -119,14 +138,24 @@ def build_seg3d_head(
 def build_seg3d_model(
     point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
     voxel_encoder_type: type[VoxelFeatureEncoder] = SweepSplitVoxelFeatureEncoder,
+    patch_sizes: Sequence[int] = (4, 4),
 ) -> PTv3Segmentation3DModel:
-    """Return a small PTv3 segmentation model for tests."""
+    """Return a small PTv3 segmentation model for tests.
+
+    Args:
+        point_cloud_range: Range the export geometry is derived from.
+        voxel_encoder_type: Voxel feature encoder feeding the embedding stem.
+        patch_sizes: Attention window of every level, the input level first.
+
+    Returns:
+        The segmentation model on the CPU.
+    """
     return PTv3Segmentation3DModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-        encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
+        encoder=build_ptv3_encoder(voxel_encoder_type.out_channels, patch_sizes),
         voxel_encoder=voxel_encoder_type(),
-        seg3d_head=build_seg3d_head(),
+        seg3d_head=build_seg3d_head(patch_sizes=patch_sizes),
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
         grid_size=1.0,
         point_cloud_range=list(point_cloud_range),
@@ -219,12 +248,23 @@ def build_trans_model(
     freeze_encoder: bool = False,
     point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
     voxel_encoder_type: type[VoxelFeatureEncoder] = SweepSplitVoxelFeatureEncoder,
+    patch_sizes: Sequence[int] = (4, 4),
 ) -> PTv3Detection3DModel:
-    """Return a PTv3 + TransFusionHead detection model for tests."""
+    """Return a PTv3 + TransFusionHead detection model for tests.
+
+    Args:
+        freeze_encoder: Whether the encoder is frozen during training.
+        point_cloud_range: Range of the BEV canvas and of the export geometry.
+        voxel_encoder_type: Voxel feature encoder feeding the embedding stem.
+        patch_sizes: Attention window of every level, the input level first.
+
+    Returns:
+        The detection model on the CPU.
+    """
     return PTv3Detection3DModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-        encoder=build_ptv3_encoder(voxel_encoder_type.out_channels),
+        encoder=build_ptv3_encoder(voxel_encoder_type.out_channels, patch_sizes),
         voxel_encoder=voxel_encoder_type(),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(point_cloud_range),
@@ -338,6 +378,27 @@ def build_inputs(
         batch = batch.to_device(device)
     preprocessor = DataPreprocessor(preprocessor_modules=[build_preprocessor()])
     return preprocessor(batch, is_training=is_training)
+
+
+def whole_level_patch_sizes(multi_task_batch_inputs: ModelBatchInputs) -> tuple[int, ...]:
+    """Return every level's voxel count of a single-sample batch, the input level first.
+
+    Under these windows ``forward()``, whose window is a level's whole sample, attends like the
+    export, whose window is the configured patch size.
+
+    Args:
+        multi_task_batch_inputs: The preprocessed single-sample batch.
+
+    Returns:
+        One voxel count per encoder level.
+    """
+    model = build_seg3d_model().to(multi_task_batch_inputs.voxels_data.voxels.device)
+    tensors = model.serialize_points(multi_task_batch_inputs)
+    pooled = (
+        tensors[f"serialized_pooling_{stage}_grid_coord"]
+        for stage in range(len(model.encoder.stride))
+    )
+    return tuple(len(coords) for coords in (tensors["grid_coord"], *pooled))
 
 
 def build_targets() -> tuple[list[torch.Tensor], list[torch.Tensor]]:

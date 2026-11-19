@@ -477,7 +477,6 @@ class GetIndicePairsImplicitGemm(Function):
             is_train: Whether execution happens in training mode.
             alloc: Optional thrust sort allocator.
             timer: CUDA kernel timer.
-            do_sort: Whether to argsort the pair masks (the encoder's ``export_do_sort``).
 
         Returns:
             Tuple of exported implicit-GEMM indice tensors.

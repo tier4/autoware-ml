@@ -42,8 +42,6 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
-    build_ptv3_graphs,
-    build_seg3d_head_graph,
     split_block_parameters,
 )
 from autoware_ml.metrics.eval_output import EvalOutput
@@ -159,5 +157,9 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
         )
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
-        """Declare ``ptv3_encoder`` and ``ptv3_seg3d_head``, the runtime's split."""
-        return build_ptv3_graphs(self, build_seg3d_head_graph(self, self.seg3d_head))
+        """Declare ``ptv3_encoder`` and ``ptv3_seg3d_head``, the runtime's split.
+
+        Returns:
+            The encoder graph, then the segmentation head graph.
+        """
+        return (self.build_encoder_graph(), self.build_seg3d_head_graph(self.seg3d_head))
