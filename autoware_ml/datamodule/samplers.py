@@ -356,7 +356,7 @@ class GroupStreamingSampler(DistributedSampler):
         *,
         shuffle: bool,
         seed: int,
-        consistent_augmentation: bool = False,
+        consistent_augmentation: bool,
     ) -> None:
         """Initialize the streaming sampler.
 
@@ -431,8 +431,11 @@ class GroupStreamingSampler(DistributedSampler):
         stream_seed = (self.seed, epoch, scene_index)
         return [StreamSlot(index, stream_seed) for index in frames]
 
-    def _cut_lanes(self, scene_order: Sequence[int], epoch: int = 0) -> Sequence[Sequence[int]]:
-        """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length."""
+    def _cut_lanes(self, scene_order: Sequence[int], epoch: int) -> Sequence[Sequence[int]]:
+        """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length.
+
+        The epoch is part of the stream seed of every frame, so it is always given.
+        """
         frames = [
             index for scene_index in scene_order for index in self._scene_frames(scene_index, epoch)
         ]
