@@ -26,15 +26,18 @@ import onnx
 import torch
 from omegaconf import OmegaConf
 
+from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.deployment.graphs import GraphTensor
 from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
+    CLASS_NAMES,
     build_inputs,
     build_seg3d_model,
     build_trans_model,
     whole_level_patch_sizes,
 )
+from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
     ENCODER_EXPORT_INPUT_NAMES,
@@ -49,6 +52,42 @@ from autoware_ml.utils.deploy import export_to_onnx
 REQUIRES_SPARSE_CUDA = unittest.skipUnless(
     IS_SPCONV_AVAILABLE and torch.cuda.is_available(), "PTv3 export needs spconv and CUDA"
 )
+
+
+def assert_specs_export_onnx_with_the_declared_io(
+    model: ModuleBaseModel, multi_task_batch_inputs: ModelBatchInputs
+) -> None:
+    """Export every spec derived from a model's graphs to ONNX and check it against its graph.
+
+    Args:
+        model: Model in eval mode declaring its deployment graphs.
+        multi_task_batch_inputs: One batch, on the model's device, to trace on.
+
+    Raises:
+        AssertionError: When an ONNX's input or output names are not its graph's, or a declared
+            dynamic axis is not the ``dim_param`` of the ONNX tensor.
+    """
+    case = unittest.TestCase()
+    graphs = {graph.name: graph for graph in model.deployment_graphs()}
+    onnx_cfg = OmegaConf.create(
+        {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        for name, spec in model.build_export_specs(multi_task_batch_inputs).items():
+            path = Path(directory) / f"{name}.onnx"
+            export_to_onnx(spec, onnx_cfg, path)
+            onnx_graph = onnx.load(path).graph
+            declared = graphs[name]
+            case.assertEqual(
+                [tensor.name for tensor in onnx_graph.input], list(declared.input_names), name
+            )
+            case.assertEqual(
+                [tensor.name for tensor in onnx_graph.output], list(declared.output_names), name
+            )
+            for tensor in [*onnx_graph.input, *onnx_graph.output]:
+                axes = declared.onnx_dynamic_axes.get(tensor.name, {})
+                dims = tensor.type.tensor_type.shape.dim
+                case.assertEqual({i: dims[i].dim_param for i in axes}, dict(axes), tensor.name)
 
 
 class TestDeclarationKeepsTheModelMode(unittest.TestCase):
@@ -128,53 +167,55 @@ class TestSeg3dDeployment(unittest.TestCase):
         Input: the segmentation model's specs, exported with the base config's ONNX settings.
         Expected: each ONNX carries the graph's input and output names and its dynamic axes,
             the seg3d head's outputs included.
-        Check: the ONNX input and output names and the ``dim_param`` of every declared axis of
-            the inputs and the outputs.
+        Check: the seg3d head's outputs among its declared axes, then
+            assert_specs_export_onnx_with_the_declared_io().
         """
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
         graphs = {graph.name: graph for graph in self.model.deployment_graphs()}
         self.assertLessEqual(
             set(SEG3D_HEAD_OUTPUT_NAMES), set(graphs[SEG3D_HEAD_GRAPH].onnx_dynamic_axes)
         )
-        onnx_cfg = OmegaConf.create(
-            {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
-        )
-        for name, spec in self.model.build_export_specs(self.batch).items():
-            path = Path(directory.name) / f"{name}.onnx"
-            export_to_onnx(spec, onnx_cfg, path)
-            onnx_graph = onnx.load(path).graph
-            declared = graphs[name]
-            self.assertEqual(
-                [tensor.name for tensor in onnx_graph.input], list(declared.input_names)
-            )
-            self.assertEqual(
-                [tensor.name for tensor in onnx_graph.output], list(declared.output_names)
-            )
-            for tensor in [*onnx_graph.input, *onnx_graph.output]:
-                axes = declared.onnx_dynamic_axes.get(tensor.name, {})
-                dims = tensor.type.tensor_type.shape.dim
-                self.assertEqual({i: dims[i].dim_param for i in axes}, dict(axes), tensor.name)
+        assert_specs_export_onnx_with_the_declared_io(self.model, self.batch)
 
 
 @REQUIRES_SPARSE_CUDA
 class TestDet3dDeployment(unittest.TestCase):
     """The detection model's deployment graphs and their specs."""
 
+    def setUp(self) -> None:
+        """Build the detection model and one batch on the GPU."""
+        self.model = build_trans_model().cuda().eval()
+        self.batch = build_inputs(device=torch.device("cuda"))
+
     def test_det3d_declaration_and_specs(self) -> None:
         """Test that the detection model declares the encoder and the det3d head graphs.
 
         Input: the detection model's deployment declaration and its export specs.
-        Expected: the graphs and the specs are the encoder and the det3d head, and the head
-            spec emits the configured export output names.
-        Check: the graph names, the spec names and the head spec's output names.
+        Expected: the graphs and the specs are the encoder and the det3d head; the head spec
+            emits the configured export output names, one tensor each, the labels as int64 and
+            the dense heatmap as one map per class.
+        Check: the graph names, the spec names, the head spec's output names, and the count,
+            the ``query_labels`` dtype and the ``dense_heatmap`` leading dims of a run.
         """
-        model = build_trans_model().cuda().eval()
-        graphs = model.deployment_declaration().graphs
+        graphs = self.model.deployment_declaration().graphs
         self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
-        specs = model.build_export_specs(build_inputs(device=torch.device("cuda")))
+        specs = self.model.build_export_specs(self.batch)
         self.assertEqual(list(specs), [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
-        self.assertEqual(specs[DET3D_HEAD_GRAPH].output_names, list(model.export_output_names))
+        head_spec = specs[DET3D_HEAD_GRAPH]
+        self.assertEqual(head_spec.output_names, list(self.model.export_output_names))
+        with torch.no_grad():
+            outputs = dict(zip(head_spec.output_names, head_spec.module(*head_spec.args)))
+        self.assertEqual(len(outputs), len(head_spec.output_names))
+        self.assertEqual(outputs["query_labels"].dtype, torch.int64)
+        self.assertEqual(outputs["dense_heatmap"].shape[:2], (1, len(CLASS_NAMES)))
+
+    def test_det3d_specs_export_onnx_with_the_declared_io_contract(self) -> None:
+        """Test that the encoder and the det3d head specs export ONNX with their graphs' names.
+
+        Input: the detection model's specs, exported with the base config's ONNX settings.
+        Expected: each ONNX carries the graph's input and output names and its dynamic axes.
+        Check: assert_specs_export_onnx_with_the_declared_io().
+        """
+        assert_specs_export_onnx_with_the_declared_io(self.model, self.batch)
 
 
 @REQUIRES_SPARSE_CUDA
