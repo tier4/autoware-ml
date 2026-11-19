@@ -33,10 +33,6 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-#
-# Changes in this port: renamed arguments and variables, a new error message, and boolean masks
-# and broadcasting in place of np.where and reshape; the computation is unchanged. The parquet
-# and static map readers are not derived from av2: they only read the same file formats.
 
 """Readers of the Argoverse 2 Motion Forecasting files, without the ``av2`` devkit.
 
