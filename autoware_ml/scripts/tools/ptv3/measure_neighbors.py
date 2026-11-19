@@ -36,10 +36,7 @@ from autoware_ml.builders.model_builder import build_data_preprocessor, build_mo
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.datamodule.base_dataset import ConcatDataset
 from autoware_ml.datamodule.data_module import DataModule
-from autoware_ml.models.segmentation3d.ptv3_base import (
-    PTv3BaseModel,
-    serialize_points,
-)
+from autoware_ml.models.segmentation3d.ptv3_base import PTv3BaseModel
 from autoware_ml.types.dataset import SplitType
 from autoware_ml.utils.deploy import validate_cuda_available
 from autoware_ml.utils.runtime import configure_torch_runtime, get_config_path, set_seed
@@ -50,17 +47,21 @@ _CONFIG_PATH = get_config_path()
 
 
 def measure_frame_neighbors(model: PTv3BaseModel, batch: ModelGTBatch) -> list[float]:
-    """Return the mean neighbors of every stage of one frame, voxelized and pooled as exported."""
+    """Return the mean neighbors of every stage of one frame, voxelized and pooled as exported.
+
+    Args:
+        model: The PTv3 model whose voxelizer and pooling the frame goes through.
+        batch: One collated frame.
+
+    Returns:
+        The mean neighbors of every stage, the input level first.
+
+    Raises:
+        ValueError: If the model inputs carry no voxels.
+        RuntimeError: If the voxelizer dropped occupied voxels.
+    """
     batch_inputs = model.on_after_batch_transfer(batch.to_device(model.device), dataloader_idx=0)
-    if batch_inputs.voxels_data is None:
-        raise ValueError("PTv3 needs the voxels of a voxelizer in the model inputs.")
-    num_dropped_voxels = int(batch_inputs.voxels_data.num_dropped_voxels)
-    if num_dropped_voxels > 0:
-        raise RuntimeError(
-            f"The voxelizer dropped {num_dropped_voxels} occupied voxels of a train frame. "
-            "Increase 'max_voxels' of the data preprocessing so every voxel is kept."
-        )
-    tensors = serialize_points(model, batch_inputs, model.device)
+    tensors = model.serialize_points(batch_inputs)
     stages = [
         tensors["grid_coord"],
         *(

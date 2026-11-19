@@ -16,19 +16,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 
-from autoware_ml.deployment.graphs import DeploymentGraph, run_deployment_in_torch
-
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.deployment.graphs import GraphTensor, run_deployment_in_torch
+from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
@@ -46,6 +47,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_seg3d_model,
     build_trans_model,
     build_transfusion_head,
+    whole_level_patch_sizes,
 )
 from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
@@ -265,13 +267,21 @@ def _save_detection3d_checkpoint(
     return checkpoint_path
 
 
-def _build_det3d_seg3d_model() -> PTv3Det3DSeg3DModel:
+def _build_det3d_seg3d_model(patch_sizes: Sequence[int] = (4, 4)) -> PTv3Det3DSeg3DModel:
+    """Return a small joint PTv3 model over the test encoder.
+
+    Args:
+        patch_sizes: Attention window of every level, the input level first.
+
+    Returns:
+        The joint model on the CPU.
+    """
     return PTv3Det3DSeg3DModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-        encoder=build_ptv3_encoder(),
+        encoder=build_ptv3_encoder(patch_sizes=patch_sizes),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        seg3d_head=build_seg3d_head(),
+        seg3d_head=build_seg3d_head(patch_sizes=patch_sizes),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(),
         export_output_names=JOINT_EXPORT_OUTPUT_NAMES,
@@ -317,10 +327,7 @@ def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_enco
     graphs = model.deployment_declaration().graphs
     assert [graph.name for graph in graphs] == [ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH]
     seg_graph, det_graph = graphs[1], graphs[2]
-    assert isinstance(seg_graph, DeploymentGraph) and seg_graph.output_names == (
-        "pred_labels",
-        "pred_probs",
-    )
+    assert seg_graph.output_names == ("pred_labels", "pred_probs")
     assert det_graph.output_names == tuple(JOINT_EXPORT_OUTPUT_NAMES[2:])
     assert not set(det_graph.input_names) & set(seg_graph.output_names)
 
@@ -338,6 +345,42 @@ def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_enco
     specs = model.build_export_specs(batch)
     assert list(specs) == [ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH]
     assert specs[DET3D_HEAD_GRAPH].output_names == JOINT_EXPORT_OUTPUT_NAMES[2:]
+
+
+def _joint_tensors(outputs: ModelOutputs) -> dict[str, GraphTensor]:
+    """Return forward()'s segmentation and detection outputs under the joint graphs' names.
+
+    Args:
+        outputs: The outputs of ``forward()``.
+
+    Returns:
+        The seg3d head graph's outputs, then the det3d head graph's, by name.
+    """
+    probs = torch.softmax(outputs.segmentation3d().logits, dim=1)
+    det3d_names = JOINT_EXPORT_OUTPUT_NAMES[2:]
+    head_outputs = outputs.detection3d().transfusion_head()
+    tensors = {"pred_labels": probs.argmax(dim=1), "pred_probs": probs}
+    tensors.update(zip(det3d_names, head_outputs.export_tensors(det3d_names)))
+    return tensors
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_ptv3_det3d_seg3d_deployment_reproduces_forward() -> None:
+    """Test that the joint deployment reproduces forward() for both heads.
+
+    Input: a joint model whose window at every level is that level's voxel count, and one
+        batch.
+    Expected: every segmentation and detection output of the deployment matches forward()'s
+        to 1e-5.
+    Check: assert_deployment_reproduces_forward().
+    """
+    cuda = torch.device("cuda")
+    batch = build_inputs(device=cuda)
+    model = _build_det3d_seg3d_model(whole_level_patch_sizes(batch)).cuda().eval()
+    assert_deployment_reproduces_forward(model, batch, cuda, _joint_tensors, rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.skipif(

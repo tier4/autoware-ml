@@ -46,7 +46,6 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
     PTv3BaseModel,
-    build_ptv3_graphs,
     stage_voxel_axis_name,
 )
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
@@ -381,7 +380,14 @@ def build_det3d_head_graph(
 ) -> DeploymentGraph:
     """Build the ``ptv3_det3d_head`` graph over the two coarsest encoder stages.
 
-    It has no plugin ops, so every backend runs the artifact.
+    Args:
+        model: The PTv3 model whose encoder the head reads.
+        bev_neck: Detection BEV neck; the graph traces a copy.
+        bbox_head: Detection head; the graph traces its export copy.
+        output_names: The head outputs the graph returns, in order.
+
+    Returns:
+        The graph from the two coarsest stages' features to the head outputs.
     """
     stage_count = len(model.encoder.stride) + 1
     output_names = tuple(output_names)
@@ -393,7 +399,6 @@ def build_det3d_head_graph(
             output_names=output_names,
         ).eval(),
         input_names=tuple(det3d_head_export_input_names(stage_count)),
-        # Named after the TransFusionHeadOutputs tensors.
         output_names=output_names,
         onnx_dynamic_axes=det3d_head_export_dynamic_axes(stage_count),
     )
@@ -527,8 +532,12 @@ class PTv3Detection3DModel(PTv3BaseModel):
         return self.bbox_head.decode_outputs(outputs=outputs.detection3d())
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
-        """Declare ``ptv3_encoder`` and ``ptv3_det3d_head``; the deployed forward serializes first."""
-        return build_ptv3_graphs(
-            self,
+        """Declare ``ptv3_encoder`` and ``ptv3_det3d_head``; the deployed forward serializes first.
+
+        Returns:
+            The encoder graph, then the detection head graph.
+        """
+        return (
+            self.build_encoder_graph(),
             build_det3d_head_graph(self, self.bev_neck, self.bbox_head, self.export_output_names),
         )
