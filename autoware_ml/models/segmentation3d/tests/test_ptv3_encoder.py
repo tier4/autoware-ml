@@ -54,6 +54,7 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     SerializedPooling,
     build_patch_order,
     build_serialized_pooling_meta,
+    fold_pool_bn,
 )
 from autoware_ml.models.segmentation3d.encoders.voxel import (
     MeanVoxelFeatureEncoder,
@@ -1482,3 +1483,36 @@ def test_export_folds_the_layer_norm_affine_into_the_linear_layers(monkeypatch) 
             layer_norm = next(norm.children())
             assert torch.equal(layer_norm.weight, torch.ones_like(layer_norm.weight))
             assert torch.equal(layer_norm.bias, torch.zeros_like(layer_norm.bias))
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_export_folds_the_pooling_batch_norm_into_the_projection(monkeypatch) -> None:
+    """
+    Input: a small PTv3 segmentation model with every bias and normalization set to a
+    non-trivial value, exported with and without the pooling batch norm fold.
+    Expected: the fold changes no export output and no model parameter, and it removes the
+    batch norm of every pooling in the encoder.
+    Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
+    the model's state_dict is unchanged, and no encoder pooling holds a batch norm.
+    """
+    folded = _assert_export_fold_keeps_the_outputs(monkeypatch, "fold_pool_bn")
+    poolings = [
+        module
+        for module in folded["ptv3_encoder"].module.modules()
+        if isinstance(module, SerializedPooling)
+    ]
+    assert poolings
+    for pooling in poolings:
+        assert not any(isinstance(module, nn.BatchNorm1d) for module in pooling.modules())
+
+
+def test_fold_pool_bn_rejects_a_scale_that_is_not_positive() -> None:
+    pooling = SerializedPooling(6, 8, stride=2, shuffle_orders=False, export_stage_index=0).eval()
+    norm = next(pooling.norm.children())
+    with torch.no_grad():
+        norm.weight[3] = -0.5
+    with pytest.raises(ValueError, match="positive scales"):
+        fold_pool_bn(pooling)

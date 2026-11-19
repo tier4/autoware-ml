@@ -1258,6 +1258,38 @@ def fold_ln_affine(module: nn.Module) -> None:
                 layer_norm.bias = unit_affines[key][1]
 
 
+@torch.no_grad()
+def fold_pool_bn(module: nn.Module) -> None:
+    """Fold the batch norm of every pooling into its projection.
+
+    The evaluation-mode batch norm is ``s * y + t`` per channel. With every ``s > 0`` it is
+    increasing, so it commutes with the segment max in between and folds into the projection
+    as ``Linear(s W, s b + t)``. Meant for an export copy, the parameters change in place.
+
+    Args:
+        module: Module hierarchy whose :class:`SerializedPooling` children are folded in place.
+
+    Raises:
+        ValueError: If a batch norm has a scale that is not positive.
+    """
+    for pooling in module.modules():
+        if not isinstance(pooling, SerializedPooling):
+            continue
+        norm = next(pooling.norm.children())
+        if not isinstance(norm, nn.BatchNorm1d):
+            continue
+        scale = norm.weight.double() / torch.sqrt(norm.running_var.double() + norm.eps)
+        shift = norm.bias.double() - norm.running_mean.double() * scale
+        if not bool((scale > 0).all()):
+            raise ValueError(
+                "Folding a pooling batch norm through the segment max needs positive scales."
+            )
+        proj = pooling.proj
+        proj.weight.copy_((proj.weight.double() * scale[:, None]).to(proj.weight.dtype))
+        proj.bias.copy_((proj.bias.double() * scale + shift).to(proj.bias.dtype))
+        pooling.norm = PointSequential(nn.Identity())
+
+
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:
     """Deep-copy a module while detaching loaded flash-attention handles.
 
@@ -1443,6 +1475,7 @@ class PointTransformerV3Encoder(PointModule):
         export_encoder.shuffle_orders = False
         prepare_point_module_for_export(export_encoder)
         fold_ln_affine(export_encoder)
+        fold_pool_bn(export_encoder)
         return export_encoder
 
     def export_forward(self, data_dict: dict[str, torch.Tensor]) -> Point:
