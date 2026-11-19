@@ -49,6 +49,7 @@ from autoware_ml.utils.runtime import (
     resolve_work_dir,
     set_seed,
 )
+from autoware_ml.resume.checkpoint_locator import RunPointer
 
 logger = logging.getLogger(__name__)
 _CONFIG_PATH = get_config_path()
@@ -121,6 +122,12 @@ def main(cfg: DictConfig):
         config_name=config_name,
         logger_enabled=logger_enabled,
     )
+
+    run_pointer = RunPointer.from_env()
+    if run_context is not None and run_pointer is not None:
+        # A relaunch of a preempted job finds its own run through this pointer, see
+        # `autoware-ml train --resume-latest`.
+        run_pointer.write(run_context.checkpoints_dir)
 
     configure_torch_runtime()
     set_seed(cfg)
