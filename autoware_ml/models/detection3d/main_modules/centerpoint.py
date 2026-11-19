@@ -75,8 +75,7 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         Args:
             backbone: BEV backbone.
             neck: BEV neck.
-            bbox_head: Export-ready CenterPoint dense head
-                (:meth:`~autoware_ml.models.detection3d.heads.centerhead.CenterHead.prepare_for_export`).
+            bbox_head: Export-ready CenterPoint dense head, from ``prepare_for_export()``.
         """
         super().__init__()
         self.backbone = backbone
@@ -243,13 +242,19 @@ class CenterPointDetection3DModel(ModuleBaseModel):
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
         """Declare the two graphs the Autoware runtime loads, named like its artifacts.
 
-        :meth:`deployment_forward` runs them with the glue between them.
+        Returns:
+            The voxel encoder graph and the backbone-neck-head graph, in run order.
         """
-        # The graphs trace the live backbone and neck; the head is traced on its export-ready
-        # copy, so the graphs are declared again after a module is replaced (see
-        # ModuleBaseModel.deployment_graphs()).
         head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
             self.pts_backbone, self.pts_neck, self.bbox_head.prepare_for_export()
+        )
+        head_axes = {"spatial_features": {0: "batch_size", 2: "H", 3: "W"}}
+        # The head maps are the canvas down-sampled by out_size_factor, so not H x W.
+        head_axes.update(
+            {
+                name: {0: "batch_size", 2: "out_height", 3: "out_width"}
+                for name in head_wrapper.output_names
+            }
         )
         return (
             DeploymentGraph(
@@ -266,17 +271,8 @@ class CenterPointDetection3DModel(ModuleBaseModel):
                 "pts_backbone_neck_head_centerpoint",
                 module=head_wrapper,
                 input_names=("spatial_features",),
-                # Named after the CenterHeadOutputs fields.
                 output_names=tuple(head_wrapper.output_names),
-                # One axis name is one size: the head maps are the canvas down-sampled by
-                # out_size_factor, so they do not share the canvas's H and W.
-                onnx_dynamic_axes={
-                    "spatial_features": {0: "batch_size", 2: "H", 3: "W"},
-                    **{
-                        name: {0: "batch_size", 2: "out_height", 3: "out_width"}
-                        for name in head_wrapper.output_names
-                    },
-                },
+                onnx_dynamic_axes=head_axes,
             ),
         )
 
@@ -286,8 +282,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         executors: Mapping[str, GraphExecutor],
         device: torch.device,
     ) -> Mapping[str, Float32[torch.Tensor, "batch_size channels height width"]]:
-        """Run the split the Autoware runtime runs: decorate, the voxel encoder graph, scatter,
-        the backbone-neck-head graph. Decoration and scatter have no learned parameters.
+        """Decorate, run the voxel encoder graph, scatter, run the backbone-neck-head graph.
 
         Args:
             multi_task_batch_inputs: The preprocessed batch, holding the voxels.
@@ -309,8 +304,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         pillar_features = executors["pts_voxel_encoder_centerpoint"].run(
             input_features=input_features
         )["pillar_features"]
-        # Sized by the batch, as in forward(): the voxel batch indices miss a sample
-        # without voxels.
+        # Sized by the batch: the voxel batch indices miss a sample without voxels.
         spatial_features = self.pts_middle_encoder(
             pillar_features=pillar_features.to(device).squeeze(1),
             coords=voxels.coords.to(device),

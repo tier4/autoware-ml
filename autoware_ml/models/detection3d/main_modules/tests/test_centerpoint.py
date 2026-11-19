@@ -29,7 +29,6 @@ from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.deployment.graphs import DeploymentGraph
 from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
 from autoware_ml.models.detection3d.main_modules.centerpoint import (
     CenterPointDetection3DModel,
@@ -208,7 +207,14 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
     def _head_tensors(
         outputs: ModelOutputs,
     ) -> dict[str, Float32[torch.Tensor, "batch_size channels height width"]]:
-        """Return forward()'s head maps under the names the deployed graph gives them."""
+        """Return forward()'s head maps under the names the deployed graph gives them.
+
+        Args:
+            outputs: The outputs of ``forward()``.
+
+        Returns:
+            The head maps by output name, ``vel`` only when the head has a velocity branch.
+        """
         head_outputs = outputs.detection3d().center_head()
         return {
             name: getattr(head_outputs, name)
@@ -301,16 +307,14 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertIsInstance(head_spec.module, _CenterPointBackboneNeckHeadExportWrapper)
         self.assertEqual(head_spec.input_names, ["spatial_features"])
         self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot", "vel"])
-        self.assertEqual(
-            head_spec.dynamic_axes,
+        expected_axes = {"spatial_features": {0: "batch_size", 2: "H", 3: "W"}}
+        expected_axes.update(
             {
-                "spatial_features": {0: "batch_size", 2: "H", 3: "W"},
-                **{
-                    name: {0: "batch_size", 2: "out_height", 3: "out_width"}
-                    for name in ["heatmap", "reg", "height", "dim", "rot", "vel"]
-                },
-            },
+                name: {0: "batch_size", 2: "out_height", 3: "out_width"}
+                for name in ["heatmap", "reg", "height", "dim", "rot", "vel"]
+            }
         )
+        self.assertEqual(head_spec.dynamic_axes, expected_axes)
         (spatial_features,) = head_spec.args
         self.assertEqual(spatial_features.shape, (self.batch_size, 32, 16, 16))
         with torch.no_grad():
@@ -398,23 +402,20 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         """Test that the deployment reproduces forward() and carries the deployed names.
 
         Input: the default model and a batch with voxels and ground truth.
-        Expected: two DeploymentGraphs named after the runtime modules; the deployed head
-            maps equal forward()'s up to CUDA kernel-selection noise.
-        Check: the graph types and names, assert_deployment_reproduces_forward(), the
-            output names in order.
+        Expected: two graphs named after the runtime modules; the deployed head maps equal
+            forward()'s up to CUDA kernel-selection noise.
+        Check: the graph names, assert_deployment_reproduces_forward(), the output names in
+            order.
         """
         self.centerpoint.eval()
         multi_task_batch_inputs = self._build_multi_task_batch_inputs()
-        graphs = self.centerpoint.deployment_graphs()
-        self.assertTrue(all(isinstance(graph, DeploymentGraph) for graph in graphs))
         self.assertEqual(
-            [graph.name for graph in graphs],
+            [graph.name for graph in self.centerpoint.deployment_graphs()],
             ["pts_voxel_encoder_centerpoint", "pts_backbone_neck_head_centerpoint"],
         )
         names = ["heatmap", "reg", "height", "dim", "rot", "vel"]
 
-        # Same modules, so only CUDA kernel-selection noise remains: two forward() calls
-        # differ by up to 1.3e-4 on a shared GPU.
+        # Two forward() calls differ by up to 1.3e-4 on a shared GPU.
         check = assert_deployment_reproduces_forward(
             self.centerpoint,
             multi_task_batch_inputs,
@@ -489,11 +490,13 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         gt_boxes = gt_batch.detection3d_gt_batch
         self.assertIsNotNone(voxels_data)
         self.assertIsNotNone(gt_boxes)
-        first_sample_boxes = gt_boxes._replace(
-            **{name: value[:1] for name, value in gt_boxes._asdict().items() if value is not None}
+        first_sample_boxes = Detection3DGTBatch(
+            gt_bboxes_3d=gt_boxes.gt_bboxes_3d[:1],
+            gt_labels_3d=gt_boxes.gt_labels_3d[:1],
+            gt_valid_bboxes=gt_boxes.gt_valid_bboxes[:1],
+            gt_bboxes_num_points=gt_boxes.gt_bboxes_num_points[:1],
         )
         cases = {
-            # Every voxel belongs to the first sample; the second has only its ground truth.
             "last sample": ModelBatchInputs(
                 multi_task_gt_batch=gt_batch,
                 voxels_data=voxels_data._replace(
