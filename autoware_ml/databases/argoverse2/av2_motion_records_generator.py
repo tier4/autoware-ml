@@ -25,6 +25,7 @@ from collections.abc import Sequence
 import logging
 from pathlib import Path
 
+from autoware_ml.databases.argoverse2.av2_motion_reader import AV2MotionReader
 from autoware_ml.databases.scenarios import ScenarioData
 from autoware_ml.databases.schemas.dataset_schemas import DatasetRecord
 from autoware_ml.databases.schemas.motion import MotionDataModel
@@ -84,12 +85,6 @@ class AV2MotionRecordsGenerator:
           ValueError: If a file of the scenario is missing, the file names another scenario, or
             its window is shorter than the observed steps.
         """
-
-        # The reader is the only module importing the av2 devkit, so it is imported here and
-        # a database can be constructed and hashed without it
-        from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: PLC0415
-            AV2MotionReader,
-        )
 
         scenario_id = self.scenario_data.scenario_id
         for path in (self.tracks_path, self.map_path):

@@ -16,25 +16,21 @@
 
 from __future__ import annotations
 
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 
-if importlib.util.find_spec("av2") is None:
-    raise unittest.SkipTest("the av2 devkit is not installed")
-
-from autoware_ml.databases.argoverse2.av2_motion_records_generator import (  # noqa: E402
+from autoware_ml.databases.argoverse2.av2_motion_records_generator import (
     OBSERVED_STEPS,
     AV2MotionRecordsGenerator,
 )
-from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
+from autoware_ml.databases.argoverse2.tests.av2_fixtures import (
     CITY,
     FOCAL_TRACK_ID,
     write_scenario,
 )
-from autoware_ml.databases.scenarios import DatasetParams, ScenarioData  # noqa: E402
-from autoware_ml.types.dataset import DatasetFormat  # noqa: E402
+from autoware_ml.databases.scenarios import DatasetParams, ScenarioData
+from autoware_ml.types.dataset import DatasetFormat
 
 
 def _scenario_data(scenario_id: str, split: str = "train") -> ScenarioData:

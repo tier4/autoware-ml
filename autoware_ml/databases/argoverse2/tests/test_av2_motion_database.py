@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,9 +31,6 @@ from autoware_ml.types.dataset import SplitType
 
 _TRAIN_IDS = [f"{index:04d}" for index in range(6)]
 _VAL_IDS = ["v000", "v001"]
-
-# The hash tests work on empty scenario directories; only the records test reads real files
-_AV2_AVAILABLE = importlib.util.find_spec("av2") is not None
 
 
 def _write_empty_corpus(root: Path, splits: dict[str, list[str]]) -> Path:
@@ -209,7 +205,6 @@ class TestAV2MotionDatabaseHash(AV2MotionDatabaseTestCase):
 class TestAV2MotionDatabaseRecords(AV2MotionDatabaseTestCase):
     """The database writes one record per scenario into its cache file."""
 
-    @unittest.skipUnless(_AV2_AVAILABLE, "the av2 devkit is not installed")
     def test_process_scenario_records_writes_one_record_per_scenario(self) -> None:
         """
         Input: three train, one val and one 50 step test scenario written as real files,
