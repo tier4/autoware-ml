@@ -34,31 +34,23 @@ from autoware_ml.transforms.base import BaseTransform, TransformsCompose
 
 
 class _Rotate(BaseTransform):
-    """Record the angle applied to every sample, kept for its stream or drawn per sample."""
+    """Record the angle applied to every sample, drawn for its stream or for it alone."""
+
+    stream_consistent = True
 
     def __init__(self) -> None:
         super().__init__()
-        self.parameters: float | None = None
-        # Angles applied and angles drawn, shared with the copies a pipeline keeps per stream
+        # Angles applied, in the order of the samples
         self.draws: list[float] = []
-        self.sampled: list[float] = []
-
-    def sample_parameters(self) -> float:
-        self.sampled.append(float(np.random.uniform()))
-        return self.sampled[-1]
-
-    def draw_parameters(self) -> bool:
-        self.parameters = self.sample_parameters()
-        return True
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
-        return self.transform_with_parameters(model_gt_sample, parameters)
+        self.draws.append(float(np.random.uniform()))
+        return model_gt_sample
 
-    def transform_with_parameters(
-        self, model_gt_sample: ModelGTSample, parameters: float
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
     ) -> ModelGTSample:
-        self.draws.append(parameters)
+        self.draws.append(float(random_state.uniform()))
         return model_gt_sample
 
 
@@ -120,10 +112,8 @@ class TestStreamSlot(unittest.TestCase):
         """
         Input: the frames of two streams read in turn, as a dataloader worker reads the
         lanes of a batch.
-        Expected: the pipeline draws the augmentation of a stream once and keeps it while
-        the other stream is read.
-        Check: the two reads of either stream record one value, the streams differ, and
-        the transform drew twice in all.
+        Expected: a frame is augmented by its own stream, whatever stream was read before.
+        Check: the two reads of either stream record one value, and the streams differ.
         """
         first = self.dataset.draw(StreamSlot(0, self.STREAM))
         other = self.dataset.draw(StreamSlot(1, self.OTHER_STREAM))
@@ -133,7 +123,6 @@ class TestStreamSlot(unittest.TestCase):
         self.assertEqual(first_again, first)
         self.assertEqual(other_again, other)
         self.assertNotEqual(first, other)
-        self.assertEqual(len(self.dataset.rotate.sampled), 2)
 
     def test_transforms_applied_outside_a_read_draw_on_their_own_after_a_stream(self) -> None:
         """

@@ -344,7 +344,7 @@ class GroupStreamingSampler(DistributedSampler):
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
 
     Class Attributes:
-        MAX_STREAM_SEED: Largest seed a stream can carry, the largest ``np.random.seed`` takes.
+        MAX_STREAM_SEED: Largest seed a stream can carry, the largest a NumPy random state is seeded by.
     """
 
     MAX_STREAM_SEED = 2**32 - 1
@@ -378,7 +378,7 @@ class GroupStreamingSampler(DistributedSampler):
         if consistent_augmentation and not 0 <= seed <= self.MAX_STREAM_SEED:
             raise ValueError(
                 f"GroupStreamingSampler with consistent_augmentation needs a seed from 0 to "
-                f"{self.MAX_STREAM_SEED}, the range np.random.seed accepts, but got {seed}."
+                f"{self.MAX_STREAM_SEED}, the range a NumPy random state is seeded by, but got {seed}."
             )
         num_replicas, rank = _world_size_and_rank()
         # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for the augmentation the transforms of a pipeline keep for a stream."""
+"""Tests for the augmentation a pipeline gives the frames of a stream."""
 
 from __future__ import annotations
 
@@ -22,48 +22,53 @@ import unittest
 
 import numpy as np
 
-from autoware_ml.transforms.base import BaseTransform, TransformsCompose
+from autoware_ml.transforms.base import BaseTransform, TransformsCompose, random_source
 
 
 class _Draw(BaseTransform):
-    """Append ``count`` uniform draws to the sample, kept for a stream or drawn per sample."""
+    """Append ``count`` uniform draws to the sample, drawn for its stream or for it alone."""
+
+    stream_consistent = True
 
     def __init__(self, count: int = 1, probability: float | None = None) -> None:
         super().__init__(probability=probability)
         self.count = count
-        self.parameters: Sequence[float] | None = None
-        # Every draw made, shared with the copies a pipeline keeps per stream
-        self.sampled: list[Sequence[float]] = []
 
-    def sample_parameters(self) -> Sequence[float]:
-        self.sampled.append(np.random.uniform(size=self.count).tolist())
-        return self.sampled[-1]
-
-    def draw_parameters(self) -> bool:
-        self.parameters = self.sample_parameters()
-        return True
+    def sample_parameters(
+        self, random_state: np.random.RandomState | None = None
+    ) -> Sequence[float]:
+        return random_source(random_state).uniform(size=self.count).tolist()
 
     def transform(self, model_gt_sample: SimpleNamespace) -> SimpleNamespace:
-        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
-        return self.transform_with_parameters(model_gt_sample, parameters)
+        model_gt_sample.draws.append(self.sample_parameters())
+        return model_gt_sample
 
-    def transform_with_parameters(
-        self, model_gt_sample: SimpleNamespace, parameters: Sequence[float]
+    def transform_in_stream(
+        self, model_gt_sample: SimpleNamespace, random_state: np.random.RandomState
     ) -> SimpleNamespace:
-        model_gt_sample.draws.append(parameters)
+        model_gt_sample.draws.append(self.sample_parameters(random_state))
         return model_gt_sample
 
 
 class _Noise(BaseTransform):
-    """Append one draw of its own to every sample, as a jitter that keeps no parameters."""
+    """Append one draw of its own to every sample, as a jitter that is not stream consistent."""
 
     def transform(self, model_gt_sample: SimpleNamespace) -> SimpleNamespace:
         model_gt_sample.draws.append([float(np.random.uniform())])
         return model_gt_sample
 
 
+class _Unfinished(BaseTransform):
+    """A transform that claims to be stream consistent without transform_in_stream."""
+
+    stream_consistent = True
+
+    def transform(self, model_gt_sample: SimpleNamespace) -> SimpleNamespace:
+        return model_gt_sample
+
+
 class TestStreamAugmentation(unittest.TestCase):
-    """The augmentation the transforms of a pipeline keep for the frames of a stream."""
+    """The augmentation a pipeline gives the frames of a stream."""
 
     def draws(
         self, pipeline: TransformsCompose, stream_seed: Sequence[int] | None = None
@@ -71,78 +76,75 @@ class TestStreamAugmentation(unittest.TestCase):
         """The draws every transform of the pipeline applies to a fresh sample of a stream."""
         return pipeline(SimpleNamespace(draws=[]), stream_seed=stream_seed).draws
 
-    def test_frames_of_one_stream_get_the_kept_augmentation_and_streams_differ(self) -> None:
+    def test_frames_of_one_stream_get_the_same_augmentation_and_streams_differ(self) -> None:
         """
         Input: a pipeline of two transforms drawing 3 and 2 values, two frames transformed
         with the seed of one stream and one frame with the seed of another.
-        Expected: the transforms keep the values drawn for a stream and apply them to every
-        frame called with its seed.
-        Check: both frames of the first stream record the kept values, and the frame of the
-        other stream records different ones.
+        Expected: every frame called with the seed of a stream draws the values of the
+        stream, and the two transforms draw values of their own.
+        Check: both frames of the first stream record the same 3 and 2 values, the frame of
+        the other stream records different ones, and the 2 values of the second transform
+        are not the first 2 of the first transform.
         """
         pipeline = TransformsCompose([_Draw(3), _Draw(2)])
 
-        kept = [transform.parameters for transform in pipeline.stream_pipeline((0, 0, 0))]
         first = self.draws(pipeline, (0, 0, 0))
         second = self.draws(pipeline, (0, 0, 0))
         other = self.draws(pipeline, (0, 0, 1))
 
-        self.assertEqual(first, kept)
-        self.assertEqual(second, kept)
-        self.assertNotEqual(other, kept)
+        self.assertEqual([len(draw) for draw in first], [3, 2])
+        self.assertEqual(second, first)
+        self.assertNotEqual(other, first)
+        self.assertNotEqual(first[1], first[0][:2])
 
-    def test_a_stream_keeps_its_parameters_while_other_streams_are_read(self) -> None:
+    def test_a_stream_gets_its_augmentation_while_other_streams_are_read(self) -> None:
         """
         Input: a pipeline of one transform reading the frames of two streams in turn, three
         frames of each, as a dataloader worker reads the lanes of a batch.
-        Expected: the parameters of a stream are drawn once, with its first frame, and kept
-        for its later frames instead of being drawn again.
-        Check: the transform drew twice in all, once per stream, and the three frames of
-        either stream record the one draw of their stream.
+        Expected: a frame is augmented by its own stream, whatever stream was read before.
+        Check: the three frames of either stream record one draw, and the two streams
+        record different ones.
         """
-        transform = _Draw(3)
-        pipeline = TransformsCompose([transform])
+        pipeline = TransformsCompose([_Draw(3)])
 
         frames: dict[int, list[Sequence[Sequence[float]]]] = {0: [], 1: []}
         for _ in range(3):
             for scene in (0, 1):
                 frames[scene].append(self.draws(pipeline, (0, 0, scene)))
 
-        self.assertEqual(len(transform.sampled), 2)
-        self.assertEqual(frames[0], [[transform.sampled[0]] for _ in range(3)])
-        self.assertEqual(frames[1], [[transform.sampled[1]] for _ in range(3)])
-        self.assertNotEqual(transform.sampled[0], transform.sampled[1])
+        self.assertEqual(frames[0], [frames[0][0] for _ in range(3)])
+        self.assertEqual(frames[1], [frames[1][0] for _ in range(3)])
+        self.assertNotEqual(frames[0][0], frames[1][0])
 
     def test_a_stream_is_drawn_alike_in_every_worker(self) -> None:
         """
         Input: two pipelines built alike, as two dataloader workers hold them, each reading
-        a frame of the same stream.
-        Expected: the draw depends only on the seed of the stream.
+        a frame of the same stream, the second one after frames of 300 other streams.
+        Expected: the draw depends only on the seed of the stream, a pipeline keeps nothing
+        of the streams it read.
         Check: both pipelines record the same values.
         """
         pipeline, other_worker = TransformsCompose([_Draw(3)]), TransformsCompose([_Draw(3)])
 
+        for scene in range(1, 301):
+            self.draws(other_worker, (0, 0, scene))
+
         self.assertEqual(self.draws(other_worker, (0, 0, 0)), self.draws(pipeline, (0, 0, 0)))
 
-    def test_a_dropped_stream_is_drawn_with_the_same_values_again(self) -> None:
+    def test_the_draw_of_a_transform_does_not_depend_on_the_transforms_before_it(self) -> None:
         """
-        Input: a pipeline keeping at most two streams, reading stream 0, then two other
-        streams, then stream 0 again.
-        Expected: the least recently read stream is dropped, and drawn from its seed again
-        when it comes back.
-        Check: the pipeline keeps two streams, and stream 0 records the same values before
-        and after it was dropped.
+        Input: two pipelines whose second transform draws 2 values, after a first transform
+        drawing 3 values in one pipeline and 5 in the other, each reading one stream.
+        Expected: every transform draws from a random state of its own, seeded by the stream
+        and its position in the pipeline.
+        Check: the second transform records the same 2 values in both pipelines.
         """
-        pipeline = TransformsCompose([_Draw(3)])
-        pipeline.MAX_KEPT_STREAMS = 2
+        short, long = (
+            TransformsCompose([_Draw(3), _Draw(2)]),
+            TransformsCompose([_Draw(5), _Draw(2)]),
+        )
 
-        first = self.draws(pipeline, (0, 0, 0))
-        self.draws(pipeline, (0, 0, 1))
-        self.draws(pipeline, (0, 0, 2))
-        kept_streams = len(pipeline._stream_pipelines)
-
-        self.assertEqual(kept_streams, 2)
-        self.assertEqual(self.draws(pipeline, (0, 0, 0)), first)
+        self.assertEqual(self.draws(short, (0, 0, 0))[1], self.draws(long, (0, 0, 0))[1])
 
     def test_frames_outside_a_stream_draw_on_their_own(self) -> None:
         """
@@ -163,10 +165,10 @@ class TestStreamAugmentation(unittest.TestCase):
         self.assertNotEqual(after[0], after[1])
         self.assertNotIn(in_stream, after)
 
-    def test_a_transform_that_keeps_no_parameters_draws_for_every_frame(self) -> None:
+    def test_a_transform_that_is_not_stream_consistent_draws_for_every_frame(self) -> None:
         """
-        Input: a pipeline of a transform that keeps its draw and a jitter that keeps none,
-        and two frames of one stream.
+        Input: a pipeline of a stream consistent transform and a jitter that is not, and two
+        frames of one stream.
         Expected: the jitter keeps drawing per frame inside the stream.
         Check: the first transform records the same values in both frames and the jitter
         different ones.
@@ -183,7 +185,8 @@ class TestStreamAugmentation(unittest.TestCase):
         """
         Input: a transform applied with a probability of one half, 40 streams and 5 frames
         of every stream.
-        Expected: the probability is decided once per stream, not per frame.
+        Expected: the probability is drawn from the stream, so it is decided alike for
+        every frame of it.
         Check: the 5 frames of a stream all record a draw or all record none, and both
         outcomes occur over the 40 streams.
         """
@@ -197,21 +200,35 @@ class TestStreamAugmentation(unittest.TestCase):
 
         self.assertEqual(outcomes, {0, 1})
 
-    def test_drawing_the_augmentation_leaves_the_random_state_as_it_was(self) -> None:
+    def test_a_frame_of_a_stream_leaves_the_global_random_state_as_it_was(self) -> None:
         """
         Input: a seeded NumPy random state, read once directly and once after a pipeline
-        drew the augmentation of a stream.
-        Expected: the pipeline restores the random state it seeded for its draws.
-        Check: the three values drawn after the stream are the ones drawn without it.
+        transformed a frame of a stream.
+        Expected: a stream consistent transform draws from the random state of the stream,
+        not from the global one.
+        Check: the three values drawn after the frame are the ones drawn without it.
         """
         pipeline = TransformsCompose([_Draw(3)])
         np.random.seed(11)
         expected = np.random.uniform(size=3).tolist()
 
         np.random.seed(11)
-        pipeline.stream_pipeline((0, 0, 0))
+        self.draws(pipeline, (0, 0, 0))
 
         self.assertEqual(np.random.uniform(size=3).tolist(), expected)
+
+    def test_a_stream_consistent_transform_needs_transform_in_stream(self) -> None:
+        """
+        Input: a transform that sets stream_consistent without overriding
+        transform_in_stream, and a frame of a stream.
+        Expected: the missing method is reported instead of the frame being augmented on its
+        own.
+        Check: the call raises a NotImplementedError naming the transform.
+        """
+        pipeline = TransformsCompose([_Unfinished()])
+
+        with self.assertRaisesRegex(NotImplementedError, "_Unfinished"):
+            self.draws(pipeline, (0, 0, 0))
 
 
 if __name__ == "__main__":

@@ -1243,7 +1243,7 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
 
 
 class TestStreamParameters(BaseCameraLidarGeometryTestCase):
-    """The global augmentations applied with the parameters they keep for a stream."""
+    """The global augmentations applied with the parameters they draw for a stream."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1281,19 +1281,20 @@ class TestStreamParameters(BaseCameraLidarGeometryTestCase):
         self.assertFalse(torch.equal(first, other))
         self.assertFalse(torch.equal(self.augment(), self.augment()))
 
-    def test_the_kept_parameters_are_the_ones_applied(self) -> None:
+    def test_the_parameters_of_a_stream_are_the_ones_applied(self) -> None:
         """
-        Input: the parameters the two transforms keep after the draw of a stream, and one
-        frame transformed with them.
-        Expected: the frame is moved by the kept yaw, scale and translation, then flipped
-        along the kept axes.
+        Input: the parameters the two transforms draw from the random states the pipeline
+        seeds for a stream, by the seed of the stream and the position of the transform, and
+        one frame of the stream.
+        Expected: the frame is moved by the yaw, scale and translation of the stream, then
+        flipped along the axes of the stream.
         Check: the transformation matrix of the frame equals the one built here from the
-        kept values.
+        drawn values.
         """
-        rot_scale_trans, flips = (
-            transform.parameters for transform in self.pipeline.stream_pipeline((0, 0, 0))
+        rot_scale_trans = self.pipeline.pipeline[0].sample_parameters(
+            np.random.RandomState([0, 0, 0, 0])
         )
-        assert rot_scale_trans is not None and flips is not None
+        flips = self.pipeline.pipeline[1].sample_parameters(np.random.RandomState([0, 0, 0, 1]))
         flip = torch.diag(
             torch.tensor([-1.0 if flips.vertical else 1.0, -1.0 if flips.horizontal else 1.0, 1.0])
         )

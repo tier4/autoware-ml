@@ -64,7 +64,7 @@ class StreamSlot(int):
 
     Attributes:
         stream_seed: Integers naming the stream, see
-            ``TransformsCompose.stream_pipeline``.
+            ``TransformsCompose.__call__``.
     """
 
     stream_seed: tuple[int, ...]

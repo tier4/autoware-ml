@@ -674,18 +674,17 @@ class TestResizeCropFlipRotImage(CameraImageDataTestCase):
         Input: a training transform that read a frame of a stream, and one frame outside
         the stream transformed afterwards.
         Expected: outside a stream every camera draws its own augmentation again.
-        Check: the transform of the pipeline keeps no parameters and the two cameras of the
-        frame get different augmented intrinsics.
+        Check: the two cameras of the frame get different augmented intrinsics, and the
+        frame is not augmented as the frame of the stream.
         """
         np.random.seed(0)
-        transform = self.build_training_transform()
-        pipeline = TransformsCompose([transform])
+        pipeline = TransformsCompose([self.build_training_transform()])
 
-        self.augmented_intrinsics(pipeline, (0, 0, 0))
+        in_stream = self.augmented_intrinsics(pipeline, (0, 0, 0))
         intrinsics = self.augmented_intrinsics(pipeline)
 
-        self.assertIsNone(transform.parameters)
         self.assertFalse(torch.equal(intrinsics[0], intrinsics[1]))
+        self.assertFalse(torch.equal(intrinsics, in_stream))
 
     def test_the_drawn_parameters_are_the_ones_applied(self) -> None:
         """

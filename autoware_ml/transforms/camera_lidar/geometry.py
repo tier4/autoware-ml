@@ -39,7 +39,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.base import BaseTransform, random_source
 from autoware_ml.types.spatial import BEVDirection
 from autoware_ml.types.geometry import TransformationName
 
@@ -158,6 +158,8 @@ class GlobalRotScaleTrans(BaseTransform):
         - ``lidar_transformation_sample``: the (composed) 4x4 augmentation.
     """
 
+    stream_consistent = True
+
     def __init__(
         self,
         yaw_rot_range: Sequence[float],
@@ -174,8 +176,6 @@ class GlobalRotScaleTrans(BaseTransform):
             probability: Probability of applying the transform, None to always apply it.
         """
         super().__init__(probability=probability)
-        # Augmentation kept for the frames of a stream, None to draw it for every sample
-        self.parameters: RotScaleTransParameters | None = None
         self.yaw_rot_range = yaw_rot_range
         self.scale_ratio_range = scale_ratio_range
         self.translation_std = (
@@ -184,57 +184,71 @@ class GlobalRotScaleTrans(BaseTransform):
             else None
         )
 
-    def sample_yaw(self) -> float:
+    def sample_yaw(self, random_state: np.random.RandomState | None = None) -> float:
         """
         Sample the yaw rotation applied to the sample.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             float: Rotation around yaw in radians.
         """
-        return float(np.random.uniform(self.yaw_rot_range[0], self.yaw_rot_range[1]))
+        return float(
+            random_source(random_state).uniform(self.yaw_rot_range[0], self.yaw_rot_range[1])
+        )
 
-    def sample_scale(self) -> float:
+    def sample_scale(self, random_state: np.random.RandomState | None = None) -> float:
         """
         Sample the scale factor applied to the sample.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             float: Scale factor.
         """
-        return float(np.random.uniform(self.scale_ratio_range[0], self.scale_ratio_range[1]))
+        return float(
+            random_source(random_state).uniform(
+                self.scale_ratio_range[0], self.scale_ratio_range[1]
+            )
+        )
 
-    def sample_translation(self) -> Float32[Tensor, "1 3"]:
+    def sample_translation(
+        self, random_state: np.random.RandomState | None = None
+    ) -> Float32[Tensor, "1 3"]:
         """
         Sample the translation applied to the sample.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             Float32[Tensor, "1 3"]: Translation vector, zero when no std is configured.
         """
         if self.translation_std is None:
             return torch.zeros((1, 3), dtype=torch.float32)
-        translation = np.random.normal(0.0, self.translation_std, size=(1, 3))
+        translation = random_source(random_state).normal(0.0, self.translation_std, size=(1, 3))
         return torch.tensor(translation, dtype=torch.float32)
 
-    def sample_parameters(self) -> RotScaleTransParameters:
+    def sample_parameters(
+        self, random_state: np.random.RandomState | None = None
+    ) -> RotScaleTransParameters:
         """Draw the rotation, the scale and the translation of one sample or one stream.
 
         The yaw, the scale and the translation are drawn in this order, so a test seeding the
         random state replays the draw of :meth:`transform`.
 
+        Args:
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
+
         Returns:
             The drawn augmentation as plain values.
         """
-        yaw, scale = self.sample_yaw(), self.sample_scale()
-        x, y, z = self.sample_translation().flatten().tolist()
+        yaw, scale = self.sample_yaw(random_state), self.sample_scale(random_state)
+        x, y, z = self.sample_translation(random_state).flatten().tolist()
         return RotScaleTransParameters(yaw=yaw, scale=scale, translation=(x, y, z))
-
-    def draw_parameters(self) -> bool:
-        """Draw the rotation, the scale and the translation and keep it for the samples that follow.
-
-        Returns:
-            True, the transform keeps its parameters.
-        """
-        self.parameters = self.sample_parameters()
-        return True
 
     def sample_rot_scale_trans(
         self, parameters: RotScaleTransParameters | None = None
@@ -270,11 +284,23 @@ class GlobalRotScaleTrans(BaseTransform):
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Rotate, scale, and translate the available modalities and the bboxes.
 
-        The kept augmentation is applied when there is one, the one of the stream of the
-        sample. Otherwise it is drawn for the sample alone.
+        The augmentation is drawn for the sample alone.
         """
-        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
-        return self.transform_with_parameters(model_gt_sample, parameters)
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
+    ) -> ModelGTSample:
+        """Rotate, scale, and translate the sample by the augmentation of its stream.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are moved.
+            random_state: Random state seeded by the stream, the same for every frame of it.
+
+        Returns:
+            The moved sample with the augmentation recorded.
+        """
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters(random_state))
 
     def transform_with_parameters(
         self, model_gt_sample: ModelGTSample, parameters: RotScaleTransParameters
@@ -327,14 +353,17 @@ class RandomRotateTargetAngle(GlobalRotScaleTrans):
         )
         self.yaw_angle_ratios = list(yaw_angle_ratios)
 
-    def sample_yaw(self) -> float:
+    def sample_yaw(self, random_state: np.random.RandomState | None = None) -> float:
         """
         Pick one of the target angles instead of drawing from a continuous range.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             float: Rotation around yaw in radians.
         """
-        return float(np.random.choice(self.yaw_angle_ratios)) * float(np.pi)
+        return float(random_source(random_state).choice(self.yaw_angle_ratios)) * float(np.pi)
 
 
 class GlobalBEVRandomFlip(BaseTransform):
@@ -350,6 +379,8 @@ class GlobalBEVRandomFlip(BaseTransform):
         - ``lidar_transformation_sample``: the (composed) 4x4 flip.
     """
 
+    stream_consistent = True
+
     def __init__(
         self, horizontal_flip_ratio: float = 0.5, vertical_flip_ratio: float = 0.5
     ) -> None:
@@ -360,36 +391,35 @@ class GlobalBEVRandomFlip(BaseTransform):
             vertical_flip_ratio: Ratio of flipping vertically.
         """
         super().__init__(probability=None)
-        # Flips kept for the frames of a stream, None to draw them for every sample
-        self.parameters: BEVFlipParameters | None = None
         self.horizontal_flip_ratio = horizontal_flip_ratio
         self.vertical_flip_ratio = vertical_flip_ratio
 
-    def sample_flip(self) -> tuple[bool, bool]:
+    def sample_flip(self, random_state: np.random.RandomState | None = None) -> tuple[bool, bool]:
         """
         Sample random horizontal and vertical flips.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
         """
-        horizontal_flip = bool(np.random.rand() < self.horizontal_flip_ratio)
-        vertical_flip = bool(np.random.rand() < self.vertical_flip_ratio)
+        random = random_source(random_state)
+        horizontal_flip = bool(random.rand() < self.horizontal_flip_ratio)
+        vertical_flip = bool(random.rand() < self.vertical_flip_ratio)
         return horizontal_flip, vertical_flip
 
-    def sample_parameters(self) -> BEVFlipParameters:
+    def sample_parameters(
+        self, random_state: np.random.RandomState | None = None
+    ) -> BEVFlipParameters:
         """Draw the flips of one sample or one stream.
+
+        Args:
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
 
         Returns:
             The drawn flips.
         """
-        horizontal_flip, vertical_flip = self.sample_flip()
+        horizontal_flip, vertical_flip = self.sample_flip(random_state)
         return BEVFlipParameters(horizontal=horizontal_flip, vertical=vertical_flip)
-
-    def draw_parameters(self) -> bool:
-        """Draw the flips and keep it for the samples that follow.
-
-        Returns:
-            True, the transform keeps its parameters.
-        """
-        self.parameters = self.sample_parameters()
-        return True
 
     def apply_flip(
         self,
@@ -418,11 +448,23 @@ class GlobalBEVRandomFlip(BaseTransform):
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Flip the available modalities and the bboxes along the sampled axes.
 
-        The kept flips are applied when there are some, the ones of the stream of the
-        sample. Otherwise they are drawn for the sample alone.
+        The flips are drawn for the sample alone.
         """
-        parameters = self.parameters if self.parameters is not None else self.sample_parameters()
-        return self.transform_with_parameters(model_gt_sample, parameters)
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters())
+
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
+    ) -> ModelGTSample:
+        """Flip the sample along the axes drawn for its stream.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are flipped.
+            random_state: Random state seeded by the stream, the same for every frame of it.
+
+        Returns:
+            The flipped sample with the flips recorded.
+        """
+        return self.transform_with_parameters(model_gt_sample, self.sample_parameters(random_state))
 
     def transform_with_parameters(
         self, model_gt_sample: ModelGTSample, parameters: BEVFlipParameters

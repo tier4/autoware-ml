@@ -19,13 +19,24 @@ pipelines and provides sequential composition helpers.
 """
 
 from abc import ABC, abstractmethod
-from collections import OrderedDict
 from collections.abc import Sequence
-import copy
 
 import numpy as np
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+
+
+def random_source(random_state: np.random.RandomState | None) -> np.random.RandomState:
+    """Return the random state a transform draws from.
+
+    Args:
+        random_state: Random state of a stream, None outside a stream.
+
+    Returns:
+        The given random state, or the functions of ``np.random``, which draw from the global
+        random state of NumPy through the same interface.
+    """
+    return np.random if random_state is None else random_state  # type: ignore[return-value]
 
 
 class BaseTransform(ABC):
@@ -33,16 +44,20 @@ class BaseTransform(ABC):
 
     A temporal model reads the frames of a stream one after another and needs some
     augmentations alike in every frame, the global rotation or the flip. Such a transform
-    keeps the parameters it drew in an attribute of its own: :meth:`draw_parameters` draws
-    and keeps them, and :meth:`transform` applies the kept parameters whenever there are some
-    and draws for the sample alone otherwise. ``TransformsCompose`` holds one copy of such a
-    transform per stream, whose parameters are drawn once and kept for every frame of it.
+    sets ``stream_consistent`` and implements :meth:`transform_in_stream`, which draws from
+    the random state it is given instead of the global one of NumPy. ``TransformsCompose``
+    seeds that random state by the stream for every frame, so every frame of a stream draws
+    the same values and the transform keeps nothing between the frames.
 
     Class Attributes (override in subclasses):
         _required_keys: Fields of the sample that must be set before the transform runs.
+        stream_consistent: Whether the transform augments every frame of a stream alike, see
+            :meth:`transform_in_stream`. A transform without it draws for every frame alone,
+            also inside a stream.
     """
 
     _required_keys: Sequence[str] = ()
+    stream_consistent: bool = False
 
     def __init__(self, probability: float | None = None) -> None:
         """Initialize the transform.
@@ -52,11 +67,10 @@ class BaseTransform(ABC):
                          Set to None if the transform should always run.
         """
         self._probability = probability
-        # Outcome of the probability kept for the frames of a stream, None to decide it for
-        # every sample alone.
-        self._stream_apply: bool | None = None
 
-    def __call__(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def __call__(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState | None = None
+    ) -> ModelGTSample:
         """Execute transform with probability and key validation.
 
         Order of operations:
@@ -66,6 +80,9 @@ class BaseTransform(ABC):
 
         Args:
             model_gt_sample: Dataclass to hold inputs for each sample.
+            random_state: Random state of the stream of the sample, which the probability and
+                the augmentation are drawn from. None for a sample augmented on its own,
+                which draws from the global random state of NumPy.
 
         Returns:
             Updated ModelGTSample.
@@ -73,40 +90,34 @@ class BaseTransform(ABC):
         # 1. Validate required keys (raises error if any missing)
         self._validate_required_keys(model_gt_sample)
 
-        # 2. Check probability (skip if not triggered), decided once for the frames of a stream
-        apply = self._should_apply() if self._stream_apply is None else self._stream_apply
-        if not apply:
+        # 2. Check probability (skip if not triggered), drawn from the stream when there is one
+        if not self._should_apply(random_state):
             return self.on_skip(model_gt_sample)
 
         # 3. Execute the actual transform
-        return self.transform(model_gt_sample)
+        if random_state is None:
+            return self.transform(model_gt_sample)
+        return self.transform_in_stream(model_gt_sample, random_state)
 
-    def draw_parameters(self) -> bool:
-        """Draw the parameters of the transform and keep them for the samples that follow.
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
+    ) -> ModelGTSample:
+        """Transform one frame of a stream, as :meth:`transform` with the draws of the stream.
 
-        Override it in a transform that keeps its augmentation alike over the frames of a
-        stream. The parameters are drawn from ``np.random`` before a frame is loaded, so they
-        depend on no sample.
+        Override it in a transform that sets ``stream_consistent``. Every random draw of the
+        augmentation has to come from ``random_state``, in an order and a number that do not
+        depend on the sample, so every frame of the stream draws the same values.
 
-        Returns:
-            Whether the transform keeps parameters, False for one that draws for every sample
-            alone.
-        """
-        return False
-
-    def draw_stream_parameters(self) -> bool:
-        """Draw the augmentation of one stream and keep it: the probability, then the parameters.
-
-        A transform that keeps no parameters is left deciding its probability and drawing for
-        every sample alone.
+        Args:
+            model_gt_sample: ModelGTSample instance with its required fields set.
+            random_state: Random state seeded by the stream, the same for every frame of it.
 
         Returns:
-            Whether the transform keeps the augmentation of the stream.
+            Updated ModelGTSample, possibly the same instance modified in place.
         """
-        apply = self._should_apply()
-        keeps_parameters = self.draw_parameters()
-        self._stream_apply = apply if keeps_parameters else None
-        return keeps_parameters
+        raise NotImplementedError(
+            f"{self.__class__.__name__} sets stream_consistent but has no transform_in_stream."
+        )
 
     def _validate_required_keys(self, model_gt_sample: ModelGTSample) -> None:
         """Raise ``KeyError`` when any required key is missing.
@@ -121,8 +132,11 @@ class BaseTransform(ABC):
             if getattr(model_gt_sample, key) is None:
                 raise KeyError(f"{self.__class__.__name__}: Missing required key '{key}'")
 
-    def _should_apply(self) -> bool:
+    def _should_apply(self, random_state: np.random.RandomState | None = None) -> bool:
         """Determine if transform should be applied based on probability.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             True if transform should be applied, False to skip.
@@ -133,7 +147,7 @@ class BaseTransform(ABC):
             return False
         if self._probability >= 1.0:
             return True
-        return np.random.rand() < self._probability
+        return random_source(random_state).rand() < self._probability
 
     def on_skip(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
         """Called when transform is skipped due to probability.
@@ -168,18 +182,11 @@ class TransformsCompose:
     The composed transform forwards one sample through every configured transform
     and returns the final result.
 
-    For the frames of a stream it keeps the augmentation drawn for the stream, see
-    :meth:`stream_pipeline`: the transforms that keep parameters are copied once per stream,
-    the copies draw their parameters and hold them for every frame of the stream. The stream
-    of a sample is named by the call, so a call without one always draws for its sample.
-
-    Class Attributes:
-        MAX_KEPT_STREAMS: Number of streams whose augmentation is kept, the least recently
-            read one is dropped beyond it. A dropped stream that comes back is drawn from its
-            seed again, with the same values.
+    A sample of a stream is called with the seed of its stream. Every ``stream_consistent``
+    transform then draws from a random state seeded by the stream and by the position of the
+    transform in the pipeline, so the frames of a stream are augmented alike. The pipeline
+    keeps nothing between the calls: the stream of a sample is named by the call alone.
     """
-
-    MAX_KEPT_STREAMS = 256
 
     def __init__(self, pipeline: Sequence[BaseTransform]):
         """Initialize the transform pipeline.
@@ -188,10 +195,6 @@ class TransformsCompose:
             pipeline: Ordered transforms applied to each sample.
         """
         self.pipeline = pipeline
-        # Transforms of every kept stream by the seed of the stream, holding its augmentation
-        self._stream_pipelines: OrderedDict[tuple[int, ...], Sequence[BaseTransform]] = (
-            OrderedDict()
-        )
 
     def __call__(
         self, model_gt_sample: ModelGTSample, stream_seed: Sequence[int] | None = None
@@ -201,64 +204,22 @@ class TransformsCompose:
         Args:
             model_gt_sample: ModelGTSample instance passed through the configured transforms.
             stream_seed: Integers naming the stream of the sample, the same for every frame
-                of it. The sample then gets the augmentation kept for the stream. None for a
-                sample augmented on its own.
+                of it and each from 0 to 2**32 - 1. The sample then gets the augmentation of
+                the stream. None for a sample augmented on its own.
 
         Returns:
             Transformed ModelGTSample instance after all pipeline stages have been applied.
         """
-        pipeline = self.pipeline if stream_seed is None else self.stream_pipeline(stream_seed)
-        for transform in pipeline:
-            model_gt_sample = transform(model_gt_sample)
+        for transform_index, transform in enumerate(self.pipeline):
+            if stream_seed is not None and transform.stream_consistent:
+                # A random state per transform, so the draws of one transform do not depend
+                # on how many values the transforms before it drew for this frame.
+                random_state = np.random.RandomState(list(stream_seed) + [transform_index])
+                model_gt_sample = transform(model_gt_sample, random_state)
+            else:
+                model_gt_sample = transform(model_gt_sample)
 
         return model_gt_sample
-
-    def stream_pipeline(self, stream_seed: Sequence[int]) -> Sequence[BaseTransform]:
-        """Return the transforms holding the augmentation of one stream.
-
-        The first frame of a stream draws the augmentation of the stream, which is then kept
-        and applied to every later frame of it, also when frames of other streams are read
-        in between. The parameters are drawn from ``np.random`` seeded by the stream, so
-        every dataloader worker and every rank draws the same values for one stream.
-
-        Args:
-            stream_seed: Integers naming the stream, the same for every frame of it.
-
-        Returns:
-            The transforms to apply to the frames of the stream, in pipeline order.
-        """
-        stream_seed = tuple(stream_seed)
-        if stream_seed not in self._stream_pipelines:
-            self._stream_pipelines[stream_seed] = self._draw_stream_pipeline(stream_seed)
-            if len(self._stream_pipelines) > self.MAX_KEPT_STREAMS:
-                self._stream_pipelines.popitem(last=False)
-        self._stream_pipelines.move_to_end(stream_seed)
-        return self._stream_pipelines[stream_seed]
-
-    def _draw_stream_pipeline(self, stream_seed: tuple[int, ...]) -> Sequence[BaseTransform]:
-        """Draw the augmentation of one stream into copies of the transforms that keep it.
-
-        A copy shares the settings of its transform and holds the parameters of the stream.
-        A transform that keeps no parameters is used as it is. The random state of NumPy is
-        restored after the draw.
-
-        Args:
-            stream_seed: Integers naming the stream, the seed of its draw.
-
-        Returns:
-            The transforms to apply to the frames of the stream, in pipeline order.
-        """
-        state = np.random.get_state()
-        np.random.seed(list(stream_seed))
-        try:
-            stream_pipeline = []
-            for transform in self.pipeline:
-                stream_transform = copy.copy(transform)
-                keeps_parameters = stream_transform.draw_stream_parameters()
-                stream_pipeline.append(stream_transform if keeps_parameters else transform)
-        finally:
-            np.random.set_state(state)
-        return stream_pipeline
 
     def __repr__(self) -> str:
         """Return a formatted string representation of the composition.
