@@ -46,7 +46,7 @@ from typing import Protocol
 
 import lanelet2
 import numpy as np
-import shapely
+import shapely  # TODO: remove the shapely operations of this module to speed up the evaluation.
 from shapely import STRtree
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union

@@ -45,6 +45,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_seg3d_model,
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
+    Block,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -1367,3 +1368,59 @@ def test_export_input_builders_reject_a_multi_sample_batch() -> None:
     for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
         with pytest.raises(ValueError, match="single-sample"):
             builder(model, double)
+
+
+def _jitter_affine_parameters(model: nn.Module) -> None:
+    """Give every bias and normalization a non-trivial value, as training would."""
+    for module in model.modules():
+        if isinstance(module, (nn.BatchNorm1d, nn.LayerNorm)):
+            nn.init.uniform_(module.weight, 0.5, 1.5)
+        if isinstance(module, nn.BatchNorm1d):
+            nn.init.uniform_(module.running_mean, -0.5, 0.5)
+            nn.init.uniform_(module.running_var, 0.5, 1.5)
+        if getattr(module, "bias", None) is not None:
+            nn.init.uniform_(module.bias, -0.5, 0.5)
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
+    """
+    Input: a small PTv3 segmentation model with every bias and normalization set to a
+    non-trivial value, exported with and without the CPE bias fold.
+    Expected: the fold changes no export output and no model parameter, and it removes the
+    bias of every CPE convolution in the encoder and the seg3d head.
+    Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
+    both export modules hold CPE blocks and none of their convolutions keeps a bias, and the
+    model's state_dict is unchanged.
+    """
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    model = build_seg3d_model()
+    _jitter_affine_parameters(model)
+    model = model.to(device).eval()
+    batch = build_inputs(device=device)
+    state = {key: value.clone() for key, value in model.state_dict().items()}
+
+    folded = model.build_export_specs(batch)
+    monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
+    reference = model.build_export_specs(batch)
+
+    for name in ("ptv3_encoder", "ptv3_seg3d_head"):
+        with torch.no_grad():
+            folded_outputs = folded[name].module(*folded[name].args)
+            reference_outputs = reference[name].module(*reference[name].args)
+        for folded_output, reference_output in zip(folded_outputs, reference_outputs, strict=True):
+            if folded_output.is_floating_point():
+                torch.testing.assert_close(folded_output, reference_output, rtol=1e-5, atol=1e-5)
+        blocks = [
+            block
+            for block in folded[name].module.modules()
+            if isinstance(block, Block) and block.cpe is not None
+        ]
+        assert blocks, name
+        assert all(next(block.cpe.children()).bias is None for block in blocks), name
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, state[key]), key
