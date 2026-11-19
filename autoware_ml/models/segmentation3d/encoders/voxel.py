@@ -215,8 +215,11 @@ class MeanVoxelFeatureEncoder(VoxelFeatureEncoder):
             points of the voxel.
         """
         slots = torch.arange(voxels.shape[1], device=voxels.device).unsqueeze(0)
-        _, mean = self._summarize(voxels, slots < num_points.long().unsqueeze(1))
-        return mean
+        filled = slots < num_points.long().unsqueeze(1)
+        # The filled slots are the leading ones, so they number num_points clamped to the
+        # slots: the same count as reducing the mask, without the reduction.
+        count = num_points.unsqueeze(1).to(voxels.dtype).clamp(min=1.0, max=voxels.shape[1])
+        return (voxels * filled.unsqueeze(-1)).sum(dim=1) / count
 
 
 class SweepSplitVoxelFeatureEncoder(VoxelFeatureEncoder):

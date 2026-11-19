@@ -558,6 +558,17 @@ def test_mean_voxel_encoder_averages_the_valid_points_and_ignores_the_padding() 
     assert torch.allclose(features, torch.tensor([[2.0, 1.0, 0.5, 0.4], [5.0, 1.0, 0.0, 0.4]]))
 
 
+def test_mean_voxel_encoder_counts_the_points_as_the_reduced_mask_does() -> None:
+    """Counting from num_points gives the mean of reducing the slot mask, bit for bit."""
+    generator = torch.Generator().manual_seed(0)
+    voxels = torch.randn(64, 8, 4, generator=generator)
+    num_points = torch.randint(0, 12, (64,), generator=generator, dtype=torch.int32)
+    filled = torch.arange(8).unsqueeze(0) < num_points.long().unsqueeze(1)
+    _, reference = MeanVoxelFeatureEncoder._summarize(voxels, filled)
+
+    assert torch.equal(MeanVoxelFeatureEncoder()(voxels, num_points), reference)
+
+
 def test_mean_voxel_encoder_rejects_points_with_a_time_lag() -> None:
     with pytest.raises(ValueError, match="got 5 channels"):
         MeanVoxelFeatureEncoder().check_points(torch.zeros(2, 3, 5), -1)
