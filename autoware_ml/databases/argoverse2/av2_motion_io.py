@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
-import polars as pl
+import pyarrow.parquet as pq
 from jaxtyping import Bool, Float64, Int64
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,9 @@ def load_scenario_parquet(path: Path) -> AV2Scenario:
 
     The tracks are ordered by track id and the timestamps are spread evenly between the first and
     the last one, as the ``av2`` devkit does: the file stores only those two and the step count.
+    The file is read with pyarrow on the calling thread, not with polars: the records generator
+    and the dataloader read scenarios in forked worker processes, and polars deadlocks in a
+    process forked after its thread pool started.
 
     Args:
       path: Path of the ``scenario_<id>.parquet`` file.
@@ -148,27 +151,27 @@ def load_scenario_parquet(path: Path) -> AV2Scenario:
       ValueError: If the file holds no state.
     """
 
-    frame = pl.read_parquet(path, columns=[*_TRACK_COLUMNS, *_SCENARIO_COLUMNS])
-    if frame.height == 0:
+    table = pq.read_table(path, columns=[*_TRACK_COLUMNS, *_SCENARIO_COLUMNS], use_threads=False)
+    if table.num_rows == 0:
         raise ValueError(f"Scenario file {path} holds no track state.")
-    first = frame.row(0, named=True)
+    columns = {name: table.column(name).to_numpy() for name in table.column_names}
     timestamps_ns = np.linspace(
-        first["start_timestamp"], first["end_timestamp"], num=first["num_timestamps"]
+        columns["start_timestamp"][0], columns["end_timestamp"][0], num=columns["num_timestamps"][0]
     ).astype(np.int64)
 
     # A stable sort keeps the states of a track in file order
-    frame = frame.sort("track_id", maintain_order=True)
-    track_ids = frame["track_id"].to_numpy()
+    order = np.argsort(columns["track_id"], kind="stable")
+    track_ids = columns["track_id"][order]
     starts = np.concatenate([[0], np.flatnonzero(track_ids[1:] != track_ids[:-1]) + 1])
-    ends = np.append(starts[1:], frame.height)
+    ends = np.append(starts[1:], len(track_ids))
 
-    object_types = frame["object_type"].to_numpy()
-    categories = frame["object_category"].to_numpy()
-    timesteps = frame["timestep"].to_numpy().astype(np.int64)
-    observed = frame["observed"].to_numpy().astype(bool)
-    positions = frame.select("position_x", "position_y").to_numpy().astype(np.float64)
-    headings = frame["heading"].to_numpy().astype(np.float64)
-    velocities = frame.select("velocity_x", "velocity_y").to_numpy().astype(np.float64)
+    object_types = columns["object_type"][order]
+    categories = columns["object_category"][order]
+    timesteps = columns["timestep"][order].astype(np.int64)
+    observed = columns["observed"][order].astype(bool)
+    positions = np.stack([columns["position_x"], columns["position_y"]], axis=1)[order]
+    headings = columns["heading"][order].astype(np.float64)
+    velocities = np.stack([columns["velocity_x"], columns["velocity_y"]], axis=1)[order]
 
     tracks = [
         AV2Track(
@@ -185,9 +188,9 @@ def load_scenario_parquet(path: Path) -> AV2Scenario:
     ]
 
     return AV2Scenario(
-        scenario_id=str(first["scenario_id"]),
-        city_name=str(first["city"]),
-        focal_track_id=str(first["focal_track_id"]),
+        scenario_id=str(columns["scenario_id"][0]),
+        city_name=str(columns["city"][0]),
+        focal_track_id=str(columns["focal_track_id"][0]),
         timestamps_ns=timestamps_ns,
         tracks=tracks,
     )
