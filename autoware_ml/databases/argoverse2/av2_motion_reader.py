@@ -14,10 +14,10 @@
 
 """Reader of the Argoverse 2 Motion Forecasting files.
 
-This is the only module that imports the ``av2`` devkit. A scenario is a
-``scenario_<id>.parquet`` file of agent tracks and a ``log_map_archive_<id>.json`` static map;
-:class:`AV2MotionReader` turns them into the dataset agnostic samples of the motion task, in
-the city frame of the scenario.
+A scenario is a ``scenario_<id>.parquet`` file of agent tracks and a
+``log_map_archive_<id>.json`` static map; :class:`AV2MotionReader` reads them with
+:mod:`autoware_ml.databases.argoverse2.av2_motion_io` and turns them into the dataset agnostic
+samples of the motion task, in the city frame of the scenario.
 """
 
 from __future__ import annotations
@@ -29,14 +29,16 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
-from av2.datasets.motion_forecasting.data_schema import ArgoverseScenario, Track
-from av2.datasets.motion_forecasting.scenario_serialization import (
-    load_argoverse_scenario_parquet,
-)
-from av2.geometry.interpolate import interp_arc
-from av2.map.map_api import ArgoverseStaticMap
 from jaxtyping import Float64, Int64
 
+from autoware_ml.databases.argoverse2.av2_motion_io import (
+    AV2Scenario,
+    AV2StaticMap,
+    AV2Track,
+    interp_arc,
+    load_scenario_parquet,
+    load_static_map_json,
+)
 from autoware_ml.databases.taxonomy import LabelTaxonomy
 from autoware_ml.dataclasses.batch.motion import AgentTracksSample, MapPolylinesSample
 from autoware_ml.types.motion import AgentRole, PolylineType
@@ -126,21 +128,20 @@ class AV2MotionReader:
 
         Args:
           tracks_path: Path of the ``scenario_<id>.parquet`` file.
-          map_path: Path of the ``log_map_archive_<id>.json`` file; the devkit parses the log
-            id from the file name, so the file keeps its original name. None when only the
-            tracks are read.
+          map_path: Path of the ``log_map_archive_<id>.json`` file, None when only the tracks
+            are read.
         """
 
         self.tracks_path = Path(tracks_path)
         self.map_path = Path(map_path) if map_path is not None else None
 
     @cached_property
-    def scenario(self) -> ArgoverseScenario:
+    def scenario(self) -> AV2Scenario:
         """The scenario parsed from the tracks file."""
-        return load_argoverse_scenario_parquet(self.tracks_path)
+        return load_scenario_parquet(self.tracks_path)
 
     @cached_property
-    def static_map(self) -> ArgoverseStaticMap:
+    def static_map(self) -> AV2StaticMap:
         """
         The static map parsed from the map file.
 
@@ -149,7 +150,7 @@ class AV2MotionReader:
         """
         if self.map_path is None:
             raise ValueError(f"The reader of {self.tracks_path} was given no map file.")
-        return ArgoverseStaticMap.from_json(self.map_path)
+        return load_static_map_json(self.map_path)
 
     @property
     def timestamps_ns(self) -> Int64[np.ndarray, " num_steps"]:
@@ -206,19 +207,20 @@ class AV2MotionReader:
         agent_types = np.empty(num_agents, dtype=np.int64)
         agent_roles = np.empty(num_agents, dtype=np.int64)
         for agent_index, track in enumerate(tracks):
-            agent_types[agent_index] = taxonomy.resolve_index(track.object_type.value)
-            agent_roles[agent_index] = AgentRole(track.category.value)
-            for state in track.object_states:
-                if not 0 <= state.timestep < num_steps:
-                    raise ValueError(
-                        f"Track {track.track_id} of scenario {scenario.scenario_id} has a "
-                        f"state at step {state.timestep}, outside the window of {num_steps} "
-                        "steps."
-                    )
-                positions[agent_index, state.timestep, :2] = state.position
-                headings[agent_index, state.timestep] = state.heading
-                velocities[agent_index, state.timestep] = state.velocity
-                valid[agent_index, state.timestep] = True
+            agent_types[agent_index] = taxonomy.resolve_index(track.object_type)
+            agent_roles[agent_index] = AgentRole(track.category)
+            steps = track.timesteps
+            outside = (steps < 0) | (steps >= num_steps)
+            if outside.any():
+                raise ValueError(
+                    f"Track {track.track_id} of scenario {scenario.scenario_id} has a "
+                    f"state at step {int(steps[outside][0])}, outside the window of "
+                    f"{num_steps} steps."
+                )
+            positions[agent_index, steps, :2] = track.positions
+            headings[agent_index, steps] = track.headings
+            velocities[agent_index, steps] = track.velocities
+            valid[agent_index, steps] = True
 
         return AgentTracksSample(
             positions=torch.from_numpy(positions),
@@ -287,16 +289,10 @@ class AV2MotionReader:
             is_intersection.append(intersection)
             element_ids.append(str(element_id))
 
-        for lane_id in sorted(static_map.vector_lane_segments):
-            lane = static_map.vector_lane_segments[lane_id]
-            left = _resample(
-                np.asarray(lane.left_lane_boundary.xyz, dtype=np.float64),
-                num_points_per_polyline,
-            )
-            right = _resample(
-                np.asarray(lane.right_lane_boundary.xyz, dtype=np.float64),
-                num_points_per_polyline,
-            )
+        for lane_id in sorted(static_map.lane_segments):
+            lane = static_map.lane_segments[lane_id]
+            left = _resample(lane.left_boundary, num_points_per_polyline)
+            right = _resample(lane.right_boundary, num_points_per_polyline)
             add(
                 (left + right) / 2.0,
                 PolylineType.LANE_CENTERLINE,
@@ -305,13 +301,13 @@ class AV2MotionReader:
             )
             add(left, PolylineType.LANE_LEFT_BOUNDARY, lane_id, lane.is_intersection)
             add(right, PolylineType.LANE_RIGHT_BOUNDARY, lane_id, lane.is_intersection)
-        for crossing_id in sorted(static_map.vector_pedestrian_crossings):
-            crossing = static_map.vector_pedestrian_crossings[crossing_id]
-            add(crossing.edge1.xyz, PolylineType.CROSSWALK_EDGE, crossing_id, False)
-            add(crossing.edge2.xyz, PolylineType.CROSSWALK_EDGE, crossing_id, False)
-        for area_id in sorted(static_map.vector_drivable_areas):
-            area = static_map.vector_drivable_areas[area_id]
-            add(area.xyz, PolylineType.DRIVABLE_AREA_BOUNDARY, area_id, False)
+        for crossing_id in sorted(static_map.pedestrian_crossings):
+            crossing = static_map.pedestrian_crossings[crossing_id]
+            add(crossing.edge1, PolylineType.CROSSWALK_EDGE, crossing_id, False)
+            add(crossing.edge2, PolylineType.CROSSWALK_EDGE, crossing_id, False)
+        for area_id in sorted(static_map.drivable_areas):
+            boundary = static_map.drivable_areas[area_id]
+            add(boundary, PolylineType.DRIVABLE_AREA_BOUNDARY, area_id, False)
 
         num_polylines = len(points)
         stacked = (
@@ -328,7 +324,7 @@ class AV2MotionReader:
         )
 
 
-def _focal_first(scenario: ArgoverseScenario) -> list[Track]:
+def _focal_first(scenario: AV2Scenario) -> list[AV2Track]:
     """
     Order the tracks of a scenario with the focal track first.
 
@@ -336,7 +332,7 @@ def _focal_first(scenario: ArgoverseScenario) -> list[Track]:
       scenario: The scenario.
 
     Returns:
-      list[Track]: The tracks, the focal one first and the others in file order.
+      list[AV2Track]: The tracks, the focal one first and the others in track id order.
 
     Raises:
       ValueError: If the focal track is missing or listed more than once.

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,21 +23,18 @@ from pathlib import Path
 import numpy as np
 import torch
 
-if importlib.util.find_spec("av2") is None:
-    raise unittest.SkipTest("the av2 devkit is not installed")
-
-from autoware_ml.databases.argoverse2.av2_motion_reader import (  # noqa: E402
+from autoware_ml.databases.argoverse2.av2_motion_reader import (
     AV2MotionReader,
     step_seconds_of,
 )
-from autoware_ml.databases.argoverse2.tests.av2_fixtures import (  # noqa: E402
+from autoware_ml.databases.argoverse2.tests.av2_fixtures import (
     CITY,
     FOCAL_TRACK_ID,
     av2_motion_taxonomy,
     write_scenario,
 )
-from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary  # noqa: E402
-from autoware_ml.types.motion import AgentRole, PolylineType  # noqa: E402
+from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
+from autoware_ml.types.motion import AgentRole, PolylineType
 
 
 def _tracks_file(scenario_path: Path) -> Path:

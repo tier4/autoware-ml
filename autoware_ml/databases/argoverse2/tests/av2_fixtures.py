@@ -17,8 +17,7 @@
 The builders write the two files of a scenario in the layout of the dataset,
 ``<split>/<scenario_id>/scenario_<scenario_id>.parquet`` and
 ``<split>/<scenario_id>/log_map_archive_<scenario_id>.json``, so every layer from the reader to
-the datamodule is tested against the real file formats. The ``av2`` devkit is imported inside
-the builders, so a test module can skip when it is absent.
+the datamodule is tested against the real file formats.
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import polars as pl
 
 from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
 
@@ -100,65 +100,44 @@ def write_scenario(
       Path: The scenario directory.
     """
 
-    from av2.datasets.motion_forecasting.data_schema import (  # noqa: PLC0415
-        ArgoverseScenario,
-        ObjectState,
-        ObjectType,
-        Track,
-        TrackCategory,
-    )
-    from av2.datasets.motion_forecasting.scenario_serialization import (  # noqa: PLC0415
-        serialize_argoverse_scenario_parquet,
-    )
-
     object_types = TRACK_OBJECT_TYPES if object_types is None else object_types
-    timestamps_ns = start_timestamp_ns + STEP_NS * np.arange(num_steps, dtype=np.int64)
 
-    def states(steps: Sequence[int], along_x: bool) -> list[ObjectState]:
-        return [
-            ObjectState(
-                observed=step < 50,
-                timestep=int(step),
-                position=(float(step), 0.0) if along_x else (0.0, float(step)),
-                heading=0.0 if along_x else float(np.pi / 2),
-                velocity=(10.0, 0.0) if along_x else (0.0, 10.0),
-            )
-            for step in steps
-        ]
-
+    # Track category values of the dataset: 0 fragment, 1 unscored, 2 scored, 3 focal
     schedules = {
-        FOCAL_TRACK_ID: (range(num_steps), True, TrackCategory.FOCAL_TRACK),
-        "walker": (range(0, num_steps, 2), False, TrackCategory.SCORED_TRACK),
-        "cone": ([0], True, TrackCategory.TRACK_FRAGMENT),
+        FOCAL_TRACK_ID: (range(num_steps), True, 3),
+        "walker": (range(0, num_steps, 2), False, 2),
+        "cone": ([0], True, 0),
     }
-    tracks = []
+    rows: list[dict[str, Any]] = []
     for track_id, object_type in object_types.items():
-        steps, along_x, category = schedules.get(
-            track_id, (range(num_steps), True, TrackCategory.UNSCORED_TRACK)
-        )
-        tracks.append(
-            Track(
-                track_id=track_id,
-                object_states=states(steps, along_x),
-                object_type=ObjectType(object_type),
-                category=category,
-            )
+        steps, along_x, category = schedules.get(track_id, (range(num_steps), True, 1))
+        rows.extend(
+            {
+                "observed": step < 50,
+                "track_id": track_id,
+                "object_type": object_type,
+                "object_category": category,
+                "timestep": int(step),
+                "position_x": float(step) if along_x else 0.0,
+                "position_y": 0.0 if along_x else float(step),
+                "heading": 0.0 if along_x else float(np.pi / 2),
+                "velocity_x": 10.0 if along_x else 0.0,
+                "velocity_y": 0.0 if along_x else 10.0,
+            }
+            for step in steps
         )
 
     scenario_path = split_path / scenario_id
     scenario_path.mkdir(parents=True, exist_ok=True)
-    serialize_argoverse_scenario_parquet(
-        scenario_path / f"scenario_{scenario_id}.parquet",
-        ArgoverseScenario(
-            scenario_id=scenario_id,
-            timestamps_ns=timestamps_ns,
-            tracks=tracks,
-            focal_track_id=FOCAL_TRACK_ID,
-            city_name=CITY,
-            map_id=None,
-            slice_id=None,
-        ),
-    )
+    # The dataset stores the first and the last timestamp as floats, not every timestamp
+    pl.DataFrame(rows).with_columns(
+        scenario_id=pl.lit(scenario_id),
+        start_timestamp=pl.lit(float(start_timestamp_ns)),
+        end_timestamp=pl.lit(float(start_timestamp_ns + STEP_NS * (num_steps - 1))),
+        num_timestamps=pl.lit(num_steps),
+        focal_track_id=pl.lit(FOCAL_TRACK_ID),
+        city=pl.lit(CITY),
+    ).write_parquet(scenario_path / f"scenario_{scenario_id}.parquet")
     write_map(scenario_path / f"log_map_archive_{scenario_id}.json")
     return scenario_path
 
