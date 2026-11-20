@@ -105,7 +105,8 @@ class CyclicCosineAnnealingLR(LRScheduler):
             # Decay: factor decreases from max_lr_factor (peak) to min_lr_factor
             start_factor = self.max_lr_factor
             end_factor = self.min_lr_factor
-            t_cur = self.last_epoch - self.warmup_epochs
+            # Past the decay the LR stays at its end instead of climbing back
+            t_cur = min(self.last_epoch - self.warmup_epochs, self.decay_epochs)
             t_max = self.decay_epochs
 
         lr_factor = end_factor + 0.5 * (start_factor - end_factor) * (
@@ -113,3 +114,63 @@ class CyclicCosineAnnealingLR(LRScheduler):
         )
 
         return [base_lr * lr_factor for base_lr in self.base_lrs]
+
+
+class StepCyclicCosineAnnealingLR(CyclicCosineAnnealingLR):
+    """Cyclic cosine annealing stepped every optimizer step, its warmup given in epochs.
+
+    The warmup and the decay over the remaining epochs are spread over the optimizer steps of the
+    run, so it needs a Lightning scheduler config with ``interval: step``. The framework fills
+    ``total_steps`` from the trainer.
+
+    Args:
+        optimizer: Wrapped optimizer.
+        total_steps: Optimizer steps of the whole run.
+        max_epochs: Epochs of the run, bind it to ``${trainer.max_epochs}``.
+        warmup_epochs: Epochs of the warmup phase, the decay takes the remaining ones.
+        max_lr_factor: Peak learning rate as a multiple of the base learning rate.
+        min_lr_factor: Final learning rate as a multiple of the base learning rate.
+        last_epoch: The index of the last step.
+    """
+
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        total_steps: int,
+        max_epochs: int,
+        warmup_epochs: float,
+        max_lr_factor: float = 10.0,
+        min_lr_factor: float = 1e-4,
+        last_epoch: int = -1,
+    ) -> None:
+        """Initialize the per-step cyclic cosine annealing scheduler.
+
+        Raises:
+            ValueError: If the warmup does not leave a decay inside the run, if the run has
+                fewer steps than epochs, or if the decay gets no step.
+        """
+        if not 0 <= warmup_epochs < max_epochs:
+            raise ValueError(
+                f"warmup_epochs must be in [0, max_epochs), got {warmup_epochs} with "
+                f"max_epochs={max_epochs}."
+            )
+        if total_steps < max_epochs:
+            raise ValueError(
+                f"total_steps ({total_steps}) must cover at least one step per epoch "
+                f"({max_epochs} epochs)."
+            )
+        warmup_steps = round(total_steps * warmup_epochs / max_epochs)
+        decay_steps = total_steps - warmup_steps
+        if decay_steps < 1:
+            raise ValueError(
+                f"A warmup of {warmup_epochs} of {max_epochs} epochs leaves no decay step of "
+                f"the {total_steps} steps."
+            )
+        super().__init__(
+            optimizer,
+            warmup_epochs=warmup_steps,
+            decay_epochs=decay_steps,
+            max_lr_factor=max_lr_factor,
+            min_lr_factor=min_lr_factor,
+            last_epoch=last_epoch,
+        )
