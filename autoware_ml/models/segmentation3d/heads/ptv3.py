@@ -38,6 +38,7 @@ from autoware_ml.metrics.eval_output import Segmentation3DEvalOutput
 from autoware_ml.metrics.segmentation3d.eval_output import segmentation3d_frames_eval_output
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
+    Fp32Sublayer,
     PointSequential,
     SerializedUnpooling,
     deepcopy_without_flash,
@@ -88,6 +89,8 @@ class PTv3Seg3DDecoderHead(nn.Module):
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        activation_checkpointing: bool = False,
+        fp32_sublayers: Sequence[Fp32Sublayer] = (),
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -120,6 +123,10 @@ class PTv3Seg3DDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            activation_checkpointing: Recompute the attention and MLP activations of the
+                decoder blocks in the backward pass, see the encoder ``Block``.
+            fp32_sublayers: Sublayers computed in fp32 under autocast, see the encoder
+                ``Fp32Sublayer``. Empty by default.
         """
         super().__init__()
         self.order = list(order)
@@ -177,6 +184,8 @@ class PTv3Seg3DDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        activation_checkpointing=activation_checkpointing,
+                        fp32_sublayers=fp32_sublayers,
                     ),
                     name=f"block{block_index}",
                 )
