@@ -211,36 +211,31 @@ class HungarianAssigner3D:
             .cpu()
         )
 
-        # linear_sum_assignment takes one cost matrix at a time, so loop over the batch.
-        batch_size, num_bboxes = bboxes.shape[0], bboxes.shape[1]
-        assigned_gt_inds = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
+        # linear_sum_assignment takes one cost matrix at a time, so loop over the batch. Only the
+        # real gt columns go in, so no match can point at padding.
+        valid_masks_host = valid_masks.cpu()
+        matches = []
+        for current_batch, valid_mask in enumerate(valid_masks_host):
+            valid_cols: Int64[torch.Tensor, " num_gts"] = valid_mask.nonzero().squeeze(1)
+            sample_cost: Float32[torch.Tensor, "num_bboxes max_num_gt_bboxes"] = cost[current_batch]
+            # Cheapest one-to-one pairing: proposal rows[i] matches gt column valid_cols[cols[i]].
+            rows, cols = _linear_sum_assignment(sample_cost.index_select(1, valid_cols))
+            batch = torch.full_like(rows, current_batch)
+            matches.append(torch.stack([batch, rows, valid_cols[cols]]))
+
+        # The matches of the whole batch go to the device in one copy.
+        batch_inds, row_inds, col_inds = torch.cat(matches, dim=1).to(bboxes.device)
+
+        # Every proposal starts as a negative (0). Only matched ones carry a gt index.
+        assigned_gt_inds = bboxes.new_zeros((batch_size, num_bboxes), dtype=torch.long)
         assigned_labels = bboxes.new_full((batch_size, num_bboxes), -1, dtype=torch.long)
         max_overlaps = torch.zeros(
             (batch_size, num_bboxes), device=bboxes.device, dtype=bboxes.dtype
         )
-        for current_batch in range(batch_size):
-            matched_row_inds, matched_col_inds = _linear_sum_assignment(cost[current_batch])
-            matched_row_inds = matched_row_inds.to(bboxes.device)
-            matched_col_inds = matched_col_inds.to(bboxes.device)
-
-            # Hungarian matching always fills min(num_bboxes, max_num_gt_bboxes) pairs, so it
-            # matches the padded gt columns too even though their cost is the maximum. Drop those
-            # pairs, otherwise gt_inds would point at padding and the caller's
-            # `gt_inds[gt_inds > 0] - 1` would gather padded boxes as regression targets.
-            valid_pairs = valid_masks[current_batch, matched_col_inds]
-            matched_row_inds = matched_row_inds[valid_pairs]
-            matched_col_inds = matched_col_inds[valid_pairs]
-
-            # Every proposal starts as a negative (0). Only matched ones carry a gt index.
-            assigned_gt_inds[current_batch, :] = 0
-            assigned_gt_inds[current_batch, matched_row_inds] = matched_col_inds + 1
-            assigned_labels[current_batch, matched_row_inds] = gt_labels[
-                current_batch, matched_col_inds
-            ]
-            # iou is batched, so the sample axis has to be indexed too.
-            max_overlaps[current_batch, matched_row_inds] = iou[
-                current_batch, matched_row_inds, matched_col_inds
-            ]
+        assigned_gt_inds[batch_inds, row_inds] = col_inds + 1
+        assigned_labels[batch_inds, row_inds] = gt_labels[batch_inds, col_inds]
+        # iou is batched, so the sample axis has to be indexed too.
+        max_overlaps[batch_inds, row_inds] = iou[batch_inds, row_inds, col_inds]
 
         return AssignResult(
             num_gts=num_gts,
