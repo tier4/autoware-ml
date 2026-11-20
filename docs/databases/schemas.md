@@ -34,6 +34,8 @@ class DatasetTableSchema:
     # Annotation fields
     CATEGORY_MAPPING = DatasetTableColumn("category_mapping", pl.Struct(...))
     BOXES_3D = DatasetTableColumn("boxes_3d", pl.List(pl.Struct(...)))
+    # Motion forecasting
+    MOTION = DatasetTableColumn("motion", pl.Struct(...))
 
     @classmethod
     def to_polars_schema(cls) -> pl.Schema: ...
@@ -50,6 +52,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
     lidar_sources: Sequence[LidarSourceDataModel] | None
     category_mapping: CategoryMappingDataModel | None
     boxes_3d: Sequence[Box3DDataModel] | None
+    motion: MotionDataModel | None = None
 
     def to_dictionary(self) -> Mapping[str, Any]: ...
     @classmethod
@@ -71,6 +74,7 @@ class DatasetRecord(BaseModel, DataModelInterface):
 | `lidar_sources`     | `Sequence[LidarSourceDataModel] \| None` | `List(Struct)` | Per-sensor calibration metadata for LiDAR sources  |
 | `category_mapping`  | `CategoryMappingDataModel \| None`       | `Struct`       | Mapping between category names and indices         |
 | `boxes_3d`          | `Sequence[Box3DDataModel] \| None`       | `List(Struct)` | 3D box annotations for the sample/frame            |
+| `motion`            | `MotionDataModel \| None`                | `Struct`       | Source and window of a motion forecasting scenario |
 
 ### `lidar_frames` struct fields
 
@@ -129,6 +133,7 @@ Each list entry is a `LidarSourceDataModel` describing one LiDAR sensor in the s
 | `lidar_frames.py`         | `LidarFrameDatasetSchema`      | `LidarFrameDataModel`      | Point cloud paths, poses, and sweep transforms          |
 | `lidar_sources.py`        | `LidarSourceDatasetSchema`     | `LidarSourceDataModel`     | LiDAR sensor channel name, token, and extrinsics        |
 | `category_mapping.py`     | `CategoryMappingDatasetSchema` | `CategoryMappingDataModel` | Parallel lists of category names and indices            |
+| `motion.py`               | `MotionDatasetSchema`          | `MotionDataModel`          | Source and time window of a forecasting scenario        |
 | `box3d_schemas.py`        | `Box3DDatasetSchema`           | `Box3DDataModel`           | Per-object 3D box parameters and metadata               |
 | `frame_basic_metadata.py` | —                              | `FrameBasicMetadata`       | Shared per-frame metadata used during record generation |
 
@@ -147,6 +152,23 @@ Each list entry is a `Box3DDataModel` with the following struct fields:
 | `box3d_valid`                 | `Boolean`               | Validity flag for this annotation                                                |
 | `box3d_attributes`            | `List(String)`          | Attribute tags associated with this box                                          |
 | `box3d_coordinate`            | `String`                | Coordinate frame identifier for the box representation                           |
+
+### `motion` struct fields
+
+One record per motion forecasting sample. The tracks and the map are not stored in the struct; they are read at sample time, the way point clouds are loaded. A scenario dataset such as Argoverse 2 names its tracks and map files relative to the database root, a recording dataset such as T4Dataset leaves the paths null and serves the boxes of the frame records of the window as tracks. The column is null for the records of a perception database.
+
+| Field                  | Polars type | Description                                                                                         |
+| ---------------------- | ----------- | --------------------------------------------------------------------------------------------------- |
+| `dataset_format`       | `String`    | `DatasetFormat` value naming the dataset family, which fixes the reader and which fields are set    |
+| `tracks_relative_path` | `String`    | Agent tracks file of the scenario, null for a recording dataset whose tracks are its frame records  |
+| `map_relative_path`    | `String`    | Vector map file of the scenario, null for a recording dataset whose map comes from the map provider |
+| `scenario_key`         | `String`    | Key of the scenario inside a container file of several scenarios, null when it has its own files    |
+| `focal_track_id`       | `String`    | Identifier of the focal agent, null when the scenario has none                                      |
+| `first_step_index`     | `Int32`     | Index of the first step of the window inside the source, 0 when the source is the window            |
+| `current_step_index`   | `Int32`     | Index of the current step; steps up to it are observed, steps after it are the future               |
+| `num_steps`            | `Int32`     | Number of steps in the window                                                                       |
+| `step_seconds`         | `Float64`   | Period between two steps in seconds                                                                 |
+| `num_tracks`           | `Int32`     | Number of agent tracks in the window                                                                |
 
 Each nested module follows the same pattern: a `*DatasetSchema` class defines the Polars struct layout, and a matching `*DataModel` Pydantic class implements `DataModelInterface` for serialization. `DatasetRecord.to_dictionary()` delegates to these nested models when writing Parquet; `DatasetRecord.load_from_dictionary()` reconstructs them when reading back.
 
@@ -171,4 +193,5 @@ See [T4Dataset](t4dataset.md) for a concrete example of how these schemas are po
 | `autoware_ml/databases/schemas/lidar_sources.py`        | LiDAR source struct schema and data model                     |
 | `autoware_ml/databases/schemas/category_mapping.py`     | Category mapping struct schema and data model                 |
 | `autoware_ml/databases/schemas/box3d_schemas.py`        | 3D box struct schema and data model                           |
+| `autoware_ml/databases/schemas/motion.py`               | Motion struct schema and data model                           |
 | `autoware_ml/databases/schemas/frame_basic_metadata.py` | Shared per-frame metadata model                               |

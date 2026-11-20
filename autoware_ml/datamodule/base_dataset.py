@@ -53,6 +53,45 @@ class PaddingSlot(int):
         return f"PaddingSlot({int(self)})"
 
 
+class StreamSlot(int):
+    """Sample index of a frame of a stream, with the seed its stream is augmented by.
+
+    The streaming sampler hands every frame of a stream the same seed, and a dataset makes
+    its pipeline draw the augmentation of the stream from it before it transforms the frame,
+    so the frames a temporal model reads one after another are rotated, scaled and flipped
+    alike in every dataloader worker. As an ``int`` with one attribute, the index passes
+    through the dataloader workers unchanged.
+
+    Attributes:
+        stream_seed: Integers naming the stream, see
+            ``TransformsCompose.__call__``.
+    """
+
+    stream_seed: tuple[int, ...]
+
+    def __new__(cls, index: int, stream_seed: Sequence[int]) -> "StreamSlot":
+        """Create the index of a frame with the seed of its stream."""
+        slot = super().__new__(cls, index)
+        slot.stream_seed = tuple(stream_seed)
+        return slot
+
+    def __reduce__(self) -> tuple[type, tuple[int, tuple[int, ...]]]:
+        """Pickle the index together with its seed, a plain ``int`` would drop it."""
+        return type(self), (int(self), self.stream_seed)
+
+    def at(self, index: int) -> StreamSlot:
+        """The same slot on another index, for a dataset serving it from one of its sources."""
+        return type(self)(index, self.stream_seed)
+
+    def __repr__(self) -> str:
+        """Show the index with the seed of its stream."""
+        return f"{type(self).__name__}({int(self)}, stream_seed={self.stream_seed})"
+
+
+class StreamPaddingSlot(StreamSlot, PaddingSlot):
+    """Padding slot of a stream, it repeats the last frame under the augmentation of the stream."""
+
+
 class BaseDataset(Dataset):
     """Dataset interface every database specific dataset implements.
 
@@ -209,7 +248,8 @@ class BaseDataset(Dataset):
         """Load and transform one dataset sample.
 
         Args:
-            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane.
+            index: Sample index, a ``PaddingSlot`` for a padding slot of a streaming lane. A
+                ``StreamSlot`` is augmented as the other frames of its stream.
 
         Returns:
             Transformed ModelGTSample instance, stamped with its loading time and whether it
@@ -217,7 +257,8 @@ class BaseDataset(Dataset):
         """
         start_time = time.perf_counter()
         model_gt_sample = self.get_data_sample(int(index))
-        transformed_gt_sample = self.apply_transforms(model_gt_sample)
+        stream_seed = index.stream_seed if isinstance(index, StreamSlot) else None
+        transformed_gt_sample = self.apply_transforms(model_gt_sample, stream_seed)
         return transformed_gt_sample._replace(
             io_processing_time=time.perf_counter() - start_time,
             is_padding=isinstance(index, PaddingSlot),
@@ -234,18 +275,22 @@ class BaseDataset(Dataset):
             ModelGTSample instance consumed by the transform pipeline.
         """
 
-    def apply_transforms(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+    def apply_transforms(
+        self, model_gt_sample: ModelGTSample, stream_seed: Sequence[int] | None = None
+    ) -> ModelGTSample:
         """Apply the transform pipeline of the dataset to a metadata sample.
 
         Args:
             model_gt_sample: ModelGTSample instance.
+            stream_seed: Integers naming the stream of the sample, which is then augmented as
+                the other frames of the stream. None for a sample augmented on its own.
 
         Returns:
             Transformed ModelGTSample instance.
         """
         if self.transforms is None:
             return model_gt_sample
-        return self.transforms(model_gt_sample)
+        return self.transforms(model_gt_sample, stream_seed=stream_seed)
 
     def collate_fn(self, batch: Sequence[ModelGTSample]) -> ModelGTBatch:
         """
@@ -374,7 +419,9 @@ class ConcatDataset(Dataset):
             Transformed ModelGTSample instance, flagged as padding for a padding slot.
         """
         source_index, sample_index = self.locate(index)
-        if isinstance(index, PaddingSlot):
+        if isinstance(index, StreamSlot):
+            sample_index = index.at(sample_index)
+        elif isinstance(index, PaddingSlot):
             sample_index = PaddingSlot(sample_index)
         return self.datasets[source_index][sample_index]
 

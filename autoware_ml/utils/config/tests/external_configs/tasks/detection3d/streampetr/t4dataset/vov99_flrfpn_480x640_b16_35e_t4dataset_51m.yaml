@@ -1,0 +1,34 @@
+# @package _global_
+# Stage 3 of docs/models/streampetr.md, the j6gen2 fine-tune, as the test config root keeps it:
+# 4 GPUs x batch 16 (total batch 64) at lr 4e-4; rescale both learning rates by N/64.
+defaults:
+  - base_51m
+  - /database@database: t4dataset/t4dataset_base
+  - override /database/t4dataset/taxonomy/detection3d@taxonomy.detection3d: default_dynamic
+  - override /ego@ego: default_t4dataset
+  - _self_
+
+batch_size: 16
+num_workers: 8
+experiment_group_name: streampetr/${database.version}/t4dataset
+experiment_name: vov99_flrfpn_480x640_b16_35e_t4dataset_51m
+
+# Initialize from the stage-2 checkpoint (--weights), the T4 gen base leaf.
+weights: ???
+
+trainer:
+  devices: 4
+  max_epochs: 35
+
+optimizer:
+  lr: 4.0e-4
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 35-epoch schedule.
+    epoch_intervals: [[0, 5], [25, 1]]
+
+model:
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 4.0e-5

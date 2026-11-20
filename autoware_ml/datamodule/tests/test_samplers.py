@@ -352,7 +352,11 @@ def test_lanes_stay_scene_contiguous_across_batches() -> None:
     Check: the indices alternate between the two lanes, each lane in frame order.
     """
     sampler = GroupStreamingSampler(
-        _FakeScenesDataset([10, 5, 5]), batch_size=2, shuffle=False, seed=0
+        _FakeScenesDataset([10, 5, 5]),
+        batch_size=2,
+        shuffle=False,
+        seed=0,
+        consistent_augmentation=False,
     )
     expected = [index for pair in zip(range(0, 10), range(10, 20)) for index in pair]
     assert list(sampler) == expected
@@ -367,7 +371,9 @@ def test_set_epoch_reshuffles_deterministically() -> None:
     dataset = _FakeScenesDataset([4] * 8)
 
     def epoch_indices(epoch: int) -> list[int]:
-        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True, seed=0)
+        sampler = GroupStreamingSampler(
+            dataset, batch_size=2, shuffle=True, seed=0, consistent_augmentation=False
+        )
         sampler.set_epoch(epoch)
         return list(sampler)
 
@@ -383,7 +389,13 @@ def test_raises_when_lanes_cannot_be_filled() -> None:
     Check: building the sampler raises a ValueError naming the lanes it cannot fill.
     """
     with pytest.raises(ValueError, match="cannot fill"):
-        GroupStreamingSampler(_FakeScenesDataset([1]), batch_size=2, shuffle=False, seed=0)
+        GroupStreamingSampler(
+            _FakeScenesDataset([1]),
+            batch_size=2,
+            shuffle=False,
+            seed=0,
+            consistent_augmentation=False,
+        )
 
 
 def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
@@ -394,7 +406,13 @@ def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
     split as the only rank.
     Check: its type, its number of replicas and its rank.
     """
-    sampler = GroupStreamingSampler(_FakeScenesDataset([4, 4]), batch_size=2, shuffle=False, seed=0)
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([4, 4]),
+        batch_size=2,
+        shuffle=False,
+        seed=0,
+        consistent_augmentation=False,
+    )
     assert isinstance(sampler, DistributedSampler)
     assert (sampler.num_replicas, sampler.rank) == (1, 0)
 
@@ -405,7 +423,13 @@ def _ranks(
     """The sampler of every rank of a ``world_size``-rank job, built as every rank would."""
     samplers = []
     for rank in range(world_size):
-        sampler = GroupStreamingSampler(dataset, batch_size=batch_size, shuffle=shuffle, seed=seed)
+        sampler = GroupStreamingSampler(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            consistent_augmentation=False,
+        )
         sampler.num_replicas = world_size
         sampler.rank = rank
         samplers.append(sampler)
@@ -430,7 +454,9 @@ class TestFixedLengthTrainingEpochs:
         Check: the length and the number of indices yielded every epoch.
         """
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
-        sampler = GroupStreamingSampler(dataset, batch_size=2, shuffle=True, seed=0)
+        sampler = GroupStreamingSampler(
+            dataset, batch_size=2, shuffle=True, seed=0, consistent_augmentation=False
+        )
 
         lengths = []
         for epoch in range(6):
@@ -451,7 +477,9 @@ class TestFixedLengthTrainingEpochs:
         Check: every pair of consecutive frames of every lane.
         """
         dataset = _FakeScenesDataset([7, 5, 18, 3, 8, 9])
-        sampler = GroupStreamingSampler(dataset, batch_size=3, shuffle=True, seed=0)
+        sampler = GroupStreamingSampler(
+            dataset, batch_size=3, shuffle=True, seed=0, consistent_augmentation=False
+        )
 
         for epoch in range(4):
             sampler.set_epoch(epoch)
@@ -475,7 +503,9 @@ class TestEvaluationServesEveryFrame:
         Check: the indices are every frame, in order.
         """
         dataset = _FakeScenesDataset([7, 5, 18])
-        sampler = GroupStreamingSampler(dataset, batch_size=1, shuffle=False, seed=0)
+        sampler = GroupStreamingSampler(
+            dataset, batch_size=1, shuffle=False, seed=0, consistent_augmentation=False
+        )
 
         assert list(iter(sampler)) == list(range(dataset.total))
 
@@ -488,7 +518,11 @@ class TestEvaluationServesEveryFrame:
         Check: the frames of each lane and which of them is a padding slot.
         """
         sampler = GroupStreamingSampler(
-            _FakeScenesDataset([9]), batch_size=2, shuffle=False, seed=0
+            _FakeScenesDataset([9]),
+            batch_size=2,
+            shuffle=False,
+            seed=0,
+            consistent_augmentation=False,
         )
 
         lanes = _lanes(sampler)
