@@ -29,8 +29,9 @@ from autoware_ml.datamodule.samplers import (
     FrameSamplingConfig,
     compute_frame_sampling_weights,
 )
-from autoware_ml.datamodule.sources import DatasetSource
+from autoware_ml.datamodule.sources import DatasetSource, split_database_records
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
+from autoware_ml.datamodule.training_split import TrainingSplit
 from autoware_ml.types.dataset import SplitType
 
 logger = logging.getLogger(__name__)
@@ -267,9 +268,8 @@ class DataModule(L.LightningDataModule):
                 database = source.database
                 if database.database_hash not in split_records:
                     logger.info(f"Splitting the records of database {database.version}...")
-                    split_records[database.database_hash] = self.splitter.split_by_polars_dataframe(
-                        dataset_records_dataframe=database.load_polars_scenario_dataframe(),
-                        scenarios=database.scenarios,
+                    split_records[database.database_hash] = split_database_records(
+                        database, self.splitter
                     )
                 records = split_records[database.database_hash][_RECORD_SPLIT[split]]
                 record_counts[name] = len(records)
@@ -296,6 +296,20 @@ class DataModule(L.LightningDataModule):
                 )
             self.datasets[split] = ConcatDataset(datasets=datasets, repeats=repeats)
             logger.info(f"Split {split} serves {len(self.datasets[split])} samples.")
+
+    def training_split(self) -> TrainingSplit:
+        """
+        Box supervised training sources, the data the anchor recipes of a model read.
+
+        Returns:
+          TrainingSplit: The sources and the splitter of their records.
+        """
+        sources = [
+            source
+            for source in self.split_sources(SplitType.TRAIN).values()
+            if source.train_dataset.det3d_supervised
+        ]
+        return TrainingSplit(sources, self.splitter)
 
     def prepare_data(self) -> None:
         """

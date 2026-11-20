@@ -146,20 +146,7 @@ class MyModel(ModuleBaseModel):
    with the `data_preprocessor` of the config as a keyword argument, so forward `**kwargs` to
    the base class.
 
-8. **Use hooks when needed** - If your model needs custom batch size inference,
-   prediction formatting, or an explicit deployment wrapper, override the
-   appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
-   deployment flow. A temporal model that carries a memory across batches sets the
-   `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a
-   trainer whose datamodule is not a `StreamingDataModule`
-   (`autoware_ml.datamodule.streaming_data_module`), the datamodule that serves the frames
-   of every scene in time order to each batch position. The plain `DataModule` and bare
-   dataloaders give no such order. The model config composes
-   `/datamodule/streaming@datamodule: default_streaming_datamodule` after its database
-   datamodule to get one. Models that override an epoch-start hook
-   (`on_train_epoch_start`, `on_validation_epoch_start`, `on_test_epoch_start`,
-   `on_predict_epoch_start`) call `super()` first; the validation and test hooks of the base
-   model reset the metric suites.
+8. **Use hooks when needed** - If your model needs custom batch size inference, prediction formatting, or an explicit deployment wrapper, override the appropriate `ModuleBaseModel` hook instead of bypassing the shared training and deployment flow. A temporal model that carries a memory across batches sets the `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a trainer whose datamodule is not a `StreamingDataModule` (`autoware_ml.datamodule.streaming_data_module`), the datamodule that serves the frames of every scene in time order to each batch position. The plain `DataModule` and bare dataloaders give no such order. The model config composes `/datamodule/streaming@datamodule: default_streaming_datamodule` after its database datamodule to get one. Models that override an epoch-start hook (`on_train_epoch_start`, `on_validation_epoch_start`, `on_test_epoch_start`, `on_predict_epoch_start`) call `super()` first; the validation and test hooks of the base model reset the metric suites. A head that starts from anchors derived from the training split, such as k-means anchors of the training boxes, keeps them in a `DataAnchored` module (`autoware_ml.models.anchored`) with an `AnchorRecipe` (`autoware_ml.anchors.base`). `ModuleBaseModel.prepare_data()` builds the anchors every such module lacks into `anchors/` of the cache directory, keyed by the recipe, the splitter and the training data like the record tables, and `configure_model()` fills them on every rank. The anchors are state of the module, so weights and checkpoints carry them. The module names them in `anchor_names`, and weights holding only part of them and their `anchors_ready` flag fail to load.
 
 ## Step 2: Choose the Data
 

@@ -16,21 +16,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import lightning as L
+import numpy as np
 import pytest
 import torch
+from jaxtyping import Float, Float32
 
+from autoware_ml.anchors.base import AnchorRecipe
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.models.anchored import DataAnchored, anchor_tensor
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.types.dataset import SplitType
+from autoware_ml.utils.checkpoints import load_matching_weights
 
 
 class _PointSumModel(ModuleBaseModel):
@@ -221,3 +227,164 @@ def test_setup_ignores_the_datamodule_for_a_model_without_memory() -> None:
     _attach_trainer(model, None)
 
     model.setup("fit")
+
+
+class _Offsets(DataAnchored):
+    """Module holding three data-derived offsets."""
+
+    anchor_names = ("offsets",)
+
+    def __init__(self, anchor_recipe: AnchorRecipe) -> None:
+        super().__init__(anchor_recipe)
+        self.register_buffer("offsets", torch.zeros(3))
+
+    def load_anchors(self, arrays: Mapping[str, Float32[np.ndarray, "..."]]) -> None:
+        self.offsets.copy_(anchor_tensor(arrays, "anchors", (3,)))
+
+
+class _OffsetsRecipe(AnchorRecipe):
+    """Recipe of the offsets that counts its builds."""
+
+    name = "offsets"
+    task_types = ()
+
+    def __init__(self, cache_path: str) -> None:
+        super().__init__(cache_path)
+        self.builds = 0
+
+    def hash_repr(self) -> str:
+        return "_OffsetsRecipe()"
+
+    def build(self, split: Any) -> dict[str, Float[np.ndarray, "..."]]:
+        self.builds += 1
+        return {"anchors": np.arange(3.0)}
+
+
+class _AnchoredModel(_PointSumModel):
+    """A model with one module whose anchors come from the training split."""
+
+    def __init__(self, cache_path: str) -> None:
+        super().__init__()
+        self.offsets = _Offsets(_OffsetsRecipe(cache_path))
+
+
+def _attach_split(model: ModuleBaseModel) -> None:
+    """Attach a stand-in trainer whose DataModule serves a fixed training split."""
+    datamodule = _without_sources(DataModule)
+    datamodule.training_split = lambda: SimpleNamespace(
+        splitter="splitter", fingerprint=lambda task_types: "db"
+    )
+    _attach_trainer(model, datamodule)
+
+
+def test_a_model_trained_from_scratch_builds_its_anchors_once_and_fills_them(tmp_path) -> None:
+    """
+    Input: a model whose module lacks anchors, prepared and configured twice like two runs.
+    Expected: the first preparation builds the anchors into the cache, every configuration
+      fills the module from there, a filled module needs nothing more.
+    Check: one build, the offsets of the recipe, the module marked ready.
+    """
+    first, second = _AnchoredModel(str(tmp_path)), _AnchoredModel(str(tmp_path))
+    for model in (first, second):
+        _attach_split(model)
+        model.prepare_data()
+        model.configure_model()
+        model.configure_model()
+
+    assert first.offsets.anchor_recipe.builds == 1
+    assert second.offsets.anchor_recipe.builds == 0
+    torch.testing.assert_close(second.offsets.offsets, torch.arange(3.0))
+    assert bool(second.offsets.anchors_ready)
+
+
+def test_a_model_from_weights_reads_no_anchor_cache(tmp_path) -> None:
+    """
+    Input: a model whose module took its anchors from the weights of another one.
+    Expected: preparation and configuration leave the anchors alone and need no datamodule.
+    Check: no build, no cache file, the weights' offsets kept.
+    """
+    trained = _AnchoredModel(str(tmp_path))
+    trained.offsets.initialize_anchors({"anchors": np.full(3, 7.0)})
+    model = _AnchoredModel(str(tmp_path))
+    model.load_state_dict(trained.state_dict())
+    _attach_trainer(model, None)
+
+    model.prepare_data()
+    model.configure_model()
+
+    assert model.offsets.anchor_recipe.builds == 0
+    assert not list(tmp_path.iterdir())
+    torch.testing.assert_close(model.offsets.offsets, torch.full((3,), 7.0))
+
+
+@pytest.mark.parametrize("left_out", ["offsets.offsets", "offsets.anchors_ready"])
+def test_the_anchors_and_their_ready_flag_load_together(tmp_path, left_out: str) -> None:
+    """
+    Input: the weights of an anchored model without its anchors, or without their ready flag.
+    Expected: the flag would vouch for anchors that did not load, or loaded anchors would be
+      rebuilt from the cache, so the load is refused.
+    Check: ValueError naming the missing key.
+    """
+    trained = _AnchoredModel(str(tmp_path))
+    trained.offsets.initialize_anchors({"anchors": np.full(3, 7.0)})
+    weights = {key: value for key, value in trained.state_dict().items() if key != left_out}
+
+    with pytest.raises(ValueError, match=left_out):
+        _AnchoredModel(str(tmp_path)).load_state_dict(weights, strict=False)
+
+
+def test_weights_with_all_or_none_of_the_anchor_state_load(tmp_path) -> None:
+    """
+    Input: the full weights of an anchored model, and its weights without the anchored module.
+    Expected: both load, the first with ready anchors, the second leaves the anchors pending.
+    Check: the ready flags and the offsets.
+    """
+    trained = _AnchoredModel(str(tmp_path))
+    trained.offsets.initialize_anchors({"anchors": np.full(3, 7.0)})
+    full, headless = _AnchoredModel(str(tmp_path)), _AnchoredModel(str(tmp_path))
+
+    full.load_state_dict(trained.state_dict())
+    headless.load_state_dict({"scale": trained.scale.detach()}, strict=False)
+
+    assert bool(full.offsets.anchors_ready)
+    torch.testing.assert_close(full.offsets.offsets, torch.full((3,), 7.0))
+    assert not bool(headless.offsets.anchors_ready)
+
+
+def test_anchors_skipped_for_their_shape_refuse_the_load(tmp_path) -> None:
+    """
+    Input: weights whose ready anchors have another shape, loaded skipping mismatched shapes.
+    Expected: the skip drops the anchors but keeps their ready flag, so the load is refused.
+    Check: ValueError naming the anchors.
+    """
+    weights = _AnchoredModel(str(tmp_path)).state_dict()
+    weights["offsets.offsets"] = torch.zeros(4)
+    weights["offsets.anchors_ready"] = torch.tensor(True)
+    path = tmp_path / "weights.ckpt"
+    torch.save({"state_dict": weights}, path)
+
+    with pytest.raises(ValueError, match="offsets.offsets"):
+        load_matching_weights(_AnchoredModel(str(tmp_path)), path, skip_mismatched_shapes=True)
+
+
+def test_a_model_without_a_datamodule_cannot_build_its_anchors(tmp_path) -> None:
+    """
+    Input: a model whose module lacks anchors, prepared by a trainer without a DataModule.
+    Expected: ValueError naming the missing DataModule, the anchors need the training split.
+    """
+    model = _AnchoredModel(str(tmp_path))
+    _attach_trainer(model, None)
+
+    with pytest.raises(ValueError, match="needs a DataModule, got NoneType"):
+        model.prepare_data()
+
+
+def test_an_anchor_array_of_another_shape_is_refused() -> None:
+    """
+    Input: a recipe array of four values for a module expecting three.
+    Expected: ValueError naming both shapes.
+    """
+    with pytest.raises(
+        ValueError, match=r"anchors have the shape \(4,\), the module expects \(3,\)"
+    ):
+        anchor_tensor({"anchors": np.zeros(4, dtype=np.float32)}, "anchors", (3,))
