@@ -84,18 +84,21 @@ class PillarFeatureNet(nn.Module):
             )
         self.pfn_layers = nn.ModuleList(pfn_layers)
 
-    def encode(
+    def decorate_pillars(
         self,
         voxels_data: VoxelsData,
-    ) -> Float32[torch.Tensor, "num_pillars num_output_channels"]:
-        """Build PointPillars decorated point features.
+    ) -> Float32[torch.Tensor, "num_pillars max_num_points feature_channels"]:
+        """Decorate the points of every pillar with their cluster and center offsets.
+
+        No learned parameters: this is the preprocessing the deployed runtime does before
+        the exported PFN graph, which :meth:`encode_decorated` runs.
 
         Args:
             voxels_data: VoxelsData object containing padded voxel tensor,
                 number of points, voxel coordinates, and batch indices.
 
         Returns:
-            Encoded pillar feature tensor.
+            The decorated points of every pillar, zero beyond ``num_points``.
         """
         features = [voxels_data.voxels]
         voxels = voxels_data.voxels
@@ -144,10 +147,10 @@ class PillarFeatureNet(nn.Module):
         """Run the PFN layers over already-decorated pillar features.
 
         The singleton point dimension produced by the last PFN layer is kept so
-        deployment can export this stage with the runtime pillar-feature ABI.
+        deployment can export this graph with the runtime pillar-feature ABI.
 
         Args:
-            input_features: Decorated pillar features produced by :meth:`encode`.
+            input_features: Decorated pillar features produced by :meth:`decorate_pillars`.
 
         Returns:
             Per-pillar feature tensor with the singleton point dimension kept.
@@ -170,4 +173,4 @@ class PillarFeatureNet(nn.Module):
         Returns:
             Encoded pillar feature tensor after sequence of PFN layers.
         """
-        return self.encode_decorated(self.encode(voxels_data)).squeeze(1)
+        return self.encode_decorated(self.decorate_pillars(voxels_data)).squeeze(1)

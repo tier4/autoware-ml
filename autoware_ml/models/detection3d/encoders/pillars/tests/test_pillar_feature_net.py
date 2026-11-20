@@ -36,8 +36,8 @@ class TestPillarFeatureNet(unittest.TestCase):
             point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
         ).to(self.device)
 
-    def test_encode(self) -> None:
-        """Test the decorate function of PillarFeatureNet."""
+    def test_decorate_pillars(self) -> None:
+        """Test that decorate_pillars appends the cluster and center offsets of every point."""
         voxels_data = VoxelsData(
             voxels=torch.tensor(
                 [[[1.25, 0.9, -0.5, 7.0, 0.05]]], dtype=torch.float32, device=self.device
@@ -48,7 +48,7 @@ class TestPillarFeatureNet(unittest.TestCase):
             point_voxel_indices=torch.zeros((0,), dtype=torch.int64),
             num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
-        features = self.pts_voxel_encoder.encode(
+        features = self.pts_voxel_encoder.decorate_pillars(
             voxels_data=voxels_data,
         )
 

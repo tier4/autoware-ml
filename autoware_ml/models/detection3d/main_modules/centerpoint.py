@@ -265,7 +265,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             )
 
         with torch.no_grad():
-            input_features = self.pts_voxel_encoder.encode(voxels_data)
+            input_features = self.pts_voxel_encoder.decorate_pillars(voxels_data)
             pillar_features = self.pts_voxel_encoder.encode_decorated(input_features).squeeze(1)
             # Sized by the batch, as in forward(): the voxel batch indices miss a sample
             # without voxels.
