@@ -143,6 +143,7 @@ class TestTransFusionHead(unittest.TestCase):
         nms_group_configs: Sequence[NMSGroupConfig] | None = None,
         post_center_range: Sequence[float] | None = None,
         use_bf16_cross_attention: bool = False,
+        fuse_export_attention: bool = False,
         iou_loss: torch.nn.Module | None = None,
     ) -> TransFusionHead:
         """
@@ -201,6 +202,7 @@ class TestTransFusionHead(unittest.TestCase):
             nms_group_configs=nms_group_configs,
             use_velocity=use_velocity,
             use_bf16_cross_attention=use_bf16_cross_attention,
+            fuse_export_attention=fuse_export_attention,
             iou_loss=iou_loss,
         ).to(self.device)
 
@@ -844,6 +846,27 @@ class TestTransFusionHead(unittest.TestCase):
         self.assertAlmostEqual(float(suppressed[0, 1, 5, 6]), 0.4, places=5)
         # The setUp head names no pooling class, so nothing is suppressed at all.
         self.assertTrue(torch.equal(untouched, heatmaps))
+
+    def test_fused_export_attention_drops_the_max_subtraction_without_bf16(self) -> None:
+        """Test that ``fuse_export_attention`` drops the max-subtraction and adds no bf16 casts."""
+        transfusion_head = self._build_transfusion_head(
+            fuse_export_attention=True
+        ).prepare_for_export()
+        self_attention = transfusion_head.decoder[0].self_attn
+        cross_attention = transfusion_head.decoder[0].cross_attn
+
+        self.assertIsNone(transfusion_head.required_onnx_precision)
+        self.assertTrue(self_attention.fuse_attention)
+        self.assertTrue(cross_attention.fuse_attention)
+        self.assertFalse(cross_attention.use_bf16)
+
+        with tempfile.TemporaryDirectory() as export_dir:
+            model = self._export_attention(
+                cross_attention, Path(export_dir) / "cross_attention.onnx"
+            )
+        self.assertFalse(
+            any(node.op_type in {"ReduceMax", "Sub", "Cast"} for node in model.graph.node)
+        )
 
     def test_get_targets_populates_labels_and_boxes(self) -> None:
         """Test that get_targets returns targets shaped for every decoder layer's queries."""
