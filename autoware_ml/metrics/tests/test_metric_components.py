@@ -257,3 +257,37 @@ def test_suite_gates_metrics_by_configured_stages() -> None:
     test = suite.result(EvalStage.TEST)
     assert MetricKey(name="mAP") in test.metric_names()
     assert MetricKey(name="mATE_default") in test.metric_names()
+
+
+def test_detection_suite_samples_do_not_share_memory_with_the_state() -> None:
+    # On the CPU .cpu() returns the cached tensor itself, so the whole-scene sample used to
+    # alias the state and an in-place edit leaked into every bucket built after it.
+    suite = Detection3DMetricSuite(
+        components=[MeanAP(stages=["test"])], class_names=("car",), ranges=()
+    )
+    boxes = torch.tensor([[10.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
+    suite.update(
+        detection_eval_output(
+            [
+                detection_frame(
+                    predictions=prediction(boxes, torch.tensor([0.9]), torch.tensor([0])),
+                    gt_boxes=boxes,
+                    gt_labels=torch.tensor([0]),
+                )
+            ]
+        )
+    )
+
+    sample = suite.state_for(None).samples[0]
+    sample.pred_boxes.fill_(-1.0)
+    sample.pred_scores.fill_(-1.0)
+    sample.pred_labels.fill_(7)
+    sample.gt_boxes.fill_(-1.0)
+    sample.gt_labels.fill_(7)
+
+    fresh = suite.state_for(None).samples[0]
+    assert torch.equal(fresh.pred_boxes, boxes)
+    assert fresh.pred_scores.tolist() == pytest.approx([0.9])
+    assert fresh.pred_labels.tolist() == [0]
+    assert torch.equal(fresh.gt_boxes, boxes)
+    assert fresh.gt_labels.tolist() == [0]

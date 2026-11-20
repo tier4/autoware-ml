@@ -471,13 +471,15 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 continue
             if column is not None and not bool(self.region_available[index][column]):
                 continue
-            pred_boxes = self.pred_boxes[index].cpu()
-            pred_scores = self.pred_scores[index].cpu()
-            pred_labels = self.pred_labels[index].cpu()
-            gt_boxes = self.gt_boxes[index].cpu()
-            gt_labels = self.gt_labels[index].cpu()
-            gt_ttc = self.gt_ttc[index].cpu() if self.collision is not None else None
-            pred_ttc = self.pred_ttc[index].cpu() if self.collision is not None else None
+            # .cpu() returns the cached tensor itself on a CPU state, so clone: an in-place edit
+            # of one bucket's sample must not leak into the buckets built after it.
+            pred_boxes = self.pred_boxes[index].cpu().clone()
+            pred_scores = self.pred_scores[index].cpu().clone()
+            pred_labels = self.pred_labels[index].cpu().clone()
+            gt_boxes = self.gt_boxes[index].cpu().clone()
+            gt_labels = self.gt_labels[index].cpu().clone()
+            gt_ttc = self.gt_ttc[index].cpu().clone() if self.collision is not None else None
+            pred_ttc = self.pred_ttc[index].cpu().clone() if self.collision is not None else None
             ttc_covered = (
                 bool(self.ttc_covered[index].item()) if self.collision is not None else True
             )
