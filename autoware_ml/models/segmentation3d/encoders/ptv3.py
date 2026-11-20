@@ -763,6 +763,39 @@ class MLP(nn.Module):
         return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
+class Cpe(PointSequential):
+    """Encode point positions conditioned on their sparse neighbourhood.
+
+    PTv3's conditional positional encoding applies a 3x3x3 submanifold convolution,
+    a linear projection, and layer normalization to the block input.
+    """
+
+    def __init__(self, channels: int, indice_key: str) -> None:
+        """Initialize the positional encoding.
+
+        Args:
+            channels: Input and output feature dimension.
+            indice_key: Sparse convolution indice key for the submanifold convolution.
+        """
+        super().__init__(
+            SubMConv3d(channels, channels, kernel_size=3, bias=True, indice_key=indice_key),
+            nn.Linear(channels, channels),
+            nn.LayerNorm(channels),
+        )
+
+    @torch.no_grad()
+    def fold_bias(self) -> None:
+        """Fold the bias of the convolution into the linear layer after it.
+
+        ``Linear(W, b)(conv(x) + c)`` equals ``Linear(W, b + W c)(conv(x))``, so the convolution
+        runs without a bias. Meant for an export copy, the parameters change in place.
+        """
+        conv, linear, _ = self.children()
+        bias = linear.bias.double() + linear.weight.double() @ conv.bias.double()
+        linear.bias.copy_(bias.to(linear.bias.dtype))
+        conv.bias = None
+
+
 class Block(PointModule):
     """Compose positional encoding, attention, and MLP for one PTv3 block.
 
@@ -832,11 +865,7 @@ class Block(PointModule):
         self.enable_attn = bool(enable_attn)
 
         if self.enable_conv:
-            self.cpe = PointSequential(
-                SubMConv3d(channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key),
-                nn.Linear(channels, channels),
-                nn.LayerNorm(channels),
-            )
+            self.cpe = Cpe(channels, cpe_indice_key)
             self.norm0 = None
         else:
             # No convolution to inject position, so the block normalizes on
@@ -869,20 +898,6 @@ class Block(PointModule):
             self.norm2 = None
             self.mlp = None
         self.drop_path = PointSequential(DropPath(drop_path) if drop_path > 0 else nn.Identity())
-
-    @torch.no_grad()
-    def fold_cpe_bias(self) -> None:
-        """Fold the bias of the positional-encoding convolution into the linear layer after it.
-
-        ``Linear(W, b)(conv(x) + c)`` equals ``Linear(W, b + W c)(conv(x))``, so the convolution
-        runs without a bias. Meant for an export copy, the parameters change in place.
-        """
-        if self.cpe is None:
-            return
-        conv, linear, _ = self.cpe.children()
-        bias = linear.bias.double() + linear.weight.double() @ conv.bias.double()
-        linear.bias.copy_(bias.to(linear.bias.dtype))
-        conv.bias = None
 
     def forward(self, point: Point) -> Point:
         """Apply convolutional positional encoding, attention, and MLP.
@@ -1195,8 +1210,8 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
     """Switch a PTv3 point-module hierarchy into export mode in place.
 
     Args:
-        module: Module hierarchy whose attention, pooling, sparse-conv, and block
-            children are reconfigured for ONNX export.
+        module: Module hierarchy whose attention, pooling, sparse-conv, and
+            positional-encoding children are reconfigured for ONNX export.
     """
     replace_submconv3d_for_export(module)
     pooling_stage_index = 0
@@ -1210,8 +1225,8 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
             pooling_stage_index += 1
         if hasattr(child, "shuffle_orders"):
             child.shuffle_orders = False
-        if isinstance(child, Block):
-            child.fold_cpe_bias()
+        if isinstance(child, Cpe):
+            child.fold_bias()
 
 
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:

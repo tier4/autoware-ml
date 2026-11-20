@@ -46,6 +46,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
+    Cpe,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -1405,7 +1406,7 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
     state = {key: value.clone() for key, value in model.state_dict().items()}
 
     folded = model.build_export_specs(batch)
-    monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
+    monkeypatch.setattr(Cpe, "fold_bias", lambda encoding: None)
     reference = model.build_export_specs(batch)
 
     for name in ("ptv3_encoder", "ptv3_seg3d_head"):
