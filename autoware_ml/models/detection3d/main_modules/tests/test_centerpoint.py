@@ -181,6 +181,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             gt_bboxes_num_points=torch.tensor(
                 [[100], [200]], dtype=torch.int32, device=self.device
             ),
+            gt_bboxes_instance_ids=torch.tensor([[0], [1]], dtype=torch.int64, device=self.device),
         )
         return ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(

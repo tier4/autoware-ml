@@ -25,7 +25,7 @@ import pytest
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import LabelTaxonomy, LabelVocabulary
-from autoware_ml.datamodule.common.detection3d import Detection3DTask
+from autoware_ml.datamodule.common.detection3d import Detection3DTask, box_instance_ids
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 _ROOT = "/data/t4dataset"
@@ -208,6 +208,38 @@ def build_task_with_status(boxes: list[dict], status: bool | None) -> Detection3
     return Detection3DTask(
         database_root_path=_ROOT, dataset_records_dataframe=records, taxonomy=_TAXONOMY
     )
+
+
+def test_two_boxes_of_one_instance_in_a_record_are_rejected() -> None:
+    """
+    Input: a record whose two boxes carry one instance token.
+    Expected: ValueError when the task is built, the tracker and the futures need one box per
+      object.
+    """
+    with pytest.raises(ValueError, match="Record 0 holds two boxes of one instance"):
+        build_task_with_status([box("a", "car"), box("a", "pedestrian")], True)
+
+
+def test_a_box_with_a_null_field_breaks_the_record_count() -> None:
+    """
+    Input: a record of two boxes, one without an instance token.
+    Expected: ValueError when the task is built, a box missing a field would shift the boxes of
+      every later record.
+    """
+    broken = box("b", "pedestrian") | {"box3d_instance_id": None}
+
+    with pytest.raises(ValueError, match="Gathered 1 boxes but the records list 2"):
+        build_task_with_status([box("a", "car"), broken], True)
+
+
+def test_the_instance_ids_of_a_table_without_boxes_are_int64() -> None:
+    """
+    Input: the instance tokens of a record table without a single box.
+    Expected: an empty int64 array, as for a table with boxes.
+    """
+    instance_ids = box_instance_ids(pl.Series([], dtype=pl.String), np.zeros(1, dtype=np.int64))
+
+    assert (instance_ids.dtype, instance_ids.shape) == (np.int64, (0,))
 
 
 def test_records_without_the_cone_and_barrier_flag_column_are_rejected() -> None:
