@@ -29,6 +29,7 @@ from typing import Any
 import spconv.pytorch as spconv
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from jaxtyping import Float
 from torch.onnx.operators import shape_as_tensor
 
@@ -514,12 +515,19 @@ class Point3DRoPE(nn.Module):
         return rotated_query, rotated_key
 
 
+# Largest log logit scale of cosine attention, a scale of 100
+_MAX_LOG_LOGIT_SCALE = math.log(100.0)
+
+
 class SerializedAttention(PointModule):
     """Apply windowed self-attention over serialized point tokens.
 
     PTv3 groups points according to a serialization order and then performs
     local self-attention inside fixed-size windows over that ordering.
     """
+
+    # Head scales of cosine attention, a buffer registered by prepare_for_export
+    folded_scales: Float[torch.Tensor, " num_heads"]
 
     def __init__(
         self,
@@ -536,6 +544,7 @@ class SerializedAttention(PointModule):
         upcast_attention: bool,
         upcast_softmax: bool,
         rope_base: float | None = None,
+        cosine_attention: bool = False,
     ) -> None:
         """Initialize serialized attention.
 
@@ -555,10 +564,18 @@ class SerializedAttention(PointModule):
             rope_base: Frequency base for axis-split 3D rotary embedding over
                 voxel coordinates. ``None`` disables RoPE, which is the PTv3
                 default and leaves the attention path unchanged.
+            cosine_attention: Normalize queries and keys per head and scale their dot products by
+                a learned per-head factor of at most 100, so every logit stays far inside fp16.
+
+        Raises:
+            ValueError: If the heads do not divide the channels, flash attention is combined with
+                an option it does not support, or cosine attention gets a manual scale.
         """
         super().__init__()
         if channels % num_heads != 0:
             raise ValueError("channels must be divisible by num_heads")
+        if cosine_attention and qk_scale is not None:
+            raise ValueError("Cosine attention learns its scale, qk_scale must be None.")
         if enable_flash and enable_rpe:
             raise ValueError(
                 "Flash attention does not support relative positional encoding in PTv3."
@@ -573,7 +590,7 @@ class SerializedAttention(PointModule):
         self.enable_flash = enable_flash
         self.patch_size_max = patch_size
         self.patch_size = patch_size if enable_flash else 0
-        self.scale = qk_scale or (channels // num_heads) ** -0.5
+        self.scale = 1.0 if cosine_attention else qk_scale or (channels // num_heads) ** -0.5
         self.order_index = order_index
         self.upcast_attention = upcast_attention
         self.upcast_softmax = upcast_softmax
@@ -587,6 +604,10 @@ class SerializedAttention(PointModule):
         self.softmax = nn.Softmax(dim=-1)
         self.rpe = RelativePositionEncoding(patch_size, num_heads) if enable_rpe else None
         self.rope = Point3DRoPE(channels // num_heads, rope_base) if rope_base is not None else None
+        # Log of the per-head logit scale, initialized at 10
+        self.logit_scale: nn.Parameter | None = (
+            nn.Parameter(torch.full((num_heads,), math.log(10.0))) if cosine_attention else None
+        )
         self.flash_attn = None
 
     @torch.no_grad()
@@ -635,6 +656,20 @@ class SerializedAttention(PointModule):
         self.patch_size = 0
         self.flash_attn = None
 
+    def head_scales(self) -> Float[torch.Tensor, " num_heads"]:
+        """Per-head scale of the cosine logits, at most 100."""
+        if self.export_mode:
+            return self.folded_scales
+        return self.logit_scale.clamp(max=_MAX_LOG_LOGIT_SCALE).exp()
+
+    @torch.no_grad()
+    def prepare_for_export(self) -> None:
+        """Switch to the export path and fold the head scales into a constant."""
+        self.disable_flash()
+        if self.logit_scale is not None:
+            self.register_buffer("folded_scales", self.head_scales(), persistent=False)
+        self.export_mode = True
+
     def forward(self, point: Point) -> Point:
         """Apply serialized self-attention to point features.
 
@@ -669,23 +704,27 @@ class SerializedAttention(PointModule):
         qkv = self.qkv(point.feat[order])
         head_dim = channel_count // head_count
 
-        # With RoPE the projection has to be split before attention so queries
-        # and keys can be rotated by their voxel positions; without it the
-        # packed layout is handed to each branch untouched, as PTv3 expects.
-        roped: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
-        if self.rope is not None:
+        # RoPE and cosine attention change queries and keys, so the projection is split for
+        # them. Otherwise the packed layout goes to each branch untouched, as PTv3 expects.
+        split: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
+        if self.rope is not None or self.logit_scale is not None:
             query, key, value = qkv.reshape(-1, 3, head_count, head_dim).unbind(dim=1)
-            query, key = self.rope(query, key, point.grid_coord[order])
-            roped = (query, key, value)
+            if self.rope is not None:
+                query, key = self.rope(query, key, point.grid_coord[order])
+            if self.logit_scale is not None:
+                # Unit queries and keys bound every logit by the scale of its head
+                query = F.normalize(query, dim=-1) * self.head_scales()[:, None]
+                key = F.normalize(key, dim=-1)
+            split = (query, key, value)
 
         if not self.enable_flash:
-            if roped is None:
+            if split is None:
                 qkv = qkv.reshape(-1, patch_size, 3, head_count, head_dim)
                 q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(dim=0)
             else:
                 q, k, v = (
                     tensor.reshape(-1, patch_size, head_count, head_dim).permute(0, 2, 1, 3)
-                    for tensor in roped
+                    for tensor in split
                 )
             if self.upcast_attention:
                 q = q.float()
@@ -707,8 +746,8 @@ class SerializedAttention(PointModule):
                 self.flash_attn = load_flash_attn_module()
             packed = (
                 qkv.reshape(-1, 3, head_count, head_dim)
-                if roped is None
-                else torch.stack(roped, dim=1)
+                if split is None
+                else torch.stack(split, dim=1)
             )
             # flash attention takes fp16 or bf16; keep the autocast dtype, and use bf16 outside
             # autocast: without a gradient scaler fp16 returns the q/k gradients as zeros.
@@ -791,6 +830,7 @@ class Block(PointModule):
         enable_conv: bool = True,
         enable_attn: bool = True,
         rope_base: float | None = None,
+        cosine_attention: bool = False,
     ) -> None:
         """Initialize one PTv3 attention block.
 
@@ -820,6 +860,8 @@ class Block(PointModule):
                 stages.
             rope_base: Frequency base for axis-split 3D rotary embedding, or
                 ``None`` to disable it.
+            cosine_attention: Whether the attention bounds its logits, see
+                :class:`SerializedAttention`.
 
         Raises:
             ValueError: Raised when the block would carry no operation at all.
@@ -860,6 +902,7 @@ class Block(PointModule):
                 upcast_attention=upcast_attention,
                 upcast_softmax=upcast_softmax,
                 rope_base=rope_base,
+                cosine_attention=cosine_attention,
             )
             self.norm2 = PointSequential(nn.LayerNorm(channels))
             self.mlp = PointSequential(MLP(channels, mlp_ratio, proj_drop))
@@ -1202,8 +1245,7 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
     pooling_stage_index = 0
     for child in module.modules():
         if isinstance(child, SerializedAttention):
-            child.disable_flash()
-            child.export_mode = True
+            child.prepare_for_export()
         if isinstance(child, SerializedPooling):
             child.export_mode = True
             child.export_stage_index = pooling_stage_index
@@ -1270,6 +1312,7 @@ class PointTransformerV3Encoder(PointModule):
         enc_conv: Sequence[bool] | bool = True,
         enc_attn: Sequence[bool] | bool = True,
         enc_rope_base: Sequence[float | None] | float | None = None,
+        cosine_attention: bool = False,
     ) -> None:
         """Initialize the PTv3 encoder.
 
@@ -1303,6 +1346,8 @@ class PointTransformerV3Encoder(PointModule):
                 every stage.
             enc_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            cosine_attention: Whether the attention bounds its logits, see
+                :class:`SerializedAttention`.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -1355,6 +1400,7 @@ class PointTransformerV3Encoder(PointModule):
                         enable_conv=self.enc_conv[stage_index],
                         enable_attn=self.enc_attn[stage_index],
                         rope_base=self.enc_rope_base[stage_index],
+                        cosine_attention=cosine_attention,
                     ),
                     name=f"block{block_index}",
                 )
@@ -1459,6 +1505,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
         enc_conv: Sequence[bool] = (True, True, True, False, False),
         enc_attn: Sequence[bool] = (False, False, False, True, True),
         enc_rope_base: Sequence[float | None] | float | None = 100.0,
+        cosine_attention: bool = False,
     ) -> None:
         """Initialize the LitePT encoder.
 
@@ -1491,6 +1538,8 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv: Per-stage convolution flags.
             enc_attn: Per-stage attention flags.
             enc_rope_base: Rotary-embedding frequency base per stage.
+            cosine_attention: Whether the attention bounds its logits, see
+                :class:`SerializedAttention`.
         """
         super().__init__(
             in_channels=in_channels,
@@ -1517,6 +1566,7 @@ class LitePTEncoder(PointTransformerV3Encoder):
             enc_conv=enc_conv,
             enc_attn=enc_attn,
             enc_rope_base=enc_rope_base,
+            cosine_attention=cosine_attention,
         )
 
 

@@ -88,6 +88,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
         dec_conv: Sequence[bool] | bool = True,
         dec_attn: Sequence[bool] | bool = True,
         dec_rope_base: Sequence[float | None] | float | None = None,
+        cosine_attention: bool = False,
     ) -> None:
         """Initialize the PTv3 segmentation decoder head.
 
@@ -120,6 +121,8 @@ class PTv3Seg3DDecoderHead(nn.Module):
                 blocks, or one flag for every stage.
             dec_rope_base: Rotary-embedding frequency base, either one value for
                 every stage or one per stage. ``None`` disables RoPE.
+            cosine_attention: Whether the attention bounds its logits, see
+                :class:`~autoware_ml.models.segmentation3d.encoders.ptv3.SerializedAttention`.
         """
         super().__init__()
         self.order = list(order)
@@ -177,6 +180,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
                         enable_conv=self.dec_conv[stage_index],
                         enable_attn=self.dec_attn[stage_index],
                         rope_base=self.dec_rope_base[stage_index],
+                        cosine_attention=cosine_attention,
                     ),
                     name=f"block{block_index}",
                 )
