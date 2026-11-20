@@ -178,13 +178,17 @@ def test_a_nuscenes_record_is_served_under_the_root_of_the_dataset(root: str) ->
 
 
 def test_the_frame_meta_composes_the_lidar_mounting_into_the_map_transform() -> None:
-    """
+    """Test that the frame meta maps the lidar frame onto the map and carries the scene and time.
+
     Input: the record read without a lidar source view.
     Expected: the map transform of the frame is the ego pose of the frame composed with the
-        lidar mounting, both the identity here, so the sample frame maps onto itself.
-    Check: the transform.
+        lidar mounting, both the identity here, so the sample frame maps onto itself. The
+        frame carries the scene and the sample time of the record, which the temporal models
+        read to place the frame in its stream.
+    Check: the transform, the scene token and the timestamp.
     """
     frame_meta = build_dataset("/data/nuscenes").get_frame_meta_sample(0, None)
 
     assert frame_meta.scene_token == _SCENE_NAME
+    assert frame_meta.timestamp == 1533151603.5
     assert np.allclose(frame_meta.ego2global.numpy(), np.eye(4))
