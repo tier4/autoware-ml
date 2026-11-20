@@ -16,12 +16,12 @@
 
 from __future__ import annotations
 
-from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import Detection3DState
+from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState
 from autoware_ml.metrics.report import MetricReport
 
 
-class FrameCount(Metric[Detection3DState]):
+class FrameCount(Detection3DMetric):
     """Number of frames the other metrics scored.
 
     The count is taken from the state the suite hands over, so a region-filtered
@@ -32,6 +32,11 @@ class FrameCount(Metric[Detection3DState]):
     """
 
     range_invariant = True
+
+    @property
+    def match_distance(self) -> float:
+        """The metric matches no prediction to a box."""
+        return 0.0
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Count the accumulated frames.

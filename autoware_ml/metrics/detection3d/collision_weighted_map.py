@@ -35,19 +35,19 @@ from math import isfinite
 
 import numpy as np
 
-from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.detection3d.criticality import (
     greedy_match_thresholds,
     weighted_average_precision,
 )
-from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
 from autoware_ml.metrics.geometry.reachability import collision_weights
 from autoware_ml.metrics.report import MetricReport
 
 
-class CollisionWeightedMeanAP(Metric[Detection3DState]):
+class CollisionWeightedMeanAP(Detection3DMetric):
     """Class-mean AP with each object weighted by its reachability collision risk."""
 
     needs_ttc = True
@@ -75,6 +75,11 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
             raise ValueError("thresholds must name at least one distance > 0.")
         if not isfinite(self.decay) or self.decay < 0.0:
             raise ValueError("decay must be a finite value >= 0.")
+
+    @property
+    def match_distance(self) -> float:
+        """The largest threshold the metric matches at."""
+        return max(self.thresholds)
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Weighted AP per class, averaged over thresholds, then over classes.

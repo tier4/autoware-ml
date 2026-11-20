@@ -16,14 +16,14 @@
 
 from __future__ import annotations
 
-from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
+from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name, threshold_token
 from autoware_ml.metrics.detection3d.structures import DEFAULT_MATCH_THRESHOLDS
 from autoware_ml.metrics.report import MetricReport
 
 
-class MeanAP(Metric[Detection3DState]):
+class MeanAP(Detection3DMetric):
     """Class-mean AP. Validation reports only mAP and per-class AP, so epochs
     stay fast. Test adds the per-class GT count and the per-threshold AP curve
     details (match count, max F1, optimal-confidence operating point). The AP is
@@ -47,6 +47,11 @@ class MeanAP(Metric[Detection3DState]):
         self.thresholds = tuple(float(threshold) for threshold in thresholds)
         if not self.thresholds:
             raise ValueError("thresholds must not be empty.")
+
+    @property
+    def match_distance(self) -> float:
+        """The largest threshold the metric matches at."""
+        return max(self.thresholds)
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Compute mean AP metrics for the accumulated detection state.

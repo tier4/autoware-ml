@@ -23,14 +23,17 @@ distance by default, corner distance optionally.
 
 from __future__ import annotations
 
+from abc import abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from math import pi
+from math import inf, pi
 
 import numpy as np
 import torch
+from jaxtyping import Bool, Float, Int64
 
-from autoware_ml.metrics.base import MetricRange
+from autoware_ml.metrics.base import Metric, MetricRange
+from autoware_ml.metrics.detection3d.criticality import greedy_match_costs
 from autoware_ml.metrics.detection3d.geometry import (
     corner_displacement_matrix,
     corner_displacements,
@@ -128,24 +131,70 @@ def gt_keep_mask(
     Returns:
         Boolean keep mask ``(G,)``.
     """
-    n = gt_boxes.shape[0]
-    keep = torch.ones(n, dtype=torch.bool, device=gt_boxes.device)
-    if n == 0:
-        return keep
-
+    keep = torch.ones(gt_boxes.shape[0], dtype=torch.bool, device=gt_boxes.device)
     if max_distances:
         distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
-        for box_idx in range(n):
-            label = int(gt_labels[box_idx].item())
-            if 0 <= label < len(class_names):
-                max_dist = max_distances.get(class_names[label])
-                if max_dist is not None and float(distances[box_idx].item()) > max_dist:
-                    keep[box_idx] = False
+        # A label outside the classes or a class without a cap keeps its boxes at any distance
+        limits = torch.tensor(
+            [max_distances.get(name, inf) for name in class_names] + [inf],
+            dtype=torch.float64,
+            device=gt_boxes.device,
+        )
+        known = (gt_labels >= 0) & (gt_labels < len(class_names))
+        keep &= distances <= limits[torch.where(known, gt_labels, len(class_names)).long()]
 
     if min_num_points > 0 and gt_num_points is not None:
         keep &= gt_num_points >= min_num_points
 
     return keep
+
+
+def ignored_prediction_mask(
+    pred_boxes: Float[torch.Tensor, "num_preds box_dim"],
+    pred_scores: Float[torch.Tensor, " num_preds"],
+    pred_labels: Int64[torch.Tensor, " num_preds"],
+    kept_boxes: Float[torch.Tensor, "num_kept box_dim"],
+    kept_labels: Int64[torch.Tensor, " num_kept"],
+    ignored_boxes: Float[torch.Tensor, "num_ignored box_dim"],
+    ignored_labels: Int64[torch.Tensor, " num_ignored"],
+    cost_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    kept_claim_distance: float,
+    claim_distance: float,
+) -> Bool[torch.Tensor, " num_preds"]:
+    """Mark the predictions that claim an ignored ground truth box.
+
+    Args:
+        pred_boxes: Prediction boxes ``(P, 7+)``.
+        pred_scores: Prediction confidences ``(P,)``.
+        pred_labels: Prediction labels ``(P,)``.
+        kept_boxes: Ground truth boxes the metrics count ``(K, 7+)``.
+        kept_labels: Their labels ``(K,)``.
+        ignored_boxes: Ground truth boxes the metrics ignore ``(I, 7+)``.
+        ignored_labels: Their labels ``(I,)``.
+        cost_fn: ``cost_fn(pred_boxes, gt_boxes)`` returning the ``(P, G)`` match cost matrix.
+        kept_claim_distance: Largest match cost at which a kept box takes a prediction.
+        claim_distance: Largest match cost of a claim on an ignored box.
+
+    Returns:
+        Boolean mask ``(P,)`` of the predictions no kept box takes that claim an ignored box.
+    """
+    ignored = torch.zeros(pred_boxes.shape[0], dtype=torch.bool, device=pred_boxes.device)
+    for label in torch.unique(ignored_labels).tolist():
+        pred_index = torch.nonzero(pred_labels == label).flatten().cpu()
+        boxes = pred_boxes[pred_index].cpu().numpy().astype(np.float64)
+        scores = pred_scores[pred_index].cpu().numpy()
+        kept = kept_boxes[kept_labels == label].cpu().numpy().astype(np.float64)
+        # A kept box takes its predictions first, only the others can claim an ignored box
+        _, kept_match = greedy_match_costs(cost_fn(boxes, kept), scores, (kept_claim_distance,))[
+            kept_claim_distance
+        ]
+        free = np.flatnonzero(kept_match < 0)
+        dropped = ignored_boxes[ignored_labels == label].cpu().numpy().astype(np.float64)
+        _, ignored_match = greedy_match_costs(
+            cost_fn(boxes[free], dropped), scores[free], (claim_distance,)
+        )[claim_distance]
+        ignored[pred_index[free]] = torch.from_numpy(ignored_match >= 0).to(ignored.device)
+    return ignored
 
 
 def _slice_sample(
@@ -716,3 +765,12 @@ class Detection3DState:
             curve = prepared.match(threshold)
             self._curve_cache[key] = curve
         return curve
+
+
+class Detection3DMetric(Metric[Detection3DState]):
+    """A metric of the detection suite, which declares how far it matches."""
+
+    @property
+    @abstractmethod
+    def match_distance(self) -> float:
+        """Largest match cost at which the metric matches a prediction to a box, 0 for none."""

@@ -18,13 +18,13 @@ from __future__ import annotations
 
 from collections import Counter
 
-from autoware_ml.metrics.base import EvalStage, Metric
+from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.detection3d.naming import label_metric_name
-from autoware_ml.metrics.detection3d.matching import Detection3DState
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState
 from autoware_ml.metrics.report import MetricReport
 
 
-class BoxCounts(Metric[Detection3DState]):
+class BoxCounts(Detection3DMetric):
     """Number of ground-truth and predicted boxes, in total and per class.
 
     The counts are taken from the state the suite hands over, so they are the
@@ -34,6 +34,11 @@ class BoxCounts(Metric[Detection3DState]):
     evaluating. The suite appends the range suffix to every key, so each range
     reports its own counts.
     """
+
+    @property
+    def match_distance(self) -> float:
+        """The metric matches no prediction to a box."""
+        return 0.0
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Count the accumulated ground-truth and predicted boxes.

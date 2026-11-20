@@ -30,14 +30,14 @@ from math import pi
 
 import numpy as np
 
-from autoware_ml.metrics.base import EvalStage, Metric
-from autoware_ml.metrics.detection3d.matching import Detection3DState, mean_valid
+from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.matching import Detection3DMetric, Detection3DState, mean_valid
 from autoware_ml.metrics.detection3d.naming import label_metric_name
 from autoware_ml.metrics.detection3d.structures import DEFAULT_TP_THRESHOLD
 from autoware_ml.metrics.report import MetricReport
 
 
-class HeadingFlipRate(Metric[Detection3DState]):
+class HeadingFlipRate(Detection3DMetric):
     """Per-class fraction (and count) of true positives with a reversed heading."""
 
     def __init__(
@@ -59,6 +59,11 @@ class HeadingFlipRate(Metric[Detection3DState]):
         super().__init__(stages, filter=filter)
         self.tp_threshold = float(tp_threshold)
         self.flip_threshold = float(flip_threshold)
+
+    @property
+    def match_distance(self) -> float:
+        """The threshold the metric reads its matches at."""
+        return self.tp_threshold
 
     def evaluate(self, state: Detection3DState, stage: EvalStage) -> MetricReport:
         """Report per-class heading-flip rate and count at the TP threshold.
