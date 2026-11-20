@@ -33,17 +33,17 @@ def _suites() -> list[Detection3DMetricSuite]:
     return [Detection3DMetricSuite(components=[MeanAP(thresholds=(0.5,))])]
 
 
-class TestSuitesArgument(unittest.TestCase):
-    """The suites argument, and metrics as its deprecated name."""
+class TestMetricSuitesArgument(unittest.TestCase):
+    """The metric_suites argument, and metrics as its deprecated name."""
 
     def test_suites_attach_without_a_warning(self) -> None:
         """
-        Input: one detection suite passed as ``suites``.
+        Input: one detection suite passed as ``metric_suites``.
         Expected: the suite is attached for validation and test, and nothing is logged.
         Check: one suite with the det3d prefix at each stage, no log record.
         """
         with self.assertNoLogs(_LOGGER):
-            host = _Host(suites=_suites())
+            host = _Host(metric_suites=_suites())
 
         for stage in (EvalStage.VAL, EvalStage.TEST):
             self.assertEqual([suite.prefix for suite in host._stage_suites(stage)], ["det3d"])
@@ -51,7 +51,7 @@ class TestSuitesArgument(unittest.TestCase):
     def test_metrics_still_attach_with_a_logged_warning(self) -> None:
         """
         Input: the same suite passed under the deprecated name ``metrics``.
-        Expected: it is attached exactly as under ``suites``, and a logged warning names
+        Expected: it is attached exactly as under ``metric_suites``, and a logged warning names
         the new key, so a config that still uses the old one shows up in the run's output.
         Check: one suite with the det3d prefix at each stage, and the warning record.
         """
@@ -59,19 +59,19 @@ class TestSuitesArgument(unittest.TestCase):
             host = _Host(metrics=_suites())
 
         self.assertEqual(len(logs.records), 1)
-        self.assertIn("`suites`", logs.records[0].getMessage())
+        self.assertIn("`metric_suites`", logs.records[0].getMessage())
 
         for stage in (EvalStage.VAL, EvalStage.TEST):
             self.assertEqual([suite.prefix for suite in host._stage_suites(stage)], ["det3d"])
 
     def test_both_names_at_once_are_refused(self) -> None:
         """
-        Input: suites passed as both ``suites`` and ``metrics``.
+        Input: suites passed as both ``metric_suites`` and ``metrics``.
         Expected: the model refuses to pick one, so a config cannot silently drop a list.
         Check: ValueError naming both arguments.
         """
-        with self.assertRaisesRegex(ValueError, r"`suites` and `metrics`"):
-            _Host(suites=_suites(), metrics=_suites())
+        with self.assertRaisesRegex(ValueError, r"`metric_suites` and `metrics`"):
+            _Host(metric_suites=_suites(), metrics=_suites())
 
     def test_no_suites_logs_only_losses(self) -> None:
         """

@@ -101,7 +101,7 @@ class _ResetCountingSuite(MetricSuite[None]):
 
 
 def _build_model(
-    suites: Sequence[MetricSuite] | None = None,
+    metric_suites: Sequence[MetricSuite] | None = None,
     partial_annotations: PartialAnnotations | None = None,
 ) -> StreamPETRDetection3DModel:
     return StreamPETRDetection3DModel(
@@ -110,7 +110,7 @@ def _build_model(
         img_neck=GeneralizedLSSFPN(in_channels=[128, 256, 512], out_channels=128),
         bbox_head=_build_head(),
         log_dict_configs=LogDictConfigs(prog_bar=False),
-        suites=suites,
+        metric_suites=metric_suites,
         partial_annotations=partial_annotations,
     )
 
@@ -935,7 +935,7 @@ def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
     does not accumulate across validation epochs.
     Check: each suite was reset once more, and the streams were reset as well.
     """
-    model = _build_model(suites=[_ResetCountingSuite()])
+    model = _build_model(metric_suites=[_ResetCountingSuite()])
     val_suite = model._stage_suites(EvalStage.VAL)[0]
     test_suite = model._stage_suites(EvalStage.TEST)[0]
     resets_after_construction = (val_suite.resets, test_suite.resets)

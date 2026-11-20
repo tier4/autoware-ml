@@ -81,7 +81,7 @@ deploy:
 model:
   _target_: autoware_ml.models.multi.ptv3_det3d_seg3d.PTv3Det3DSeg3DModel
   _convert_: all
-  suites: ${metrics}
+  metric_suites: ${metric_suites}
   log_dict_configs:
     _target_: autoware_ml.models.module_base_model.LogDictConfigs
     _convert_: all

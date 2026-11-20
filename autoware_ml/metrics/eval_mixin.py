@@ -43,18 +43,18 @@ from autoware_ml.metrics.report import MetricReport
 logger = logging.getLogger(__name__)
 
 
-def resolve_suites(
-    suites: Sequence[MetricSuite] | None, metrics: Sequence[MetricSuite] | None
+def resolve_metric_suites(
+    metric_suites: Sequence[MetricSuite] | None, metrics: Sequence[MetricSuite] | None
 ) -> Sequence[MetricSuite] | None:
     """The metric suites a model was given, under their name or the deprecated one.
 
     Models took their suites as ``metrics``, which reads as if it held metric
-    components. The argument and the model config key are now ``suites``;
+    components. The argument and the config key are now ``metric_suites``;
     ``metrics`` keeps working until it is removed, and logs a warning so a config
     that still uses it shows up in the run's output.
 
     Args:
-        suites: Suites under their current name.
+        metric_suites: Suites under their current name.
         metrics: Suites under the deprecated name.
 
     Returns:
@@ -64,15 +64,15 @@ def resolve_suites(
         ValueError: If both were given.
     """
     if metrics is None:
-        return suites
-    if suites is not None:
+        return metric_suites
+    if metric_suites is not None:
         raise ValueError(
-            "Got metric suites as both `suites` and `metrics`. Pass them as `suites` only, "
-            "`metrics` is its deprecated name."
+            "Got metric suites as both `metric_suites` and `metrics`. Pass them as "
+            "`metric_suites` only, `metrics` is its deprecated name."
         )
     logger.warning(
-        "Passing metric suites as `metrics` is deprecated, pass them as `suites` "
-        "(in a model config: `suites: ${metrics}`)."
+        "Passing metric suites as `metrics` is deprecated, pass them as `metric_suites` "
+        "(in a model config: `metric_suites: ${metric_suites}`)."
     )
     return metrics
 
@@ -83,23 +83,23 @@ class MetricEvalMixin:
     def __init__(
         self,
         *args: Any,
-        suites: Sequence[MetricSuite] | None = None,
+        metric_suites: Sequence[MetricSuite] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
         **kwargs: Any,
     ) -> None:
         """Clone the metric suites per stage and register them as submodules.
 
         Args:
-            suites: Suites attached from config. Empty means only losses are
+            metric_suites: Suites attached from config. Empty means only losses are
                 logged.
-            metrics: Deprecated name of ``suites``, still accepted with a logged
+            metrics: Deprecated name of ``metric_suites``, still accepted with a logged
                 warning.
             *args: Positional arguments forwarded to the next base.
             **kwargs: Keyword arguments forwarded to the next base.
         """
         super().__init__(*args, **kwargs)
-        suites = resolve_suites(suites, metrics)
-        prototypes = list(suites) if suites else []
+        metric_suites = resolve_metric_suites(metric_suites, metrics)
+        prototypes = list(metric_suites) if metric_suites else []
         for suite in prototypes:
             if not suite.prefix:
                 raise ValueError(

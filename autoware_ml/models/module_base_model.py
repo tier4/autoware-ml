@@ -95,7 +95,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
-        suites: Sequence[MetricSuite] | None = None,
+        metric_suites: Sequence[MetricSuite] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
     ):
         """Initialize base model.
@@ -109,11 +109,11 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 model-defined optimizer group name.
             scheduler_config: Optional Lightning scheduler metadata such as
                 ``interval`` or ``monitor``.
-            suites: Metric suites accumulated during validation and test. Empty
+            metric_suites: Metric suites accumulated during validation and test. Empty
                 or ``None`` logs only losses.
-            metrics: Deprecated name of ``suites``.
+            metrics: Deprecated name of ``metric_suites``.
         """
-        super().__init__(suites=suites, metrics=metrics)
+        super().__init__(metric_suites=metric_suites, metrics=metrics)
         self._data_preprocessor = data_preprocessor
         self.optimizer_partial = optimizer
         self.scheduler_partial = scheduler

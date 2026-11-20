@@ -113,7 +113,7 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         log_dict_configs: LogDictConfigs,
         optimizer: Callable[..., Optimizer] | None = None,
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
-        suites: Sequence[MetricSuite] | None = None,
+        metric_suites: Sequence[MetricSuite] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
     ) -> None:
         """
@@ -129,14 +129,14 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             log_dict_configs: Logging configuration for training and validation.
             optimizer: Optimizer factory.
             scheduler: Scheduler factory.
-            suites: Detection metric suites accumulated during validation and test.
-            metrics: Deprecated name of ``suites``.
+            metric_suites: Detection metric suites accumulated during validation and test.
+            metrics: Deprecated name of ``metric_suites``.
         """
         super().__init__(
             data_preprocessor=data_preprocessor,
             optimizer=optimizer,
             scheduler=scheduler,
-            suites=suites,
+            metric_suites=metric_suites,
             metrics=metrics,
             log_dict_configs=log_dict_configs,
         )
