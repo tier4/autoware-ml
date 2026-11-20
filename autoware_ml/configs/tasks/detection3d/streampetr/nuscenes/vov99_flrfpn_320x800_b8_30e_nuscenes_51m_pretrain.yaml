@@ -1,0 +1,32 @@
+# @package _global_
+# Stage 1, the reference nuScenes recipe pinned to 4 GPUs x batch 8 (total batch 32) at lr 8e-4;
+# rescale both learning rates by N/32 for a total batch N (docs/models/streampetr.md).
+defaults:
+  - base_51m
+  - /database@database: nuscenes/nuscenes_base
+  - _self_
+
+batch_size: 8
+num_workers: 8
+experiment_group_name: streampetr/${database.version}/nuscenes
+experiment_name: vov99_flrfpn_320x800_b8_30e_nuscenes_51m_pretrain
+
+# The RGB-stem DD3D/FCOS3D VoVNet-99 backbone of docs/models/streampetr.md.
+weights: ???
+
+trainer:
+  devices: 4
+  max_epochs: 30
+
+optimizer:
+  lr: 8.0e-4
+
+callbacks:
+  dynamic_validation:
+    # Validate every 5 epochs, then every epoch over the last 10 of the 30-epoch schedule.
+    epoch_intervals: [[0, 5], [20, 1]]
+
+model:
+  optimizer_group_overrides:
+    img_backbone:
+      lr: 8.0e-5

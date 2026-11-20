@@ -1,0 +1,148 @@
+# @package _global_
+defaults:
+  - /tasks/default_task
+  - _self_
+
+# The accepted runs were seeded with 0; the streaming datamodule draws its scene order from it.
+seed: 0
+database: ???
+point_cloud_range: ???
+post_center_range: ???
+# Network input size [height, width] every camera image is resized and cropped to.
+image_size: ???
+# Cameras in the order the model takes them, read by the datasets and bound by the runtime.
+camera_names: ???
+
+# Every leaf sets its own learning rate, the image backbone always trains at a tenth of it.
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: true
+  lr: ???
+  weight_decay: 0.01
+
+# Preprocessing, not model, so the deployed graphs never see it: the runtime normalizes itself.
+data_preprocessor:
+  preprocessor_modules:
+    # ImageNet statistics of RGB images in [0, 1], the range the loader serves.
+    - _target_: autoware_ml.preprocessing.camera.normalize.BatchNormalizeImages
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+    - _target_: autoware_ml.preprocessing.camera.grid_mask.BatchGridMask
+
+trainer:
+  max_epochs: ???
+  # Initial value only, the dynamic_validation callback rewrites it per epoch.
+  check_val_every_n_epoch: 5
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: norm
+
+callbacks:
+  # best.ckpt by detection mAP, and the run always trains every configured epoch.
+  model_checkpoint:
+    monitor: val/det3d/mAP
+    mode: max
+  early_stopping: null
+
+deploy:
+  onnx:
+    dynamo: false
+    opset_version: 17
+    # Kept on: the ORT parity tests of the three graphs export with it.
+    do_constant_folding: true
+    modules:
+      extract_img_feat: {}
+      position_embedding: {}
+      pts_head_memory: {}
+  tensorrt:
+    enabled: false
+
+model:
+  _target_: autoware_ml.models.detection3d.streampetr.StreamPETRDetection3DModel
+  _convert_: all
+  metrics: ${metrics}
+  log_dict_configs:
+    _target_: autoware_ml.models.module_base_model.LogDictConfigs
+    _convert_: all
+    # Per-step logging with sync_dist would all-reduce every loss key on every step.
+    on_step: false
+    on_epoch: true
+    prog_bar: true
+    sync_dist: true
+
+  img_backbone:
+    _target_: autoware_ml.models.common.backbones.vovnet.VoVNet99MultiScale
+    input_ch: 3
+    out_features: [stage4, stage5]
+    frozen_stages: -1
+    norm_eval: true
+  # The reference StreamPETR neck (CPFPN in its code base); its first output feeds the head.
+  img_neck:
+    _target_: autoware_ml.models.common.necks.fpn.FinestLevelRefinedFPN
+    in_channels: [768, 1024]
+    out_channels: 256
+  # The dataset bases that train the auxiliary 2D head compose focal2d_head.yaml.
+  auxiliary_2d_head: null
+  # Set on a leaf whose database flags scenarios without some class annotations.
+  partial_annotations: null
+
+  bbox_head:
+    _target_: autoware_ml.models.detection3d.heads.streampetr.StreamPETRHead
+    class_names: ${taxonomy.detection3d.class_names}
+    in_channels: 256
+    hidden_dim: 256
+    num_queries: 644
+    num_decoder_layers: 6
+    num_heads: 8
+    feedforward_channels: 2048
+    memory_len: 1024
+    topk_proposals: 256
+    num_propagated: 256
+    with_ego_pos: true
+    with_dn: true
+    loss_cls_weight: 2.0
+    loss_bbox_weight: 0.25
+    depth_num: 64
+    LID: true
+    position_range: ${post_center_range}
+    scalar: 10
+    noise_scale: 1.0
+    dn_weight: 1.0
+    split: 0.75
+    bbox_coder:
+      _target_: autoware_ml.models.detection3d.task_modules.bbox_coders.NMSFreeBBoxCoder3D
+      pc_range: ${point_cloud_range}
+      post_center_range: ${post_center_range}
+      score_threshold: 0.0
+      max_num: 300
+    assigner:
+      _target_: autoware_ml.models.detection3d.task_modules.assigners.HungarianAssigner3D
+      cls_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.ClassificationCost
+        weight: 2.0
+      reg_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.BBox3DL1Cost
+        weight: 0.25
+        # No velocity in the matching, as match_with_velo=False in the reference recipe.
+        code_weights: [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0]
+      iou_cost:
+        _target_: autoware_ml.models.detection3d.task_modules.match_costs.IoU3DCost
+        weight: 0.0
+      point_cloud_range: ${point_cloud_range}
+    point_cloud_range: ${point_cloud_range}
+    code_weights: [2.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+
+  optimizer: ${optimizer}
+  optimizer_group_overrides:
+    img_backbone:
+      lr: ???
+  # Linear warmup into a per-epoch cosine, stepped every iteration.
+  scheduler:
+    _target_: autoware_ml.utils.schedulers.iter_warmup_epoch_cosine.IterWarmupEpochCosineLR
+    _partial_: true
+    max_epochs: ${trainer.max_epochs}
+    warmup_iters: 500
+    warmup_start_factor: 0.3333333333333333
+    eta_min_factor: 1.0e-4
+  scheduler_config:
+    interval: step
