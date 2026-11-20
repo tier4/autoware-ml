@@ -20,6 +20,7 @@ from functools import partial
 from pathlib import Path
 from types import MappingProxyType
 
+from jaxtyping import Float
 import numpy as np
 import polars as pl
 
@@ -123,6 +124,50 @@ def write_lidar_frame(
         "lidar_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
         "lidar_sensor_to_lidar_sweep_matrix": np.eye(4).tolist(),
         "lidar_pointcloud_semantic_mask_relative_path": mask_relative,
+    }
+
+
+def image_frame(
+    record_index: int,
+    camera: str,
+    relative_path: str,
+    timestamp: float,
+    image_size: tuple[int, int],
+    cam2img: Float[np.ndarray, "3 3"],
+    lidar2cam: Float[np.ndarray, "4 4"],
+) -> dict:
+    """Return the record of one undistorted camera image of a sample.
+
+    Args:
+        record_index: Position of the record the image belongs to.
+        camera: Sensor and channel name of the camera.
+        relative_path: Path of the image below the database root.
+        timestamp: Sample time of the image in seconds.
+        image_size: Height and width of the stored image.
+        cam2img: Intrinsic matrix of the camera.
+        lidar2cam: Transform from the lidar frame into the camera frame.
+
+    Returns:
+        dict: The image frame as the record table stores it, at the ego origin.
+    """
+    camera_matrix = np.eye(4)
+    camera_matrix[:3, :3] = cam2img
+    return {
+        "image_frame_id": f"image-{record_index}-{camera}",
+        "image_keyframe": True,
+        "image_sensor_id": camera,
+        "image_sensor_channel_name": camera,
+        "image_timestamp_seconds": timestamp,
+        "image_relative_path": relative_path,
+        "image_height": image_size[0],
+        "image_width": image_size[1],
+        "cam2img": cam2img.tolist(),
+        "image_distortion_coefficients": [0.0, 0.0, 0.0, 0.0, 0.0],
+        "image_distortion_model": "plumb_bob",
+        "image_sensor_to_ego_pose_matrix": np.eye(4).tolist(),
+        "image_frame_ego_pose_to_global_matrix": np.eye(4).tolist(),
+        "lidar2cam": lidar2cam.tolist(),
+        "lidar2img": (camera_matrix @ lidar2cam).tolist(),
     }
 
 
