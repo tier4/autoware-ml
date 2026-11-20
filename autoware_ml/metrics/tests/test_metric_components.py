@@ -291,3 +291,24 @@ def test_detection_suite_samples_do_not_share_memory_with_the_state() -> None:
     assert fresh.pred_labels.tolist() == [0]
     assert torch.equal(fresh.gt_boxes, boxes)
     assert fresh.gt_labels.tolist() == [0]
+
+
+def test_detection_suite_validates_the_frame_at_update_before_accumulating() -> None:
+    # The sample is checked once here, state_for and the range clip build theirs unchecked.
+    suite = Detection3DMetricSuite(
+        components=[MeanAP(stages=["test"])], class_names=("car",), ranges=()
+    )
+    gt_boxes = torch.tensor([[10.0, 0.0, 0.0, 4.0, 2.0, 1.5, 0.0, 0.0, 0.0]])
+    six_parameter_boxes = torch.zeros((1, 6))
+    bad_frame = detection_frame(
+        predictions=prediction(six_parameter_boxes, torch.tensor([0.9]), torch.tensor([0])),
+        gt_boxes=gt_boxes,
+        gt_labels=torch.tensor([0]),
+    )
+
+    with pytest.raises(ValueError, match="pred_boxes need at least 7 parameters"):
+        suite.update(detection_eval_output([bad_frame]))
+
+    assert len(suite.pred_boxes) == 0
+    assert len(suite.gt_boxes) == 0
+    assert len(suite.state_for(None).samples) == 0

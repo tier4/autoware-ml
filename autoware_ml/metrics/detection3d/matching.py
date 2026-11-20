@@ -169,8 +169,12 @@ def _slice_sample(
     gt_keep: Bool[torch.Tensor, " num_gt_boxes"],
     pred_keep: Bool[torch.Tensor, " num_predictions"],
 ) -> Detection3DSample:
-    """Return a new sample with GT and predictions sliced by boolean masks."""
-    return Detection3DSample(
+    """Return a new sample with GT and predictions sliced by boolean masks.
+
+    The sample is built without validation: masking a valid sample by masks of its own sides
+    keeps every dtype, rank and row count, and this runs per frame of every range bucket.
+    """
+    return Detection3DSample.model_construct(
         pred_boxes=sample.pred_boxes[pred_keep],
         pred_scores=sample.pred_scores[pred_keep],
         pred_labels=sample.pred_labels[pred_keep],
