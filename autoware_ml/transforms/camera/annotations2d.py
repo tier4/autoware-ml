@@ -39,14 +39,14 @@ def _project_camera(
     lidar2image: torch.Tensor,
     image_size: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Project the boxes onto one camera by the rule of the reference recipe.
+    """Project the boxes onto one camera.
 
-    The rule is that of the reference's ``compute_bbox_and_centers``: a box is kept when at
-    least one of its corners is in front of the camera and its extent, clipped to the image,
-    has a non-zero area; the corners behind the camera have no meaningful projection and are
-    left out of the extent. The projected gravity center is clamped into the image, so a box
-    whose center leaves the image is still a target. A center behind the camera is divided by
-    its negative depth and clamped all the same, as in the reference.
+    A box is kept when its gravity center and at least one of its corners are in front of
+    the camera and its extent, clipped to the image, has a non-zero area. The corners behind
+    the camera have no meaningful projection and are left out of the extent, and a center
+    behind the camera would project mirrored, or to NaN on the camera plane. The projected
+    gravity center is clamped into the image, so a box whose center leaves the image is
+    still a target.
 
     Args:
         corners: Box corners ``(N, 8, 3)`` in the lidar frame.
@@ -72,7 +72,8 @@ def _project_camera(
     high = torch.where(corner_front, corner_pixels, -torch.inf).amax(dim=1).clamp(min=0.0)
     low, high = torch.minimum(low, image_size), torch.minimum(high, image_size)
     centers = torch.minimum(pixels[num_boxes * 8 :].clamp(min=0.0), image_size)
-    keep = corner_front.any(dim=1).squeeze(1) & (low < high).all(dim=1)
+    center_front = in_front[num_boxes * 8 :]
+    keep = corner_front.any(dim=1).squeeze(1) & center_front & (low < high).all(dim=1)
     columns = {
         Box2DFieldIndex.X_MIN: low[:, 0],
         Box2DFieldIndex.Y_MIN: low[:, 1],
