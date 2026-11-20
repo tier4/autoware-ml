@@ -24,7 +24,11 @@ from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
+from autoware_ml.metrics.detection3d.eval_output import (
+    StreamObservations,
+    detection3d_eval_output,
+)
+from autoware_ml.metrics.eval_output import Detection3DEvalFrame
 
 
 class TestTypedDetection3DEvalOutput(unittest.TestCase):
@@ -162,8 +166,43 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
             self.assertIs(
                 frame.predictions, self.multi_task_predictions.detection3d_predictions[index]
             )
+            self.assertEqual(
+                frame.gt_instance_ids.tolist(),
+                gt_batch.gt_bboxes_instance_ids[index, :num_valid].tolist(),
+            )
+            self.assertIsNone(frame.gt_observed)
+            self.assertIsNone(frame.stream_id)
         self.assertTrue(output.check_all_gt_num_points)
         self.assertFalse(output.check_all_frame_meta)
+
+    def test_a_temporal_model_attaches_its_stream_state(self) -> None:
+        """
+        Input: the two-sample batch with the observation flags and the streams of a temporal
+        model, then a stream state of one frame only.
+        Expected: every frame carries its flags and its stream, a state of another frame count
+        is refused.
+        """
+        observed = [
+            torch.tensor([True, False], device=self.device),
+            torch.tensor([True], device=self.device),
+        ]
+
+        output = detection3d_eval_output(
+            self.multi_task_predictions,
+            self.multi_task_batch_inputs,
+            StreamObservations(gt_observed=observed, stream_ids=[4, 9]),
+        )
+
+        self.assertEqual(
+            [frame.gt_observed.tolist() for frame in output.frames], [[True, False], [True]]
+        )
+        self.assertEqual([frame.stream_id for frame in output.frames], [4, 9])
+        with self.assertRaisesRegex(ValueError, "stream state covers"):
+            detection3d_eval_output(
+                self.multi_task_predictions,
+                self.multi_task_batch_inputs,
+                StreamObservations(gt_observed=observed[:1], stream_ids=[4]),
+            )
 
     def test_frame_meta_is_attached_per_frame(self) -> None:
         """
@@ -198,6 +237,25 @@ class TestTypedDetection3DEvalOutput(unittest.TestCase):
         self.assertIsNone(second.frame_meta.lanelet_map_path)
         self.assertEqual([frame.key_frame for frame in output.frames], [True, False])
         self.assertEqual([frame.scored for frame in output.frames], [True, False])
+
+    def test_a_frame_refuses_box_columns_of_another_box_count(self) -> None:
+        """
+        Input: a frame with two ground truth boxes and identities or observation flags of one box.
+        Expected: ValidationError naming the column.
+        """
+        predictions = self.multi_task_predictions.detection3d_predictions[0]
+        for name, column in (
+            ("gt_instance_ids", torch.tensor([3], device=self.device)),
+            ("gt_observed", torch.tensor([True], device=self.device)),
+        ):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, name):
+                Detection3DEvalFrame(
+                    predictions=predictions,
+                    gt_boxes=torch.zeros((2, 9), device=self.device),
+                    gt_labels=torch.zeros(2, dtype=torch.int64, device=self.device),
+                    key_frame=True,
+                    **{name: column},
+                )
 
     def test_flags_the_padding_samples(self) -> None:
         """

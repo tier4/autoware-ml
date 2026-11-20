@@ -26,9 +26,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
+from jaxtyping import Float, Int64, Integer, Shaped
 import torch.nn as nn
 from torch.onnx.operators import shape_as_tensor
 
@@ -56,6 +57,15 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
 from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
 from autoware_ml.utils.point_cloud.structures import Point
+
+
+def _linear_bn_gelu(in_channels: int, out_channels: int) -> nn.Sequential:
+    """Return a point-wise projection with batch norm and GELU."""
+    return nn.Sequential(
+        nn.Linear(in_channels, out_channels),
+        nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.01),
+        nn.GELU(),
+    )
 
 
 class PTv3Det3DFeatureFusion(nn.Module):
@@ -102,6 +112,84 @@ class PTv3Det3DFeatureFusion(nn.Module):
         inverse = point["pooling_inverse"]
         fused = self.proj_skip(parent.feat) + self.proj(point.feat)[inverse]
         return fused, parent.grid_coord, parent.offset
+
+
+class SparseStage(NamedTuple):
+    """Features, voxel coordinates and batch offsets of one fused sparse encoder stage.
+
+    Attributes:
+        feat: Feature of every voxel of the batch.
+        grid_coord: Voxel coordinates ``(x, y, z)`` of the stage grid.
+        offset: Cumulative voxel count of the samples.
+    """
+
+    feat: Float[torch.Tensor, "num_voxels channels"]
+    grid_coord: Integer[torch.Tensor, "num_voxels 3"]
+    offset: Integer[torch.Tensor, " batch_size"]
+
+
+class PTv3Det3DFeaturePyramid(nn.Module):
+    """Fuse the deepest encoder stage top-down into the finer stages and keep every fused stage.
+
+    Every step mirrors one decoder unpooling step, reading the pooling chain without changing it.
+    """
+
+    def __init__(self, stage_channels: Sequence[int], out_channels: int) -> None:
+        """Initialize the feature pyramid.
+
+        Args:
+            stage_channels: Feature dimensions of the stages from the finest fused one to the
+                deepest one.
+            out_channels: Fused feature dimension.
+
+        Raises:
+            ValueError: If fewer than two stages are given.
+        """
+        super().__init__()
+        if len(stage_channels) < 2:
+            raise ValueError(f"The pyramid fuses at least two stages, got {list(stage_channels)}.")
+        self.proj_skip = nn.ModuleList(
+            _linear_bn_gelu(channels, out_channels) for channels in stage_channels[:-1]
+        )
+        # The deepest stage feeds the first fusion, every fused stage the next finer one
+        self.proj_coarse = nn.ModuleList(
+            [
+                _linear_bn_gelu(stage_channels[-1], out_channels),
+                *(_linear_bn_gelu(out_channels, out_channels) for _ in stage_channels[:-2]),
+            ]
+        )
+
+    @property
+    def num_stages(self) -> int:
+        """Number of encoder stages the pyramid reads."""
+        return len(self.proj_skip) + 1
+
+    @property
+    def num_levels(self) -> int:
+        """Number of returned levels, every stage but the deepest."""
+        return len(self.proj_skip)
+
+    def forward(self, point: Point) -> list[SparseStage]:
+        """Fuse the deepest stage down to the finest fused stage.
+
+        Args:
+            point: Deepest encoder point with its pooling chain attached.
+
+        Returns:
+            The fused stages from the finest to the coarsest.
+        """
+        levels: list[SparseStage] = []
+        child, coarse = point, self.proj_coarse[0](point.feat)
+        # The fused stage of every step is projected for the next finer one, the last is not used
+        next_projections = (*self.proj_coarse[1:], nn.Identity())
+        for proj_skip, proj_next in zip(reversed(self.proj_skip), next_projections, strict=True):
+            parent = child["pooling_parent"]
+            fused = proj_skip(parent.feat) + coarse[child["pooling_inverse"]]
+            levels.append(
+                SparseStage(feat=fused, grid_coord=parent.grid_coord, offset=parent.offset)
+            )
+            child, coarse = parent, proj_next(fused)
+        return levels[::-1]
 
 
 class PTv3BEVProjection(nn.Module):
@@ -317,28 +405,89 @@ class PTv3Det3DBEVNeck(nn.Module):
         return self.bev_encoder(bev)
 
 
-def det3d_head_export_input_names(stage_count: int) -> list[str]:
-    """Return the split det-head export input names for a given stage count."""
-    skip_stage = stage_count - 2
-    deep_stage = stage_count - 1
+def det3d_head_export_input_names(stage_count: int, finest_stage: int) -> list[str]:
+    """Return the split det-head export input names of the stages from ``finest_stage`` on."""
+    stages = range(finest_stage, stage_count)
     return [
-        f"point_feat_{skip_stage}",
-        f"point_feat_{deep_stage}",
-        f"pooling_cluster_{skip_stage}",
-        f"point_grid_coord_{skip_stage}",
+        *(f"point_feat_{stage}" for stage in stages),
+        *(f"pooling_cluster_{stage}" for stage in stages[:-1]),
+        *(f"point_grid_coord_{stage}" for stage in stages[:-1]),
     ]
 
 
-def det3d_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]]:
-    """Build dynamic axes for the split det-head export graph inputs."""
-    skip_stage = stage_count - 2
-    deep_stage = stage_count - 1
+def det3d_head_export_dynamic_axes(
+    stage_count: int, finest_stage: int
+) -> dict[str, dict[int, str]]:
+    """Build the dynamic axes of the split det-head export inputs from ``finest_stage`` on."""
+    stages = range(finest_stage, stage_count)
     return {
-        f"point_feat_{skip_stage}": {0: stage_voxel_axis_name(skip_stage)},
-        f"point_feat_{deep_stage}": {0: stage_voxel_axis_name(deep_stage)},
-        f"pooling_cluster_{skip_stage}": {0: f"serialized_pooling_{skip_stage}_in_voxels"},
-        f"point_grid_coord_{skip_stage}": {0: stage_voxel_axis_name(skip_stage)},
+        **{f"point_feat_{stage}": {0: stage_voxel_axis_name(stage)} for stage in stages},
+        **{
+            f"pooling_cluster_{stage}": {0: f"serialized_pooling_{stage}_in_voxels"}
+            for stage in stages[:-1]
+        },
+        **{f"point_grid_coord_{stage}": {0: stage_voxel_axis_name(stage)} for stage in stages[:-1]},
     }
+
+
+def det3d_head_export_args(
+    context: "PTv3ExportContext", finest_stage: int
+) -> tuple[Shaped[torch.Tensor, "..."], ...]:
+    """Return the split det-head export inputs of the encoder stages from ``finest_stage`` on."""
+    stages = range(finest_stage, context.stage_count)
+    grid_coords = (
+        context.inputs.grid_coord,
+        *(metadata.grid_coord for metadata in context.inputs.pooling_metadata),
+    )
+    return (
+        *(context.stage_feats[stage] for stage in stages),
+        *(context.inputs.pooling_metadata[stage].cluster for stage in stages[:-1]),
+        *(grid_coords[stage] for stage in stages[:-1]),
+    )
+
+
+def rebuild_point_chain(
+    feats: Sequence[Float[torch.Tensor, "_ _"]],
+    clusters: Sequence[Integer[torch.Tensor, " _"]],
+    grid_coords: Sequence[Integer[torch.Tensor, "_ 3"]],
+) -> Point:
+    """Rebuild the deepest point and its pooling chain from the split det-head export inputs.
+
+    Every stage has its own voxel count and width, the cluster of a stage maps its voxels to the
+    voxels of the next coarser stage.
+
+    Args:
+        feats: Features of the stages from the finest to the deepest one.
+        clusters: Pooling clusters of every stage but the deepest.
+        grid_coords: Voxel coordinates of every stage but the deepest.
+
+    Returns:
+        Deepest point with the rebuilt pooling chain.
+
+    Raises:
+        ValueError: If the clusters or the voxel coordinates do not cover every stage but the
+            deepest.
+    """
+    if not len(clusters) == len(grid_coords) == len(feats) - 1:
+        raise ValueError(
+            f"Expected the clusters and voxel coordinates of {len(feats) - 1} stages, got "
+            f"{len(clusters)} and {len(grid_coords)}."
+        )
+    point = Point(feat=feats[0], grid_coord=grid_coords[0], offset=_single_offset(feats[0]))
+    for feat, grid_coord, cluster in zip(feats[1:-1], grid_coords[1:], clusters[:-1], strict=True):
+        point = Point(
+            feat=feat,
+            grid_coord=grid_coord,
+            offset=_single_offset(feat),
+            pooling_parent=point,
+            pooling_inverse=cluster,
+        )
+    return Point(feat=feats[-1], pooling_parent=point, pooling_inverse=clusters[-1])
+
+
+def _single_offset(feat: Float[torch.Tensor, "_ _"]) -> Int64[torch.Tensor, " 1"]:
+    """Batch offsets of a single sample export graph."""
+    return shape_as_tensor(feat)[:1].to(feat.device)
 
 
 def build_det3d_head_export_spec(
@@ -361,22 +510,12 @@ def build_det3d_head_export_spec(
         output_names=output_names,
     ).eval()
     skip_stage = context.stage_count - 2
-    skip_grid_coord = (
-        context.inputs.grid_coord
-        if skip_stage == 0
-        else context.inputs.pooling_metadata[skip_stage - 1].grid_coord
-    )
     return ExportSpec(
         module=module,
-        args=(
-            context.stage_feats[skip_stage],
-            context.stage_feats[context.stage_count - 1],
-            context.inputs.pooling_metadata[skip_stage].cluster,
-            skip_grid_coord,
-        ),
-        input_names=det3d_head_export_input_names(context.stage_count),
+        args=det3d_head_export_args(context, skip_stage),
+        input_names=det3d_head_export_input_names(context.stage_count, skip_stage),
         output_names=list(output_names),
-        dynamic_axes=det3d_head_export_dynamic_axes(context.stage_count),
+        dynamic_axes=det3d_head_export_dynamic_axes(context.stage_count, skip_stage),
         supported_stages=PTv3BaseModel.EXPORT_SUPPORTED_STAGES,
     )
 
@@ -452,9 +591,7 @@ class _PTv3Det3DHeadExportModule(nn.Module):
         skip_grid_coord: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         """Rebuild the coarse pooling link, project to BEV, and run the head."""
-        offset = shape_as_tensor(skip_feat)[:1].to(skip_feat.device)
-        parent = Point(feat=skip_feat, grid_coord=skip_grid_coord, offset=offset)
-        point = Point(feat=deepest_feat, pooling_parent=parent, pooling_inverse=cluster)
+        point = rebuild_point_chain([skip_feat, deepest_feat], [cluster], [skip_grid_coord])
         bev = self.bev_neck(point)
         outputs = self.bbox_head(bev)
         return outputs.export_tensors(self.output_names)

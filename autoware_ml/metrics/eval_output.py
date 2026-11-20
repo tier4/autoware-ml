@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import torch
-from jaxtyping import Float, Float32, Int, Int64
+from jaxtyping import Bool, Float, Float32, Int, Int64
 from pydantic import BaseModel, ConfigDict, InstanceOf, model_validator
 
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
@@ -49,6 +49,12 @@ class Detection3DEvalFrame(BaseModel):
       gt_boxes: Ground truth boxes, 7 or more parameters each, in the frame of the points.
       gt_labels: Class index of every ground truth box.
       gt_num_points: Lidar points inside every ground truth box, when the dataset counts them.
+      gt_instance_ids: Object identity of every ground truth box, equal across the frames of a
+        scene, when the dataset carries it. The tracking metrics follow the objects by it.
+      gt_observed: Whether the object of every ground truth box was seen in its stream so far,
+        set by a temporal model. The temporal metrics count an object from its first sighting.
+      stream_id: Streaming lane of the frame, set by a temporal model. The tracking metrics
+        follow the objects within a stream.
       is_padding: Whether the frame only pads a streaming lane. It is kept so every rank holds
         as many frames as the others for the gather, and the metrics leave it out.
       key_frame: Whether the frame is a key frame of its scene. A frame between key frames feeds
@@ -63,6 +69,9 @@ class Detection3DEvalFrame(BaseModel):
     gt_boxes: Float32[torch.Tensor, "num_gt_boxes num_box_params"]
     gt_labels: Int64[torch.Tensor, " num_gt_boxes"]
     gt_num_points: Int[torch.Tensor, " num_gt_boxes"] | None = None
+    gt_instance_ids: Int64[torch.Tensor, " num_gt_boxes"] | None = None
+    gt_observed: Bool[torch.Tensor, " num_gt_boxes"] | None = None
+    stream_id: int | None = None
     is_padding: bool = False
     key_frame: bool
     frame_meta: InstanceOf[FrameMetaSample] | None = None
@@ -90,6 +99,14 @@ class Detection3DEvalFrame(BaseModel):
                 f"gt_num_points describe {self.gt_num_points.shape[0]} boxes, gt_boxes "
                 f"{num_gt_boxes}."
             )
+        for name, column in (
+            ("gt_instance_ids", self.gt_instance_ids),
+            ("gt_observed", self.gt_observed),
+        ):
+            if column is not None and column.shape[0] != num_gt_boxes:
+                raise ValueError(
+                    f"{name} describe {column.shape[0]} boxes, gt_boxes {num_gt_boxes}."
+                )
         return self
 
 

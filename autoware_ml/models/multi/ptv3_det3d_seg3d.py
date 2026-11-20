@@ -35,9 +35,7 @@ import torch.nn as nn
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 
-from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
-from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
@@ -46,6 +44,11 @@ from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
 from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, build_det3d_head_export_spec
+from autoware_ml.models.multi.detection3d_frames import (
+    detection3d_frame_mask,
+    detection3d_gt_batch,
+    empty_unsupervised_predictions,
+)
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
@@ -186,46 +189,6 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
             segmentation3d_head_outputs=Segmentation3DHeadOutputs(logits=seg3d_logits),
         )
 
-    @staticmethod
-    def _detection3d_gt_batch(batch_inputs: ModelBatchInputs) -> Detection3DGTBatch:
-        """Read the detection ground truth of the batch.
-
-        Args:
-            batch_inputs: Model inputs of the batch.
-
-        Returns:
-            The detection ground truth.
-
-        Raises:
-            ValueError: If the batch carries no detection ground truth.
-        """
-        gt_detections = batch_inputs.multi_task_gt_batch.detection3d_gt_batch
-        if gt_detections is None:
-            raise ValueError("PTv3 seg det needs the 3D detection ground truth of the batch.")
-        return gt_detections
-
-    @staticmethod
-    def _detection3d_frame_mask(gt_detections: Detection3DGTBatch) -> torch.Tensor:
-        """Return the per-frame detection supervision mask.
-
-        Supervision is carried by the annotations themselves: a frame with no
-        ground-truth box contributes no detection supervision. This includes
-        genuinely empty scenes, which therefore provide no pure-background
-        signal - the deliberate price of not carrying a separate flag.
-
-        Args:
-            gt_detections: Detection ground truth of the batch.
-
-        Returns:
-            Boolean tensor of shape ``(batch_size,)``.
-        """
-        return gt_detections.gt_valid_bboxes > 0
-
-    @staticmethod
-    def _mask_list(values: Sequence[Any], mask: torch.Tensor) -> list[Any]:
-        """Select the flagged entries from a per-sample list."""
-        return [value for value, flagged in zip(values, mask.tolist()) if flagged]
-
     def compute_metrics(
         self,
         batch_inputs: ModelBatchInputs,
@@ -241,8 +204,8 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         det3d_outputs = outputs.detection3d().transfusion_head()
         seg3d_metrics = segmentation3d_point_loss(self.seg3d_head, seg3d_logits, batch_inputs)
 
-        gt_detections = self._detection3d_gt_batch(batch_inputs)
-        det3d_mask = self._detection3d_frame_mask(gt_detections)
+        gt_detections = detection3d_gt_batch(batch_inputs)
+        det3d_mask = detection3d_frame_mask(gt_detections)
         if bool(det3d_mask.any()):
             traffic_cone_status = gt_detections.gt_traffic_cone_barrier_bbox_status
             det3d_metrics = self.bbox_head.loss(
@@ -302,20 +265,11 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         deadlocks under DDP when ranks see different seg/det frame mixes.
         Empty prediction + empty ground truth is metric-neutral.
         """
-        det3d_mask = self._detection3d_frame_mask(self._detection3d_gt_batch(batch))
-        predictions = list(
-            self.bbox_head.decode_outputs(outputs=outputs.detection3d()).detection3d_predictions
+        det3d_mask = detection3d_frame_mask(detection3d_gt_batch(batch))
+        predictions = empty_unsupervised_predictions(
+            self.bbox_head.decode_outputs(outputs=outputs.detection3d()).detection3d_predictions,
+            det3d_mask,
         )
-        predictions = [
-            prediction
-            if flagged
-            else Detection3DSamplePredictions(
-                bboxes_3d=prediction.bboxes_3d[:0],
-                scores_3d=prediction.scores_3d[:0],
-                labels_3d=prediction.labels_3d[:0],
-            )
-            for prediction, flagged in zip(predictions, det3d_mask.tolist())
-        ]
         return EvalOutput(
             detection3d=detection3d_eval_output(
                 ModelPredictions(detection3d_predictions=predictions), batch

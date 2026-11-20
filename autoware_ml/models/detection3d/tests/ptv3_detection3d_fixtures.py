@@ -63,16 +63,18 @@ POINT_CLOUD_RANGE = [0.0, 0.0, -2.0, 8.0, 8.0, 2.0]
 
 def build_ptv3_encoder(
     in_channels: int = SweepSplitVoxelFeatureEncoder.out_channels,
+    enc_channels: Sequence[int] = (8, 16),
 ) -> PointTransformerV3Encoder:
-    """Return a small PTv3 encoder suitable for unit tests."""
+    """Return a small PTv3 encoder suitable for unit tests, one stage per encoder width."""
+    num_stages = len(enc_channels)
     return PointTransformerV3Encoder(
         in_channels=in_channels,
         order=("z",),
-        stride=(2,),
-        enc_depths=(1, 1),
-        enc_channels=(8, 16),
-        enc_num_head=(1, 2),
-        enc_patch_size=(4, 4),
+        stride=(2,) * (num_stages - 1),
+        enc_depths=(1,) * num_stages,
+        enc_channels=tuple(enc_channels),
+        enc_num_head=tuple(channels // 8 for channels in enc_channels),
+        enc_patch_size=(4,) * num_stages,
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
@@ -89,18 +91,18 @@ def build_ptv3_encoder(
 
 
 def build_seg3d_head(
-    num_classes: int = 3, dec_depths: Sequence[int] = (1,)
+    num_classes: int = 3, dec_depths: Sequence[int] = (1,), enc_channels: Sequence[int] = (8, 16)
 ) -> PTv3Seg3DDecoderHead:
     """Return a small PTv3 segmentation decoder head matching the test encoder."""
     return PTv3Seg3DDecoderHead(
         num_classes=num_classes,
         ignore_index=-1,
         order=("z",),
-        enc_channels=(8, 16),
+        enc_channels=tuple(enc_channels),
         dec_depths=dec_depths,
-        dec_channels=(8,),
-        dec_num_head=(1,),
-        dec_patch_size=(4,),
+        dec_channels=tuple(enc_channels[:-1]),
+        dec_num_head=tuple(channels // 8 for channels in enc_channels[:-1]),
+        dec_patch_size=(4,) * (len(enc_channels) - 1),
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,

@@ -20,22 +20,48 @@ sample, one :class:`~autoware_ml.metrics.eval_output.Detection3DEvalFrame` per s
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import NamedTuple
+
+import torch
+from jaxtyping import Bool
+
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.metrics.eval_output import Detection3DEvalFrame, Detection3DEvalOutput
 
 
+class StreamObservations(NamedTuple):
+    """Stream state a temporal model attaches to the frames of a batch.
+
+    Attributes:
+        gt_observed: Per frame, whether the object of every valid ground truth box was seen in
+            its stream so far.
+        stream_ids: Streaming lane of every frame.
+    """
+
+    gt_observed: Sequence[Bool[torch.Tensor, " _num_gt_boxes"]]
+    stream_ids: Sequence[int]
+
+
 def detection3d_eval_output(
-    predictions: ModelPredictions, batch_inputs: ModelBatchInputs
+    predictions: ModelPredictions,
+    batch_inputs: ModelBatchInputs,
+    streams: StreamObservations | None = None,
 ) -> Detection3DEvalOutput:
     """Pair the predictions of a batch with its ground truth for the detection suite.
 
     Args:
         predictions: Decoded predictions of the batch.
         batch_inputs: Batch inputs holding the ground truth boxes and labels.
+        streams: Stream state of a temporal model, None for a model without streams.
 
     Returns:
         One frame per sample of the batch, padding samples flagged.
+
+    Raises:
+        ValueError: If the predictions, the frame metadata or the stream state do not hold one
+            entry per sample.
     """
     if predictions.detection3d_predictions is None:
         raise ValueError("The detection eval output requires 3D detection predictions.")
@@ -61,9 +87,17 @@ def detection3d_eval_output(
             f"The frame metadata carries {frame_meta_batch.ego2globals.shape[0]} ego2global "
             f"entries for {num_frames} samples, per-frame metadata must align one-to-one."
         )
+    if streams is not None and not (
+        len(streams.gt_observed) == len(streams.stream_ids) == num_frames
+    ):
+        raise ValueError(
+            f"The stream state covers {len(streams.gt_observed)} and {len(streams.stream_ids)} "
+            f"frames, the batch holds {num_frames}."
+        )
     # A sample padding a streaming lane or lying between key frames keeps its frame, since the
     # metrics gather the frames across the GPUs entry by entry; the suite leaves it out.
     padding = gt_batch.padding_mask.tolist()
+    gt_instance_ids = gt_detections.valid_bboxes_instance_ids()
     key_frames = gt_batch.key_frame_mask().tolist()
     return Detection3DEvalOutput(
         frames=tuple(
@@ -72,6 +106,9 @@ def detection3d_eval_output(
                 gt_boxes=gt_boxes[index],
                 gt_labels=gt_labels[index],
                 gt_num_points=gt_num_points[index],
+                gt_instance_ids=gt_instance_ids[index],
+                gt_observed=None if streams is None else streams.gt_observed[index],
+                stream_id=None if streams is None else streams.stream_ids[index],
                 is_padding=bool(padding[index]),
                 key_frame=bool(key_frames[index]),
                 frame_meta=None if frame_meta_batch is None else frame_meta_batch.sample(index),
