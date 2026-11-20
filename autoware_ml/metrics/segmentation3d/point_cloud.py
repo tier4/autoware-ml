@@ -370,20 +370,6 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 target_min, target_max = (int(v) for v in torch.aminmax(target))
                 if target_min < -(2**15) or target_max >= 2**15:
                     raise ValueError("target labels exceed the int16 cache range.")
-            confidence_values, entropy = _reduce_scores(scores, pred)
-            self._note_frame()
-            coord_cpu = coord.cpu()
-            self.coord.append(coord_cpu)
-            self.pred.append(pred.to(torch.int16).cpu())
-            self.target.append(target.to(torch.int16).cpu())
-            self.confidence.append(confidence_values.cpu())
-            self.entropy.append(entropy.to(torch.float32).cpu())
-            if self._group_lut is not None:
-                folded_scores = scores @ torch.as_tensor(self._score_fold, device=scores.device)
-                folded_pred = fold_labels_tensor(pred, self._group_lut)
-                grouped_confidence, grouped_entropy = _reduce_scores(folded_scores, folded_pred)
-                self.grouped_confidence.append(grouped_confidence.cpu())
-                self.grouped_entropy.append(grouped_entropy.to(torch.float32).cpu())
             boxes = frame.gt_boxes
             labels = frame.gt_box_labels
             if needs_boxes and (boxes is None or labels is None):
@@ -392,16 +378,58 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                     "frames must carry gt_boxes and gt_box_labels (empty tensors for a frame "
                     "without objects)."
                 )
-            self.gt_boxes.append(
+            confidence_values, entropy = _reduce_scores(scores, pred)
+            coord_cpu = coord.cpu()
+            pred_cpu = pred.to(torch.int16).cpu()
+            target_cpu = target.to(torch.int16).cpu()
+            confidence_cpu = confidence_values.cpu()
+            entropy_cpu = entropy.to(torch.float32).cpu()
+            boxes_cpu = (
                 torch.zeros((0, 7), dtype=torch.float32)
                 if boxes is None
                 else boxes.detach().to(dtype=torch.float32).cpu()
             )
-            self.gt_box_labels.append(
+            labels_cpu = (
                 torch.zeros((0,), dtype=torch.long)
                 if labels is None
                 else labels.detach().to(dtype=torch.long).cpu()
             )
+            grouped_confidence_cpu = None
+            grouped_entropy_cpu = None
+            if self._group_lut is not None:
+                folded_scores = scores @ torch.as_tensor(self._score_fold, device=scores.device)
+                folded_pred = fold_labels_tensor(pred, self._group_lut)
+                grouped_confidence, grouped_entropy = _reduce_scores(folded_scores, folded_pred)
+                grouped_confidence_cpu = grouped_confidence.cpu()
+                grouped_entropy_cpu = grouped_entropy.to(torch.float32).cpu()
+
+            # The one validation of the frame, before anything is cached. _frame only slices
+            # and folds these arrays for each bucket, so it builds its FramePoints unchecked.
+            views = [(confidence_cpu, entropy_cpu)]
+            if grouped_confidence_cpu is not None and grouped_entropy_cpu is not None:
+                views.append((grouped_confidence_cpu, grouped_entropy_cpu))
+            for view_confidence, view_entropy in views:
+                FramePoints(
+                    coord=coord_cpu.numpy(),
+                    pred=pred_cpu.numpy(),
+                    target=target_cpu.numpy(),
+                    confidence=view_confidence.numpy(),
+                    entropy=view_entropy.numpy(),
+                    gt_boxes=boxes_cpu.numpy(),
+                    gt_box_labels=labels_cpu.numpy(),
+                )
+
+            self._note_frame()
+            self.coord.append(coord_cpu)
+            self.pred.append(pred_cpu)
+            self.target.append(target_cpu)
+            self.confidence.append(confidence_cpu)
+            self.entropy.append(entropy_cpu)
+            if grouped_confidence_cpu is not None and grouped_entropy_cpu is not None:
+                self.grouped_confidence.append(grouped_confidence_cpu)
+                self.grouped_entropy.append(grouped_entropy_cpu)
+            self.gt_boxes.append(boxes_cpu)
+            self.gt_box_labels.append(labels_cpu)
             if self._component_filters and active:
                 # filters convert the coordinates to float64 themselves
                 point_masks, box_masks, available = self._filter_masks(
@@ -547,7 +575,9 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         if fold_lut is not None:
             pred_np = fold_labels(pred_np, fold_lut)
             target_np = fold_labels(target_np, fold_lut)
-        frame = FramePoints(
+        # Validated once at update: slicing and folding keep every dtype, rank and row count,
+        # and this runs for every cached frame of every bucket.
+        frame = FramePoints.model_construct(
             coord=coord_np,
             pred=pred_np,
             target=target_np,
