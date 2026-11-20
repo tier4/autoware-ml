@@ -86,6 +86,9 @@ class _StreamPETRPositionEmbeddingExportWrapper(nn.Module):
     embedding once and cache it for the stream lifetime.
     """
 
+    # Pixel coordinates times metric depths exceed fp16, so the engine runs in fp32
+    required_onnx_precision = "fp32"
+
     def __init__(self, head: StreamPETRHead, num_cams: int, feature_hw: tuple[int, int]) -> None:
         super().__init__()
         self.head = head
