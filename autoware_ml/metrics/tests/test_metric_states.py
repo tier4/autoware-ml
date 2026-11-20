@@ -107,6 +107,32 @@ class TestDetection3DSample(unittest.TestCase):
                 with self.assertRaisesRegex(ValidationError, name):
                     Detection3DSample.model_validate(fields)
 
+    def test_time_to_collision_is_set_for_both_sides_or_neither(self) -> None:
+        """
+        Input: the valid frame with a time-to-collision of the right length on one side only,
+        then on both sides.
+        Expected: the criticality metrics read both sides, so a frame carrying only one fails at
+        construction instead of inside a metric.
+        Check: pydantic raises naming the missing side for each one-sided frame, and the frame
+        with both builds.
+        """
+        one_sided = {
+            "pred_ttc": (torch.zeros(2, dtype=torch.float32), "gt_ttc is None"),
+            "gt_ttc": (torch.zeros(1, dtype=torch.float32), "pred_ttc is None"),
+        }
+        for name, (value, message) in one_sided.items():
+            with self.subTest(field=name):
+                fields = dict(self.fields)
+                fields[name] = value
+                with self.assertRaisesRegex(ValidationError, message):
+                    Detection3DSample.model_validate(fields)
+        fields = dict(self.fields)
+        fields["pred_ttc"] = torch.zeros(2, dtype=torch.float32)
+        fields["gt_ttc"] = torch.zeros(1, dtype=torch.float32)
+        sample = Detection3DSample.model_validate(fields)
+        self.assertIsNotNone(sample.pred_ttc)
+        self.assertIsNotNone(sample.gt_ttc)
+
     def test_boxes_with_fewer_than_seven_parameters_are_rejected(self) -> None:
         """
         Input: the valid frame with six parameters per predicted or ground truth box.

@@ -55,7 +55,8 @@ class Detection3DSample(BaseModel):
       gt_ttc: Reachability time-to-collision to ego of every ground truth box in seconds,
         ``inf`` when unreachable. Present only when the suite is built with a collision
         provider, and read by the criticality metrics.
-      pred_ttc: The same time-to-collision of every predicted box.
+      pred_ttc: The same time-to-collision of every predicted box. Set together with ``gt_ttc``
+        or not at all.
       ttc_covered: False for a frame whose scene has no lanelet map, so its time-to-collision
         is all ``inf`` by construction. The criticality metrics leave such frames out of their
         denominators, mirroring the region filter coverage rule.
@@ -97,6 +98,14 @@ class Detection3DSample(BaseModel):
                     raise ValueError(
                         f"{name} describes {column.shape[0]} boxes, {side}_boxes {boxes.shape[0]}."
                     )
+        if (self.gt_ttc is None) != (self.pred_ttc is None):
+            given, missing = (
+                ("pred_ttc", "gt_ttc") if self.gt_ttc is None else ("gt_ttc", "pred_ttc")
+            )
+            raise ValueError(
+                f"{given} is set but {missing} is None, the time-to-collision comes for both "
+                "sides of a frame or for neither."
+            )
         return self
 
 
