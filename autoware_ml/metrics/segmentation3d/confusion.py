@@ -89,10 +89,15 @@ class ConfusionState(BaseModel):
 
     @model_validator(mode="after")
     def _check_num_classes(self) -> ConfusionState:
-        """Check that the matrix covers exactly the declared classes."""
+        """Check that the matrix and the names cover exactly the declared classes."""
         if self.confusion.shape[0] != self.num_classes:
             raise ValueError(
                 f"confusion covers {self.confusion.shape[0]} classes, num_classes is "
+                f"{self.num_classes}."
+            )
+        if self.class_names is not None and len(self.class_names) != self.num_classes:
+            raise ValueError(
+                f"class_names names {len(self.class_names)} classes, num_classes is "
                 f"{self.num_classes}."
             )
         return self

@@ -259,6 +259,24 @@ class TestConfusionState(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "num_classes"):
             ConfusionState.model_validate(fields)
 
+    def test_class_names_must_name_every_class(self) -> None:
+        """
+        Input: a two class matrix with one name, with three names, and with no names.
+        Expected: a name list of the wrong length would shift or drop the metric keys, so it
+        fails at construction, while None stays valid and leaves the keys to the index fallback.
+        Check: pydantic raises naming class_names for both wrong lengths, and None is accepted.
+        """
+        wrong_names = {"too_few": ("road",), "too_many": ("road", "obstacle", "car")}
+        for name, class_names in wrong_names.items():
+            with self.subTest(names=name):
+                fields = dict(self.fields)
+                fields["class_names"] = class_names
+                with self.assertRaisesRegex(ValidationError, "class_names"):
+                    ConfusionState.model_validate(fields)
+        fields = dict(self.fields)
+        fields["class_names"] = None
+        self.assertIsNone(ConfusionState.model_validate(fields).class_names)
+
 
 class TestFramePoints(unittest.TestCase):
     """Unit tests for the per-point contract of one cached segmentation frame."""
