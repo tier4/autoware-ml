@@ -105,6 +105,7 @@ function torchmetrics uses to combine that state across GPUs.
 | `Detection3DMetricSuite`                   | `det3d`    | `EvalOutput.detection3d` frames         | per-frame box tensors as list states (`None`)             |
 | `Segmentation3DConfusionMatrixMetricSuite` | `seg3d`    | `EvalOutput.segmentation3d` frames      | one confusion tensor over (filter, range) buckets (`sum`) |
 | `Segmentation3DPointCloudMetricSuite`      | `seg3d_pt` | `EvalOutput.segmentation3d` with scores | per-frame point tensors (`None`)                          |
+| `TrackingMetricSuite`                      | `track`    | `EvalOutput.detection3d` with track ids | per-frame box and track id tensors (`None`)               |
 
 - **Confusion counts `sum`.** A confusion matrix is a bounded sufficient statistic, so adding the
   per-rank tensors is exact.
@@ -224,6 +225,7 @@ optional capability adds a concrete requirement, checked loud at the first batch
 | ------------------------------------------------ | ----------------------------------------------------- | -------------------------- |
 | detection metrics                                | `detection3d` frames                                  | none                       |
 | segmentation metrics                             | `segmentation3d` frames, point metrics their `scores` | none                       |
+| tracking metrics                                 | track ids, `gt_observed`, `stream_id`, `frame_meta`   | none                       |
 | ground-truth point filter, occlusion split       | `gt_num_points` on the detection frames               | none                       |
 | corridor filter (straight strip)                 | none                                                  | none                       |
 | region filters and collision filter              | `frame_meta` (ego pose, lanelet map path) per frame   | one lanelet2 map per scene |
@@ -1048,7 +1050,13 @@ and one keeping everything, differ exactly by the occlusion effect on recall.
 
 ### Boxes below the point filter
 
-A suite with `min_num_points` drops the ground truth boxes with fewer points. A temporal model keeps an occluded object it saw before, so with `ignore_below_min_points: true` a prediction that claims such a box leaves the evaluation together with it instead of counting as a false positive. The kept boxes of a class, or of a group in a grouped suite, take their predictions first, in score order, by the match cost of the suite up to the largest match distance of its metrics. Only the predictions left over claim the dropped boxes in the same cost, up to `ignore_claim_distance`, one prediction per box, so a duplicate on an occluded box stays a false positive and a prediction a kept box could match is never left out.
+A suite with `min_num_points` drops the ground truth boxes with fewer points. A temporal model keeps an occluded object it saw before, so with `ignore_below_min_points: true` a prediction that claims such a box leaves the evaluation together with it instead of counting as a false positive. The kept boxes of a class, or of a group in a grouped suite, take their predictions first, in score order, by the match cost of the suite up to the largest match distance of its metrics. Only the predictions left over claim the dropped boxes in the same cost, up to `ignore_claim_distance`, one prediction per box, so a duplicate on an occluded box stays a false positive and a prediction a kept box could match is never left out. A suite with `observed_only: true` and the tracking metrics leave out the boxes a temporal model has not observed in its stream yet together with the predictions that claim them, the same way. The tracking metrics also leave out the tracked boxes beyond the distance of their class. A query decodes into one box of its best class, so a track has at most one box per frame, and the tracking metrics refuse a frame that gives a track two.
+
+### Tracking metrics
+
+`TrackingMetricSuite` scores the tracks of a temporal detector. A tracked box is a prediction with a track id in `instance_ids`, and the ground truth boxes carry the object identity in `gt_instance_ids`. The suite groups the scored frames by `stream_id`, orders every stream by the timestamp of its `frame_meta` and matches the tracked boxes from `score_threshold` on to the observed ground truth boxes of their class by BEV center distance up to `match_distance`. The pair of an object in the previous frame of its stream carries over while it stays within that distance, the remaining boxes are matched one to one by the smallest total distance (CLEAR MOT). A label outside the class list is refused.
+
+The suite reports `mota`, one minus the misses, false positives and ID switches over the ground truth boxes, with `recall`, `precision`, `id_switches`, `fragmentations`, `id_switches_per_gt_track` and `num_gt`, and `mota_<class>` and `id_switches_<class>` for every class with ground truth. An ID switch is a match whose track differs from the last track of its object, a fragmentation is a match of an object that its previous frame left unmatched. `mota_best` is the best MOTA over `score_threshold` and the `sweep_score_thresholds`, with its threshold in `mota_best_score_threshold`, so it does not depend on the score calibration.
 
 ## Segmentation metrics
 

@@ -391,6 +391,22 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         """
         return [component for component in self.components if self._stage in component.stages]
 
+    def refuse_component_filters(self) -> None:
+        """Refuse a filter on a component of a suite that reports no filtered slices.
+
+        Raises:
+            ValueError: If a component of the suite sets a filter.
+        """
+        filtered = [
+            type(component).__name__
+            for component in self.components
+            if component.filter is not IDENTITY
+        ]
+        if filtered:
+            raise ValueError(
+                f"{type(self).__name__} reports no filtered slices, {filtered} set a filter."
+            )
+
     def _filterable_components(self) -> list[Metric[StateT]]:
         """Components whose filters define this suite's filter axis.
 
