@@ -85,7 +85,8 @@ def tolerant_error_mask(
             continue  # nothing predicted this class anywhere, no rescue possible
         queries = np.flatnonzero(wrong & (target == true_class))
         if cells is not None:
-            candidates = candidates[_near_cells(cells, grid_shape, queries)[cells[candidates]]]
+            neighbourhood = _neighbourhood_mask(cells, grid_shape, queries)
+            candidates = candidates[neighbourhood[cells[candidates]]]
             if candidates.size == 0:
                 continue
         _, nearest = cKDTree(points[candidates]).query(
@@ -122,8 +123,10 @@ def _prefilter_cells(xy: np.ndarray, radius: float) -> tuple[np.ndarray | None, 
     return index[:, 0] * shape[1] + index[:, 1], shape
 
 
-def _near_cells(cells: np.ndarray, grid_shape: tuple[int, int], queries: np.ndarray) -> np.ndarray:
-    """Occupancy of the cells that hold a query point or border one.
+def _neighbourhood_mask(
+    cells: np.ndarray, grid_shape: tuple[int, int], queries: np.ndarray
+) -> np.ndarray:
+    """Mask of the grid cells within one cell of a query point.
 
     Args:
         cells: Flat cell index of every point, from :func:`_prefilter_cells`.
