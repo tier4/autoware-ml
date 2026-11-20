@@ -914,6 +914,20 @@ class TransFusionHead(nn.Module):
 
         return ModelPredictions(detection3d_predictions=detection3d_predictions)
 
+    @property
+    def export_output_names(self) -> tuple[str, ...]:
+        """Output names of a graph that exports the raw :class:`TransFusionHeadOutputs`.
+
+        They are the output fields, not the head's branch keys (``centers``, ``heights``, ...).
+        A graph that decodes inside the export names its own outputs.
+        """
+        branches = tuple(
+            name
+            for name in TransFusionSeparateHeadOutputs.model_fields
+            if name != "vel" or self.use_velocity
+        )
+        return ("dense_heatmap", "query_heatmap_score", "query_labels", *branches)
+
     def decode_outputs(self, outputs: Detection3DHeadOutputs) -> ModelPredictions:
         """Decode predictions into metric-space boxes.
 
