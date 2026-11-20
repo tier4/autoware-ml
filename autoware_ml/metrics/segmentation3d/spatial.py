@@ -78,6 +78,9 @@ def tolerant_error_mask(
     cells, grid_shape = _prefilter_cells(points[:, :2], radius)
     # The search bound sits one step above the radius and the hit is checked against
     # the radius itself, so a neighbour at exactly ``radius`` rescues, as it always did.
+    # The check sums the squares in x, y, z order, as the counting query
+    # (``query_ball_point``) does, so a distance within rounding of the radius gets
+    # the same verdict; a different summation order (``np.einsum``) can flip it.
     bound = np.nextafter(radius, np.inf)
     for true_class in np.unique(target[wrong]):
         candidates = np.flatnonzero(pred == true_class)
@@ -94,7 +97,8 @@ def tolerant_error_mask(
         )
         found = nearest < candidates.size
         offset = points[queries[found]] - points[candidates[nearest[found]]]
-        within = np.einsum("ij,ij->i", offset, offset) <= radius * radius
+        squared = offset[:, 0] ** 2 + offset[:, 1] ** 2 + offset[:, 2] ** 2
+        within = squared <= radius * radius
         mask[queries[found][within]] = False
     return mask
 

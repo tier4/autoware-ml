@@ -25,6 +25,7 @@ import unittest
 
 import numpy as np
 import pytest
+from scipy.spatial import cKDTree
 from scipy.stats import rankdata
 import torch
 
@@ -460,7 +461,7 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
 
 
 class TestTolerantErrorMask(unittest.TestCase):
-    """Tests the neighbourhood rescue at its radius and on a frame with a stray point."""
+    """Tests the neighbourhood rescue at and around its radius and with a stray point."""
 
     def test_rescues_at_exactly_the_radius(self) -> None:
         """
@@ -479,6 +480,39 @@ class TestTolerantErrorMask(unittest.TestCase):
             tolerant_error_mask(at_radius, pred, target, 0.25), [False, False]
         )
         np.testing.assert_array_equal(tolerant_error_mask(beyond, pred, target, 0.25), [True, True])
+
+    def test_matches_the_counting_query_within_rounding_of_the_radius(self) -> None:
+        """
+        Input: 20,000 pairs of wrong points, each point the other's candidate, spread over
+        200 m, with the two points of a pair a radius apart give or take up to four float
+        steps in a random direction, for a 1 m radius.
+        Expected: every pair whose distance rounds to within the radius is rescued exactly
+        as the previous counting query (``query_ball_point``) rescued it, so the distance
+        check must use the query's own arithmetic.
+        Check: the mask equals the counting query's mask, and the pairs include both
+        rescued and unrescued points.
+        """
+        rng = np.random.default_rng(7)
+        radius, pairs = 1.0, 20_000
+        first = rng.uniform(-100.0, 100.0, (pairs, 3))
+        direction = rng.normal(size=(pairs, 3))
+        direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+        steps = rng.integers(-4, 5, pairs) * np.finfo(np.float64).eps
+        second = first + direction * (radius * (1.0 + steps))[:, None]
+        coord = np.concatenate([first, second])
+        target = np.repeat([0, 1], pairs)
+        pred = np.repeat([1, 0], pairs)
+
+        expected = np.ones(2 * pairs, dtype=bool)
+        for true_class in (0, 1):
+            queries = np.flatnonzero(target == true_class)
+            counts = cKDTree(coord[pred == true_class]).query_ball_point(
+                coord[queries], r=radius, return_length=True
+            )
+            expected[queries[counts > 0]] = False
+        self.assertTrue(expected.any() and not expected.all())
+
+        np.testing.assert_array_equal(tolerant_error_mask(coord, pred, target, radius), expected)
 
     def test_ignores_a_point_far_from_the_scene(self) -> None:
         """
