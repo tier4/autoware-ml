@@ -597,6 +597,10 @@ class SerializedAttention(PointModule):
 
         Every sample is padded on its own, so no window crosses a sample boundary.
 
+        The result depends only on the sample offsets and the window size, which every block of
+        a hierarchy level shares, so it is kept on the point container and reused by the other
+        blocks of the level instead of synchronizing with the device for every block.
+
         Args:
             point: Serialized point container.
 
@@ -606,6 +610,10 @@ class SerializedAttention(PointModule):
         """
         device = point.offset.device
         patch_size = self.patch_size
+        cache_key = f"attention_padding_{patch_size}_{int(self.enable_flash)}"
+        cached = point.get(cache_key)
+        if cached is not None:
+            return cached
         pads, unpads, seqlens = [], [], []
         start = padded_start = 0
         for end in point.offset.tolist():
@@ -623,10 +631,13 @@ class SerializedAttention(PointModule):
             )
             start, padded_start = end, padded_start + padded.numel()
         pad, unpad = torch.cat(pads), torch.cat(unpads)
-        if not self.enable_flash:
-            return pad, unpad, None
-        seqlens.append(torch.tensor([padded_start], device=device))
-        return pad, unpad, torch.cat(seqlens).to(torch.int32)
+        if self.enable_flash:
+            seqlens.append(torch.tensor([padded_start], device=device))
+            cu_seqlens = torch.cat(seqlens).to(torch.int32)
+        else:
+            cu_seqlens = None
+        point[cache_key] = (pad, unpad, cu_seqlens)
+        return pad, unpad, cu_seqlens
 
     @torch.no_grad()
     def disable_flash(self) -> None:
