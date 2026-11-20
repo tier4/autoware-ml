@@ -385,6 +385,12 @@ class TransFusionHead(nn.Module):
         self.dense_heatmap_pooling_class_ids = self._resolve_class_ids(
             dense_heatmap_pooling_class_names
         )
+        # Constant channel indices so _suppress_dense_heatmaps exports without a ScatterND.
+        pooling_ids = list(self.dense_heatmap_pooling_class_ids)
+        excluded_ids = [c for c in range(self.num_classes) if c not in pooling_ids]
+        concat_order = pooling_ids + excluded_ids
+        self._dense_heatmap_excluded_class_ids = excluded_ids
+        self._local_max_class_remap = [concat_order.index(c) for c in range(self.num_classes)]
         # nms_type decides whether NMS runs at all, the groups only decide how. Groups without a
         # type would be silently ignored, which is the kind of config mistake worth refusing.
         if nms_type is None and nms_group_configs is not None:
@@ -561,7 +567,7 @@ class TransFusionHead(nn.Module):
         if not self.dense_heatmap_pooling_class_ids:
             return heatmaps
 
-        local_max = heatmaps.clone()
+        # A slice assignment here would export as ScatterND plus a 42-node index subgraph.
         padding = self.nms_kernel_size // 2
         selected_heatmap = heatmaps[:, self.dense_heatmap_pooling_class_ids, :, :]
         pooled = F.max_pool2d(
@@ -570,16 +576,28 @@ class TransFusionHead(nn.Module):
             stride=1,
             padding=0,
         )
-
-        if padding == 0:
-            local_max[:, self.dense_heatmap_pooling_class_ids, :, :] = pooled
-        else:
-            local_max[
-                :,
-                self.dense_heatmap_pooling_class_ids,
-                padding:-padding,
-                padding:-padding,
-            ] = pooled
+        if padding > 0:
+            height, width = selected_heatmap.shape[2], selected_heatmap.shape[3]
+            interior = F.pad(
+                torch.ones(
+                    1,
+                    1,
+                    height - 2 * padding,
+                    width - 2 * padding,
+                    device=heatmaps.device,
+                    dtype=heatmaps.dtype,
+                ),
+                [padding] * 4,
+                value=0.0,
+            )
+            # Scores are >= 0 (sigmoid): pooled inside, raw score on the border ring.
+            pooled = torch.maximum(
+                F.pad(pooled, [padding] * 4, value=0.0),
+                selected_heatmap * (1.0 - interior),
+            )
+        local_max = torch.cat(
+            [pooled, heatmaps[:, self._dense_heatmap_excluded_class_ids, :, :]], dim=1
+        )[:, self._local_max_class_remap, :, :]
         return heatmaps * (local_max == heatmaps)
 
     def _create_2d_grid(
