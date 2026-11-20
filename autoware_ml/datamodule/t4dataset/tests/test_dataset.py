@@ -23,6 +23,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 import polars as pl
+import torch
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.image_frames import ImageFrameDataModel
@@ -360,6 +361,35 @@ def test_frame_meta_carries_the_map_resolved_against_the_datasets_own_root(tmp_p
         _dataset_over(other_root, records, None).get_frame_meta_sample(0, None).lanelet_map_path
         is None
     )
+
+
+def test_frame_meta_keeps_the_map_position_to_the_millimeter(tmp_path: Path) -> None:
+    """
+    Input: a record whose ego pose sits 65 km from the map origin, at x = 65000.123 m.
+    Expected: the frame meta keeps the position in float64, float32 would round it to 7.8 mm
+    steps and warp the temporal state by that much between frames.
+    Check: the dtype and the translation of the frame transform.
+    """
+    scene = "db_default/0a1b2c3d-0000-4000-8000-000000000000/0"
+    frame = _lidar_frame(scene)
+    pose = np.eye(4)
+    pose[0, 3] = 65000.123
+    frame["lidar_frame_ego_pose_to_global_matrix"] = pose.tolist()
+    records = pl.DataFrame(
+        {
+            DatasetTableSchema.LIDAR_FRAMES.name: [[frame]],
+            DatasetTableSchema.TIMESTAMP_SECONDS.name: [12.5],
+        },
+        schema={
+            DatasetTableSchema.LIDAR_FRAMES.name: DatasetTableSchema.LIDAR_FRAMES.dtype,
+            DatasetTableSchema.TIMESTAMP_SECONDS.name: DatasetTableSchema.TIMESTAMP_SECONDS.dtype,
+        },
+    )
+
+    ego2global = _dataset_over(tmp_path, records, None).get_frame_meta_sample(0, None).ego2global
+
+    assert ego2global.dtype == torch.float64
+    assert abs(float(ego2global[0, 3]) - 65000.123) < 1e-6
 
 
 class _LoggingTask(BaseDatasetTask):

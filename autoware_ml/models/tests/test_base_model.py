@@ -30,6 +30,7 @@ from autoware_ml.datamodule.data_module import DataModule
 from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
+from autoware_ml.types.dataset import SplitType
 
 
 class _PointSumModel(ModuleBaseModel):
@@ -64,6 +65,12 @@ class _StreamingModel(_PointSumModel):
     requires_streaming: ClassVar[bool] = True
 
 
+class _KeyFrameStreamingModel(_StreamingModel):
+    """A streaming model whose losses skip the frames without annotations."""
+
+    skips_unsupervised_frames: ClassVar[bool] = True
+
+
 class _ForeignDataModule(L.LightningDataModule):
     """A Lightning datamodule from outside the framework that claims to stream."""
 
@@ -71,8 +78,21 @@ class _ForeignDataModule(L.LightningDataModule):
 
 
 def _without_sources(datamodule_type: type[DataModule]) -> DataModule:
-    """An instance of a framework datamodule built without sources, which ``setup`` never reads."""
-    return datamodule_type.__new__(datamodule_type)
+    """An instance of a framework datamodule built without sources."""
+    datamodule = datamodule_type.__new__(datamodule_type)
+    datamodule.sources = {}
+    return datamodule
+
+
+def _serving_non_key_frames(*splits: SplitType) -> StreamingDataModule:
+    """A streaming datamodule whose database serves the frames between key frames to splits."""
+    datamodule = _without_sources(StreamingDataModule)
+    database = SimpleNamespace(database_hash="streamed", serves_non_key_frames=True)
+    source = SimpleNamespace(
+        database=database, dataset=lambda split: object() if split in splits else None
+    )
+    datamodule.sources = {"streamed": source}
+    return datamodule
 
 
 def _attach_trainer(model: ModuleBaseModel, datamodule: object | None) -> None:
@@ -168,6 +188,26 @@ def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
 
     with pytest.raises(ValueError, match=f"use a StreamingDataModule, got {found}"):
         model.setup("fit")
+
+
+def test_setup_takes_frames_between_key_frames_only_for_a_model_that_skips_them() -> None:
+    """
+    Input: a streaming datamodule serving the frames between key frames, set up with a model
+    computing its losses on every frame and with one whose losses skip the unsupervised frames.
+    Expected: the frames carry no annotations, so only the second model is tested on them. The
+    first one still predicts, which computes no loss, and fits on splits serving key frames only.
+    Check: a ValueError for the first model, every other setup passes.
+    """
+    model = _StreamingModel()
+    _attach_trainer(model, _serving_non_key_frames(SplitType.TEST, SplitType.PREDICT))
+    with pytest.raises(ValueError, match="computes its losses on every frame"):
+        model.setup("test")
+    model.setup("predict")
+    model.setup("fit")
+
+    model = _KeyFrameStreamingModel()
+    _attach_trainer(model, _serving_non_key_frames(SplitType.TEST))
+    model.setup("test")
 
 
 def test_setup_ignores_the_datamodule_for_a_model_without_memory() -> None:

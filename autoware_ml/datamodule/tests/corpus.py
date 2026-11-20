@@ -127,7 +127,10 @@ def write_lidar_frame(
 
 
 def write_corpus(
-    root: Path, num_records: int, unmasked_records: frozenset[int] = frozenset()
+    root: Path,
+    num_records: int,
+    unmasked_records: frozenset[int] = frozenset(),
+    non_key_records: frozenset[int] = frozenset(),
 ) -> pl.DataFrame:
     """Write a small synthetic corpus and return its record table.
 
@@ -135,6 +138,8 @@ def write_corpus(
         root: Database root the relative paths resolve against.
         num_records: Number of frames to write.
         unmasked_records: Positions of the records written without a semantic mask.
+        non_key_records: Positions of the records written as frames between key frames, without
+            a mask and without boxes.
 
     Returns:
         pl.DataFrame: The record table of the corpus.
@@ -147,10 +152,11 @@ def write_corpus(
                 record_index,
                 frame_index,
                 record_index * NUM_SWEEPS + frame_index,
-                masked=record_index not in unmasked_records,
+                masked=record_index not in unmasked_records | non_key_records,
             )
             for frame_index in range(NUM_SWEEPS)
         ]
+        lidar_frames[0]["lidar_keyframe"] = record_index not in non_key_records
 
         box = np.zeros(len(Box3DFieldIndex), dtype=np.float64)
         box[Box3DFieldIndex.X] = 1.0
@@ -175,7 +181,9 @@ def write_corpus(
                     "category_names": ["car"],
                     "category_indices": [0],
                 },
-                DatasetTableSchema.BOXES_3D.name: [
+                DatasetTableSchema.BOXES_3D.name: []
+                if record_index in non_key_records
+                else [
                     {
                         "box3d_params": box.tolist(),
                         "box3d_instance_id": f"box-{record_index}",

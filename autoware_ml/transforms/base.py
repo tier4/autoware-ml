@@ -225,6 +225,10 @@ class TransformsCompose:
 
         return model_gt_sample
 
+    def requires(self, key: str) -> bool:
+        """Whether a transform of the pipeline needs a field of the sample."""
+        return any(key in transform._required_keys for transform in self.pipeline)
+
     def __repr__(self) -> str:
         """Return a formatted string representation of the composition.
 

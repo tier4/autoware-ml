@@ -25,6 +25,7 @@ import torch
 from shapely.geometry import box
 
 from autoware_ml.metrics.base import EvalStage
+from autoware_ml.metrics.detection3d.box_counts import BoxCounts
 from autoware_ml.metrics.detection3d.collision import CollisionTTC
 from autoware_ml.metrics.detection3d.collision_weighted_map import CollisionWeightedMeanAP
 from autoware_ml.metrics.detection3d.critical_fp_fn import CriticalFPFN
@@ -277,7 +278,7 @@ def test_a_metric_reading_a_skipped_prediction_fails_loud() -> None:
 
 def test_min_num_points_without_counts_raises() -> None:
     suite = Detection3DMetricSuite(
-        components=[CriticalFPFN(confidences=(0.5,))],
+        components=[BoxCounts()],
         class_names=CLASS_NAMES,
         min_num_points=2,
     )
@@ -292,4 +293,15 @@ def test_min_num_points_without_counts_raises() -> None:
                     )
                 ]
             )
+        )
+
+
+def test_a_ttc_metric_without_a_collision_provider_is_refused() -> None:
+    """
+    Input: a suite whose CriticalFPFN reads per-box TTC, built without a collision provider.
+    Expected: the suite refuses it at construction, not after a whole test run.
+    """
+    with pytest.raises(ValueError, match="collision provider"):
+        Detection3DMetricSuite(
+            components=[CriticalFPFN(confidences=(0.5,))], class_names=CLASS_NAMES
         )

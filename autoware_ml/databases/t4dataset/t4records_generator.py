@@ -229,6 +229,12 @@ class T4RecordsGenerator:
             f"sample steps: {self.sample_steps} and max sweeps: {MAX_SWEEPS}"
         )
 
+        if self.scenario_data.dataset_params.non_key_frames:
+            return [
+                self.extract_t4_frame_record(token, frame_index).to_dataset_record()
+                for frame_index, token in enumerate(self._lidar_frame_tokens())
+            ]
+
         for sample_index in range(0, len(self.t4_devkit_dataset.sample), self.sample_steps):
             sample = self.t4_devkit_dataset.sample[sample_index]
             t4_sample_record = self.extract_t4_sample_record(sample, sample_index)
@@ -268,14 +274,37 @@ class T4RecordsGenerator:
           FrameBasicMetadata: Frame basic metadata of the T4 sample.
         """
 
-        scene_record: Scene = self.t4_devkit_dataset.get(SchemaName.SCENE, sample.scene_token)
+        return self._extract_frame_basic_metadata(
+            frame_id=sample.token,
+            frame_index=sample_index,
+            timestamp=sample.timestamp,
+            scene_token=sample.scene_token,
+        )
+
+    def _extract_frame_basic_metadata(
+        self, frame_id: str, frame_index: int, timestamp: int, scene_token: str
+    ) -> FrameBasicMetadata:
+        """
+        Basic metadata of one frame of the scene.
+
+        Args:
+          frame_id: Token of the sample, or of the lidar frame of a non-key frame.
+          frame_index: Index of the frame in the records of the scene.
+          timestamp: Time of the frame in microseconds.
+          scene_token: Token of the scene.
+
+        Returns:
+          FrameBasicMetadata: Frame basic metadata.
+        """
+
+        scene_record: Scene = self.t4_devkit_dataset.get(SchemaName.SCENE, scene_token)
         return FrameBasicMetadata(
             scenario_id=self.scenario_data.scenario_id,
-            sample_id=sample.token,
-            sample_index=sample_index,
+            sample_id=frame_id,
+            sample_index=frame_index,
             location=self.scenario_data.location,
             vehicle_type=self.scenario_data.vehicle_type,
-            timestamp_seconds=microseconds2seconds(sample.timestamp),
+            timestamp_seconds=microseconds2seconds(timestamp),
             scenario_name=scene_record.name,
             traffic_cone_barrier_bbox_status=self.scenario_data.traffic_cone_barrier_bbox_status,
         )
@@ -423,9 +452,41 @@ class T4RecordsGenerator:
           Tuple of:
             LidarDatasetRecord: Lidar records of the T4 sample.
             Sequence[Box3D]: Sequence of Box3D annotations in the lidar frame, in the sensor coordinate.
+
+        Raises:
+          ValueError: If the lidar frame of the sample is not a key frame.
         """
 
         calibrated_lidar_sample_data_token = sample.data[self.lidar_channel]
+        lidar_path, box3d, _ = self.t4_devkit_dataset.get_sample_data(
+            sample_data_token=calibrated_lidar_sample_data_token,
+            as_3d=True,
+            as_sensor_coord=True,
+        )
+        lidar_frame_data_model = self._lidar_frame_data_model(
+            calibrated_lidar_sample_data_token, lidar_path
+        )
+        if not lidar_frame_data_model.lidar_keyframe:
+            raise ValueError(
+                f"Sample {sample.token} has the lidar frame {calibrated_lidar_sample_data_token}, "
+                "which is not a key frame."
+            )
+        return lidar_frame_data_model, box3d
+
+    def _lidar_frame_data_model(
+        self, calibrated_lidar_sample_data_token: str, lidar_path: str
+    ) -> LidarFrameDataModel:
+        """
+        Lidar frame metadata of one lidar frame of the scene.
+
+        Args:
+          calibrated_lidar_sample_data_token: Token of the lidar frame.
+          lidar_path: Path of the point cloud of the frame.
+
+        Returns:
+          LidarFrameDataModel: Lidar frame metadata.
+        """
+
         sd_record: SampleData = self.t4_devkit_dataset.get(
             SchemaName.SAMPLE_DATA, calibrated_lidar_sample_data_token
         )
@@ -436,12 +497,6 @@ class T4RecordsGenerator:
             rotation_quaternion=cs_record.rotation,
             translation=cs_record.translation,
             convert_to_float32=False,
-        )
-
-        lidar_path, box3d, _ = self.t4_devkit_dataset.get_sample_data(
-            sample_data_token=calibrated_lidar_sample_data_token,
-            as_3d=True,
-            as_sensor_coord=True,
         )
 
         # Extract ego pose to global matrix in the lidar frame from the T4Dataset
@@ -483,7 +538,7 @@ class T4RecordsGenerator:
             lidar_pointcloud_semantic_mask_relative_path=lidar_pointcloud_semantic_mask_path,
             lidar_pointcloud_t4pack_frame=self._find_t4pack_frame(lidar_path),
         )
-        return lidar_frame_data_model, box3d
+        return lidar_frame_data_model
 
     def _compute_sensor_transformation_matrices(
         self,
@@ -741,16 +796,16 @@ class T4RecordsGenerator:
 
     def _extract_image_frame(
         self,
-        sample: Sample,
+        calibrated_camera_sample_data_token: str,
         camera_channel_name: str,
         lidar_sensor_to_ego_pose_matrix: npt.NDArray[np.float64],
         lidar_frame_ego_pose_to_global_matrix: npt.NDArray[np.float64],
     ) -> ImageFrameDataModel:
         """
-        Extract image frame from a T4 sample.
+        Extract one image frame of the scene.
 
         Args:
-          sample: T4 Sample.
+          calibrated_camera_sample_data_token: Token of the camera frame.
           camera_channel_name: Camera channel name.
           lidar_sensor_to_ego_pose_matrix: Transformation matrix from LiDAR sensor to ego pose.
           lidar_frame_ego_pose_to_global_matrix: Transformation matrix from LiDAR ego pose to
@@ -760,7 +815,6 @@ class T4RecordsGenerator:
           ImageFrameDataModel: Image frame data model of the T4 sample.
         """
 
-        calibrated_camera_sample_data_token = sample.data[camera_channel_name]
         sd_record: SampleData = self.t4_devkit_dataset.get(
             SchemaName.SAMPLE_DATA, calibrated_camera_sample_data_token
         )
@@ -844,7 +898,7 @@ class T4RecordsGenerator:
 
         return [
             self._extract_image_frame(
-                sample=sample,
+                calibrated_camera_sample_data_token=sample.data[camera_channel_name],
                 camera_channel_name=camera_channel_name,
                 lidar_sensor_to_ego_pose_matrix=lidar_frame_data_model.lidar_sensor_to_ego_pose_matrix,
                 lidar_frame_ego_pose_to_global_matrix=lidar_frame_data_model.lidar_frame_ego_pose_to_global_matrix,
@@ -906,7 +960,9 @@ class T4RecordsGenerator:
             image_channel_sweep_data_models.append(
                 [
                     self._extract_image_frame(
-                        sample=current_sample,
+                        calibrated_camera_sample_data_token=current_sample.data[
+                            camera_channel_name
+                        ],
                         camera_channel_name=camera_channel_name,
                         lidar_sensor_to_ego_pose_matrix=current_lidar_sensor_to_ego_pose_matrix,
                         lidar_frame_ego_pose_to_global_matrix=current_lidar_frame_ego_pose_to_global_matrix,
@@ -1009,6 +1065,93 @@ class T4RecordsGenerator:
                 )
             )
         return updated_boxes_3d_data_models
+
+    def _sample_data_chain(self, sample_data_token: str) -> Sequence[SampleData]:
+        """
+        Every frame of the sensor of one frame, in time order.
+
+        Args:
+          sample_data_token: Token of any frame of the sensor.
+
+        Returns:
+          Sequence[SampleData]: The frames of the sensor from the first to the last.
+        """
+
+        record: SampleData = self.t4_devkit_dataset.get(SchemaName.SAMPLE_DATA, sample_data_token)
+        while record.prev:
+            record = self.t4_devkit_dataset.get(SchemaName.SAMPLE_DATA, record.prev)
+        chain = [record]
+        while chain[-1].next:
+            chain.append(self.t4_devkit_dataset.get(SchemaName.SAMPLE_DATA, chain[-1].next))
+        return chain
+
+    def _lidar_frame_tokens(self) -> Sequence[str]:
+        """
+        Tokens of every lidar frame of the scene in time order, key frames and the frames between.
+
+        Returns:
+          Sequence[str]: Lidar frame tokens.
+        """
+
+        first_sample = self.t4_devkit_dataset.sample[0]
+        self._check_lidar_channel(first_sample)
+        return [
+            record.token
+            for record in self._sample_data_chain(first_sample.data[self.lidar_channel])
+        ]
+
+    def extract_t4_frame_record(self, lidar_frame_token: str, frame_index: int) -> T4SampleRecord:
+        """
+        Record of one lidar frame of a scene that serves its non-key frames.
+
+        Args:
+          lidar_frame_token: Token of the lidar frame.
+          frame_index: Index of the frame in the records of the scene.
+
+        Returns:
+          T4SampleRecord: The sample record of a key frame, else the non-key frame record.
+        """
+
+        sd_record: SampleData = self.t4_devkit_dataset.get(
+            SchemaName.SAMPLE_DATA, lidar_frame_token
+        )
+        if sd_record.is_key_frame:
+            sample: Sample = self.t4_devkit_dataset.get(SchemaName.SAMPLE, sd_record.sample_token)
+            return self.extract_t4_sample_record(sample, frame_index)
+        return self.extract_t4_non_key_frame_record(sd_record, frame_index)
+
+    def extract_t4_non_key_frame_record(
+        self, sd_record: SampleData, frame_index: int
+    ) -> T4SampleRecord:
+        """
+        Record of a lidar frame between key frames, without boxes and camera frames.
+
+        Args:
+          sd_record: Lidar frame.
+          frame_index: Index of the frame in the records of the scene.
+
+        Returns:
+          T4SampleRecord: Record of the frame.
+        """
+
+        frame_basic_metadata = self._extract_frame_basic_metadata(
+            frame_id=sd_record.token,
+            frame_index=frame_index,
+            timestamp=sd_record.timestamp,
+            scene_token=self.t4_devkit_dataset.sample[0].scene_token,
+        )
+        lidar_frame_data_model = self._lidar_frame_data_model(
+            sd_record.token,
+            self.t4_devkit_dataset.get_sample_data_path(sample_data_token=sd_record.token),
+        )
+        return T4SampleRecord(
+            frame_basic_metadata=frame_basic_metadata,
+            lidar_frame_data_models=self._extract_lidar_window(lidar_frame_data_model),
+            lidar_source_data_models=self._extract_lidar_sources(),
+            image_frame_data_models=[],
+            category_mapping_data_model=self._extract_category_mapping(),
+            boxes_3d_data_model=[],
+        )
 
     def extract_t4_sample_record(self, sample: Sample, sample_index: int) -> T4SampleRecord:
         """

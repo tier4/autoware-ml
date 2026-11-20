@@ -44,7 +44,7 @@ def _record(path: Path, i: int, t4pack_frame: T4PackFrame | None) -> LiDARPointC
         num_features=5,
         intensity_scale=1.0,
         sensor_to_ego_pose_matrix=torch.eye(4),
-        lidar_to_ego_pose_to_global_matrix=torch.eye(4),
+        lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float64),
         lidar_sensor_to_lidar_sweep_matrix=torch.eye(4),
         t4pack_frame=t4pack_frame,
     )

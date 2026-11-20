@@ -88,10 +88,13 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
     A temporal model that carries a memory across batches sets ``requires_streaming``, and
     :meth:`setup` then requires a :class:`StreamingDataModule`, which streams scene-contiguous
-    frames.
+    frames. A model whose losses leave out the frames ``ModelGTBatch.supervised_mask()`` leaves
+    out sets ``skips_unsupervised_frames``, and only such a model is tested on a datamodule
+    serving the frames between key frames.
     """
 
     requires_streaming: ClassVar[bool] = False
+    skips_unsupervised_frames: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -132,19 +135,33 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
         A streaming model needs a :class:`StreamingDataModule`, which serves the frames of
         every scene in time order to each batch position. The plain DataModule and fitting on
-        bare dataloaders give no such order.
+        bare dataloaders give no such order. The frames between key frames carry no annotations
+        and only the test and predict splits read them, so only a model whose losses skip them
+        is tested on a datamodule serving them, while any model predicts on it.
 
         Args:
             stage: Lightning stage being set up.
 
         Raises:
             ValueError: If the model requires streaming and the trainer runs without a
-                datamodule, or with one that is not a StreamingDataModule.
+                datamodule, or with one that is not a StreamingDataModule, or if the datamodule
+                serves frames between key frames to a model that would learn from them.
         """
         super().setup(stage)
+        datamodule = self.trainer.datamodule
+        if (
+            stage != "predict"
+            and isinstance(datamodule, StreamingDataModule)
+            and datamodule.serves_non_key_frames(stage)
+            and not self.skips_unsupervised_frames
+        ):
+            raise ValueError(
+                f"{type(self).__name__} computes its losses on every frame, but the datamodule "
+                "serves the frames between key frames, which carry no annotations. Serve key "
+                "frames only."
+            )
         if not self.requires_streaming:
             return
-        datamodule = self.trainer.datamodule
         if not isinstance(datamodule, StreamingDataModule):
             found = "no datamodule" if datamodule is None else type(datamodule).__name__
             raise ValueError(
@@ -247,9 +264,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         """Infer the effective sample batch size for logging.
 
-        The ground-truth batch counts its samples, leaving out those that only pad a streaming
-        lane. Models with non-standard input structures should override this hook to provide
-        an explicit sample count.
+        The ground-truth batch counts the samples the losses learn from, the key frames that pad
+        no streaming lane. Models with non-standard input structures should override this hook to
+        provide an explicit sample count.
 
         Args:
             multi_task_batch_inputs: Full batch dictionary from the dataloader.
@@ -257,7 +274,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         Returns:
             Sample batch size when it can be inferred, otherwise ``None``.
         """
-        return multi_task_batch_inputs.multi_task_gt_batch.num_real_samples()
+        return multi_task_batch_inputs.multi_task_gt_batch.num_supervised_samples()
 
     def _core_step(
         self,

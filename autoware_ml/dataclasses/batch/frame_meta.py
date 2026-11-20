@@ -30,7 +30,7 @@ from __future__ import annotations
 from typing import NamedTuple
 from collections.abc import Sequence
 
-from jaxtyping import Float32, Float64
+from jaxtyping import Float64
 import torch
 from torch import Tensor
 
@@ -42,20 +42,24 @@ class FrameMetaSample(NamedTuple):
 
     Attributes:
         ego2global: 4x4 transform from the frame the points and boxes are expressed in (the
-            main lidar frame) to the map frame. It is named after the ``ego2global`` key the
-            metrics read; the lidar mounting is already composed in.
+            main lidar frame) to the map frame, with the lidar mounting composed in. It is named
+            after the ``ego2global`` key the metrics read. It stays float64, since map
+            coordinates reach 1e5 m, where a float32 step is about 8 mm.
         scene_token: Scene identifier of the frame.
         timestamp: Sample time of the frame in seconds. Epoch seconds exceed the float32
             resolution (128 s steps at 1.7e9 s), so it stays a Python float.
+        key_frame: Whether the frame is a key frame of its scene, the frames between key frames
+            carry no annotations.
         lanelet_map_path: Path of the scene's lanelet map, resolved by the dataset that serves
             the frame against its own corpus, so frames of different sources carry the maps of
             their own roots. ``None`` when the scene or the corpus has no map, which keeps the
             frame out of the map-backed metric slices.
     """
 
-    ego2global: Float32[Tensor, "4 4"]
+    ego2global: Float64[Tensor, "4 4"]
     scene_token: str
     timestamp: float
+    key_frame: bool
     lanelet_map_path: str | None = None
 
 
@@ -68,12 +72,14 @@ class FrameMetaBatch(NamedTuple):
         timestamps: Per-frame sample times in seconds, in float64 because float32 cannot
             resolve epoch seconds.
         lanelet_map_paths: Per-frame lanelet map paths, ``None`` for frames without a map.
+        key_frames: Per-frame flags, whether the frame is a key frame of its scene.
     """
 
-    ego2globals: Float32[Tensor, "batch_size 4 4"]
+    ego2globals: Float64[Tensor, "batch_size 4 4"]
     scene_tokens: Sequence[str]
     timestamps: Float64[Tensor, " batch_size"]
     lanelet_map_paths: Sequence[str | None]
+    key_frames: Sequence[bool]
 
     @staticmethod
     def collate_gt_samples(
@@ -124,6 +130,7 @@ class FrameMetaBatch(NamedTuple):
                 dtype=torch.float64,
             ),
             lanelet_map_paths=[frame_meta.lanelet_map_path for frame_meta in frame_meta_samples],
+            key_frames=[frame_meta.key_frame for frame_meta in frame_meta_samples],
         )
 
     def sample(self, index: int) -> FrameMetaSample:
@@ -139,6 +146,7 @@ class FrameMetaBatch(NamedTuple):
             ego2global=self.ego2globals[index],
             scene_token=self.scene_tokens[index],
             timestamp=float(self.timestamps[index]),
+            key_frame=self.key_frames[index],
             lanelet_map_path=self.lanelet_map_paths[index],
         )
 
@@ -156,4 +164,5 @@ class FrameMetaBatch(NamedTuple):
             scene_tokens=self.scene_tokens,
             timestamps=self.timestamps.to(device),
             lanelet_map_paths=self.lanelet_map_paths,
+            key_frames=self.key_frames,
         )

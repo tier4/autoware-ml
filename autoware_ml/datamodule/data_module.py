@@ -17,7 +17,7 @@
 import logging
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import lightning as L
 from torch.utils.data import DataLoader
@@ -34,6 +34,15 @@ from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterfac
 from autoware_ml.types.dataset import SplitType
 
 logger = logging.getLogger(__name__)
+
+# Splits every Lightning stage reads
+STAGE_SPLITS: dict[str | None, tuple[SplitType, ...]] = {
+    None: (SplitType.TRAIN, SplitType.VAL, SplitType.TEST, SplitType.PREDICT),
+    "fit": (SplitType.TRAIN, SplitType.VAL),
+    "validate": (SplitType.VAL,),
+    "test": (SplitType.TEST,),
+    "predict": (SplitType.PREDICT,),
+}
 
 # Split of the scenario lists every datamodule split reads its records from. Prediction runs
 # on the scenarios of the test split.
@@ -97,6 +106,9 @@ class DataModule(L.LightningDataModule):
     dataset of every source to the records of its database.
     """
 
+    # Whether the datamodule streams the frames of a scene in time order
+    streams_scenes: ClassVar[bool] = False
+
     def __init__(
         self,
         splitter: SplitterInterface,
@@ -119,6 +131,12 @@ class DataModule(L.LightningDataModule):
           predict_dataloader: Dataloader settings of the predict split.
           train_frame_sampling: Repeat factor sampling of the training split, None when its
             samples are drawn uniformly.
+
+        Raises:
+          ValueError: If there is no source, if a database serves the frames between its key
+            frames without the scenes being streamed, since such frames carry no annotations, or
+            if a source serves cameras from such a database, whose frames between key frames hold
+            no camera frames.
         """
         super().__init__()
 
@@ -127,12 +145,43 @@ class DataModule(L.LightningDataModule):
             raise ValueError("The datamodule needs at least one dataset source.")
 
         self.sources: dict[str, DatasetSource] = dict(sources)
+        for database in self.databases():
+            if database.serves_non_key_frames and not self.streams_scenes:
+                raise ValueError(
+                    f"Database {database.version} serves the frames between its key frames, "
+                    "which carry no annotations and only feed a stream. Serve it with the "
+                    "streaming datamodule."
+                )
+        for name, source in self.sources.items():
+            if source.database.serves_non_key_frames and any(
+                dataset.serves_cameras for dataset in source.datasets.values()
+            ):
+                raise ValueError(
+                    f"Source {name} serves cameras from database {source.database.version}, "
+                    "whose frames between key frames hold no camera frames."
+                )
         self.datasets: dict[SplitType, ConcatDataset] = {}
         self.train_dataloader_config = train_dataloader
         self.validation_dataloader_config = validation_dataloader
         self.test_dataloader_config = test_dataloader
         self.predict_dataloader_config = predict_dataloader
         self.train_frame_sampling = train_frame_sampling
+
+    def serves_non_key_frames(self, stage: str) -> bool:
+        """
+        Whether a split of a stage reads a database serving the frames between its key frames.
+
+        Args:
+          stage: Lightning stage, one of fit, validate, test or predict.
+
+        Returns:
+          bool: True when the stage streams frames that carry no annotations.
+        """
+        return any(
+            source.database.serves_non_key_frames
+            for split in STAGE_SPLITS[stage]
+            for source in self.split_sources(split).values()
+        )
 
     def databases(self) -> Sequence[BaseDatabase]:
         """
@@ -168,14 +217,7 @@ class DataModule(L.LightningDataModule):
         Args:
             stage: Lightning stage, one of None, fit, validate, test or predict.
         """
-        stage_to_splits = {
-            None: (SplitType.TRAIN, SplitType.VAL, SplitType.TEST, SplitType.PREDICT),
-            "fit": (SplitType.TRAIN, SplitType.VAL),
-            "validate": (SplitType.VAL,),
-            "test": (SplitType.TEST,),
-            "predict": (SplitType.PREDICT,),
-        }
-        self.setup_splits(stage_to_splits[stage])
+        self.setup_splits(STAGE_SPLITS[stage])
 
     def setup_splits(self, splits: Sequence[SplitType]) -> None:
         """Build the dataset of every given split.
@@ -192,11 +234,25 @@ class DataModule(L.LightningDataModule):
                 an empty split without failing: an empty validation split skips validation, and
                 the checkpoint callbacks save after validation only, so a training run would
                 end without a checkpoint, and a test on an empty split returns nothing. The run
-                stops here instead, naming the sources to fix.
+                stops here instead, naming the sources to fix. Also if a database serving the
+                frames between its key frames serves the training or validation split, whose
+                frames are all annotated.
         """
         split_records: dict[str, Mapping[SplitType, Any]] = {}
         for split in splits:
             sources = self.split_sources(split)
+            if split in (SplitType.TRAIN, SplitType.VAL):
+                unlabelled = [
+                    name
+                    for name, source in sources.items()
+                    if source.database.serves_non_key_frames
+                ]
+                if unlabelled:
+                    raise ValueError(
+                        f"Sources {unlabelled} serve the frames between key frames to split "
+                        f"{split}. Models train and validate on annotated frames only, such a "
+                        "database serves the test and predict splits."
+                    )
             if not sources:
                 logger.info(f"No dataset source serves split {split}, skipping it.")
                 continue

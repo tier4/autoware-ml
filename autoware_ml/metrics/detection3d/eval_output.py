@@ -61,9 +61,10 @@ def detection3d_eval_output(
             f"The frame metadata carries {frame_meta_batch.ego2globals.shape[0]} ego2global "
             f"entries for {num_frames} samples, per-frame metadata must align one-to-one."
         )
-    # A sample padding a streaming lane keeps its frame, since the metrics gather the frames
-    # across the GPUs entry by entry; the suite leaves it out.
+    # A sample padding a streaming lane or lying between key frames keeps its frame, since the
+    # metrics gather the frames across the GPUs entry by entry; the suite leaves it out.
     padding = gt_batch.padding_mask.tolist()
+    key_frames = gt_batch.key_frame_mask().tolist()
     return Detection3DEvalOutput(
         frames=tuple(
             Detection3DEvalFrame(
@@ -72,6 +73,7 @@ def detection3d_eval_output(
                 gt_labels=gt_labels[index],
                 gt_num_points=gt_num_points[index],
                 is_padding=bool(padding[index]),
+                key_frame=bool(key_frames[index]),
                 frame_meta=None if frame_meta_batch is None else frame_meta_batch.sample(index),
             )
             for index, prediction in enumerate(predictions.detection3d_predictions)

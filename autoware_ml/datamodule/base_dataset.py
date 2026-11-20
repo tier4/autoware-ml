@@ -184,6 +184,11 @@ class BaseDataset(Dataset):
         """Number of samples every record serves."""
         return 1
 
+    @property
+    def serves_cameras(self) -> bool:
+        """Whether the samples carry camera images, which the transforms load."""
+        return self.transforms is not None and self.transforms.requires("image_samples")
+
     def record_index(self, sample_index: int) -> int:
         """Index of the record a sample is served from.
 
