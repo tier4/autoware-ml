@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Global geometric augmentations that move the points, the bboxes and the camera calibration.
+"""Global geometric augmentations that move the points, the bboxes, the agent tracks and the
+camera calibration.
 
 The global augmentations (``GlobalRotScaleTrans``, ``RandomRotateTargetAngle`` and
 ``GlobalBEVRandomFlip``) rewrite the coordinates of the scene. Each modality is processed only
@@ -88,20 +89,27 @@ def apply_lidar_transformation(
     """Record an augmentation applied to the points of a sample.
 
     The points moved but the cameras did not, so the lidar to camera matrices take the inverse
-    of the augmentation and keep projecting the points onto the same pixels. The augmentation
-    is composed after the ones the sample already carries.
+    of the augmentation and keep projecting the points onto the same pixels. The agent tracks
+    of the motion ground truth live in the frame of the points and move with them. The
+    augmentation is composed after the ones the sample already carries.
 
     Args:
         model_gt_sample: Sample whose points were transformed.
         lidar_transformation_sample: The augmentation applied to the points.
 
     Returns:
-        ModelGTSample: The sample with the updated camera calibration and transformation.
+        ModelGTSample: The sample with the updated camera calibration, agent tracks and
+            transformation.
     """
     camera_image_data = model_gt_sample.camera_image_data
     if camera_image_data is not None:
         camera_image_data = camera_image_data.update_lidar_transformation_matrices(
             torch.linalg.inv(lidar_transformation_sample.transformation_matrix)
+        )
+    motion_gt_sample = model_gt_sample.motion_gt_sample
+    if motion_gt_sample is not None:
+        motion_gt_sample = motion_gt_sample.transformed(
+            lidar_transformation_sample.transformation_matrix
         )
     if model_gt_sample.lidar_transformation_sample is not None:
         lidar_transformation_sample = (
@@ -112,6 +120,7 @@ def apply_lidar_transformation(
     return model_gt_sample._replace(
         lidar_transformation_sample=lidar_transformation_sample,
         camera_image_data=camera_image_data,
+        motion_gt_sample=motion_gt_sample,
     )
 
 
@@ -123,6 +132,7 @@ class GlobalRotScaleTrans(BaseTransform):
           camera-only pipeline carries no points, so the boxes and the camera matrices are
           augmented on their own.
         - ``detection3d_gt_bboxes_3d``: rotated, scaled and translated in place when available.
+        - ``motion_gt_sample``: its agent tracks moved when available.
         - ``lidar_transformation_sample``: composed with the sampled augmentation when available.
 
     Generated keys:
@@ -328,6 +338,7 @@ class GlobalBEVRandomFlip(BaseTransform):
         - ``point_cloud_data``: flipped in place when available. A camera-only pipeline carries
           no points, so the boxes and the camera matrices are flipped on their own.
         - ``detection3d_gt_bboxes_3d``: flipped in place when available.
+        - ``motion_gt_sample``: its agent tracks mirrored when available.
         - ``lidar_transformation_sample``: composed with the sampled flip when available.
 
     Generated keys:

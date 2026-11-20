@@ -131,6 +131,15 @@ class DatasetTableSchema:
         )
 
 
+def key_frame_flags(records: pl.DataFrame) -> pl.Series:
+    """Whether the lidar frame of every record is a key frame of its scene."""
+    return records.select(
+        pl.col(DatasetTableSchema.LIDAR_FRAMES.name)
+        .list.first()
+        .struct.field(LidarFrameDatasetSchema.lidar_keyframe.name)
+    ).to_series()
+
+
 class DatasetRecord(BaseModel, DataModelInterface):
     """
     Data class to save a record for each column in the annotation table.

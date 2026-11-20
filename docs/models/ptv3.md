@@ -258,6 +258,7 @@ The split export produces one graph per `deploy.onnx.modules` entry:
 | `autoware_ml/models/detection3d/heads/sparse4d.py`                      | Sparse4D temporal query detection head             |
 | `autoware_ml/models/multi/ptv3_det3d_seg3d_sparse4d.py`                 | PTv3 segmentation and Sparse4D model wrapper       |
 | `autoware_ml/anchors/`                                                  | Anchor recipes of the Sparse4D head                |
+| `autoware_ml/datamodule/common/motion.py`                               | Agent tracks of a record                           |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`                    | Reusable PTv3 encoder components                   |
 | `autoware_ml/models/segmentation3d/encoders/voxel.py`                   | Voxel feature encoders of single frames and sweeps |
 | `autoware_ml/utils/point_cloud/`                                        | Shared point-cloud utilities and serialization     |
