@@ -38,15 +38,19 @@ from typing import Any
 
 import numpy as np
 import torch
+from jaxtyping import Bool, Float, Int
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
 from autoware_ml.metrics.class_groups import fold_labels, fold_labels_tensor, resolve_class_groups
-from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
+from autoware_ml.metrics.eval_output import MIN_BOX_PARAMS, EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
 
 
-def _reduce_scores(scores: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def _reduce_scores(
+    scores: Float[torch.Tensor, "num_points num_classes"], pred: Int[torch.Tensor, " num_points"]
+) -> tuple[Float[torch.Tensor, " num_points"], Float[torch.Tensor, " num_points"]]:
     """Per-point confidence and normalized entropy, on the device of the scores.
 
     Args:
@@ -67,22 +71,62 @@ def _reduce_scores(scores: torch.Tensor, pred: torch.Tensor) -> tuple[torch.Tens
     return confidence, entropy
 
 
-@dataclass
-class FramePoints:
-    """Per-point data for one frame, plus that frame's detection GT boxes.
+class FramePoints(BaseModel):
+    """
+    The cached points of one frame, with the detection ground truth boxes of that frame.
 
-    ``confidence`` and ``entropy`` are the per-point probability of the reported
-    prediction and the normalized predictive entropy, reduced from the full
-    distribution at update.
+    Attributes:
+      coord: Point coordinates in the frame of the points, ``x``, ``y``, ``z`` first.
+      pred: Predicted class of every point.
+      target: Ground truth class of every point, the ignore index included.
+      confidence: Probability the model gives the reported class of every point, reduced from
+        the full distribution at update.
+      entropy: Predictive entropy of every point normalized to ``[0, 1]``, reduced likewise.
+      gt_boxes: Detection ground truth boxes of the frame, 7 or more parameters each. Empty
+        for a frame without objects.
+      gt_box_labels: Class index of every detection ground truth box.
     """
 
-    coord: np.ndarray  # (N, 3) float
-    pred: np.ndarray  # (N,) int predicted class
-    target: np.ndarray  # (N,) int ground-truth class
-    confidence: np.ndarray  # (N,) float probability of the reported prediction
-    entropy: np.ndarray  # (N,) float normalized entropy in [0, 1]
-    gt_boxes: np.ndarray  # (M, 7+) float detection GT boxes (may be empty)
-    gt_box_labels: np.ndarray  # (M,) int detection GT labels (may be empty)
+    model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
+
+    coord: Float[np.ndarray, "num_points num_coord"]
+    pred: Int[np.ndarray, " num_points"]
+    target: Int[np.ndarray, " num_points"]
+    confidence: Float[np.ndarray, " num_points"]
+    entropy: Float[np.ndarray, " num_points"]
+    gt_boxes: Float[np.ndarray, "num_gt_boxes num_box_params"]
+    gt_box_labels: Int[np.ndarray, " num_gt_boxes"]
+
+    @model_validator(mode="after")
+    def _check_points_and_boxes(self) -> FramePoints:
+        """Check that every per-point array describes the same points, and the boxes agree."""
+        num_points = self.coord.shape[0]
+        if self.coord.shape[1] < 3:
+            raise ValueError(
+                f"coord needs x, y and z per point, got {self.coord.shape[1]} columns."
+            )
+        for name, array in (
+            ("pred", self.pred),
+            ("target", self.target),
+            ("confidence", self.confidence),
+            ("entropy", self.entropy),
+        ):
+            if array.shape[0] != num_points:
+                raise ValueError(
+                    f"{name} carries {array.shape[0]} rows for {num_points} points, every "
+                    "per-point array must describe the same points."
+                )
+        if self.gt_boxes.shape[1] < MIN_BOX_PARAMS:
+            raise ValueError(
+                f"gt_boxes need at least {MIN_BOX_PARAMS} parameters per box, got "
+                f"{self.gt_boxes.shape[1]}."
+            )
+        if self.gt_box_labels.shape[0] != self.gt_boxes.shape[0]:
+            raise ValueError(
+                f"gt_box_labels describe {self.gt_box_labels.shape[0]} boxes, gt_boxes "
+                f"{self.gt_boxes.shape[0]}."
+            )
+        return self
 
 
 @dataclass
@@ -326,20 +370,6 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 target_min, target_max = (int(v) for v in torch.aminmax(target))
                 if target_min < -(2**15) or target_max >= 2**15:
                     raise ValueError("target labels exceed the int16 cache range.")
-            confidence_values, entropy = _reduce_scores(scores, pred)
-            self._note_frame()
-            coord_cpu = coord.cpu()
-            self.coord.append(coord_cpu)
-            self.pred.append(pred.to(torch.int16).cpu())
-            self.target.append(target.to(torch.int16).cpu())
-            self.confidence.append(confidence_values.cpu())
-            self.entropy.append(entropy.to(torch.float32).cpu())
-            if self._group_lut is not None:
-                folded_scores = scores @ torch.as_tensor(self._score_fold, device=scores.device)
-                folded_pred = fold_labels_tensor(pred, self._group_lut)
-                grouped_confidence, grouped_entropy = _reduce_scores(folded_scores, folded_pred)
-                self.grouped_confidence.append(grouped_confidence.cpu())
-                self.grouped_entropy.append(grouped_entropy.to(torch.float32).cpu())
             boxes = frame.gt_boxes
             labels = frame.gt_box_labels
             if needs_boxes and (boxes is None or labels is None):
@@ -348,16 +378,58 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                     "frames must carry gt_boxes and gt_box_labels (empty tensors for a frame "
                     "without objects)."
                 )
-            self.gt_boxes.append(
+            confidence_values, entropy = _reduce_scores(scores, pred)
+            coord_cpu = coord.cpu()
+            pred_cpu = pred.to(torch.int16).cpu()
+            target_cpu = target.to(torch.int16).cpu()
+            confidence_cpu = confidence_values.cpu()
+            entropy_cpu = entropy.to(torch.float32).cpu()
+            boxes_cpu = (
                 torch.zeros((0, 7), dtype=torch.float32)
                 if boxes is None
                 else boxes.detach().to(dtype=torch.float32).cpu()
             )
-            self.gt_box_labels.append(
+            labels_cpu = (
                 torch.zeros((0,), dtype=torch.long)
                 if labels is None
                 else labels.detach().to(dtype=torch.long).cpu()
             )
+            grouped_confidence_cpu = None
+            grouped_entropy_cpu = None
+            if self._group_lut is not None:
+                folded_scores = scores @ torch.as_tensor(self._score_fold, device=scores.device)
+                folded_pred = fold_labels_tensor(pred, self._group_lut)
+                grouped_confidence, grouped_entropy = _reduce_scores(folded_scores, folded_pred)
+                grouped_confidence_cpu = grouped_confidence.cpu()
+                grouped_entropy_cpu = grouped_entropy.to(torch.float32).cpu()
+
+            # The one validation of the frame, before anything is cached. _frame only slices
+            # and folds these arrays for each bucket, so it builds its FramePoints unchecked.
+            views = [(confidence_cpu, entropy_cpu)]
+            if grouped_confidence_cpu is not None and grouped_entropy_cpu is not None:
+                views.append((grouped_confidence_cpu, grouped_entropy_cpu))
+            for view_confidence, view_entropy in views:
+                FramePoints(
+                    coord=coord_cpu.numpy(),
+                    pred=pred_cpu.numpy(),
+                    target=target_cpu.numpy(),
+                    confidence=view_confidence.numpy(),
+                    entropy=view_entropy.numpy(),
+                    gt_boxes=boxes_cpu.numpy(),
+                    gt_box_labels=labels_cpu.numpy(),
+                )
+
+            self._note_frame()
+            self.coord.append(coord_cpu)
+            self.pred.append(pred_cpu)
+            self.target.append(target_cpu)
+            self.confidence.append(confidence_cpu)
+            self.entropy.append(entropy_cpu)
+            if grouped_confidence_cpu is not None and grouped_entropy_cpu is not None:
+                self.grouped_confidence.append(grouped_confidence_cpu)
+                self.grouped_entropy.append(grouped_entropy_cpu)
+            self.gt_boxes.append(boxes_cpu)
+            self.gt_box_labels.append(labels_cpu)
             if self._component_filters and active:
                 # filters convert the coordinates to float64 themselves
                 point_masks, box_masks, available = self._filter_masks(
@@ -490,24 +562,42 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         # arrays instead of copying them, so those are frozen below: an accidental
         # in-place edit in a component must not corrupt the epoch's cache.
         whole = bool(keep.all())
-        sliced = [
-            array if whole else array[keep]
-            for array in (
-                coord_np,
-                pred.numpy(),
-                target.numpy(),
-                confidence_values.numpy(),
-                entropy_values.numpy(),
-            )
-        ]
+        pred_np = pred.numpy()
+        target_np = target.numpy()
+        confidence_np = confidence_values.numpy()
+        entropy_np = entropy_values.numpy()
+        if not whole:
+            coord_np = coord_np[keep]
+            pred_np = pred_np[keep]
+            target_np = target_np[keep]
+            confidence_np = confidence_np[keep]
+            entropy_np = entropy_np[keep]
         if fold_lut is not None:
-            sliced[1] = fold_labels(sliced[1], fold_lut)
-            sliced[2] = fold_labels(sliced[2], fold_lut)
-        frame = (*sliced, boxes_np, labels_np)
+            pred_np = fold_labels(pred_np, fold_lut)
+            target_np = fold_labels(target_np, fold_lut)
+        # Validated once at update: slicing and folding keep every dtype, rank and row count,
+        # and this runs for every cached frame of every bucket.
+        frame = FramePoints.model_construct(
+            coord=coord_np,
+            pred=pred_np,
+            target=target_np,
+            confidence=confidence_np,
+            entropy=entropy_np,
+            gt_boxes=boxes_np,
+            gt_box_labels=labels_np,
+        )
         if whole:
-            for array in frame:
+            for array in (
+                frame.coord,
+                frame.pred,
+                frame.target,
+                frame.confidence,
+                frame.entropy,
+                frame.gt_boxes,
+                frame.gt_box_labels,
+            ):
                 array.flags.writeable = False
-        return FramePoints(*frame)
+        return frame
 
     def _filter_masks(
         self,
@@ -571,7 +661,9 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         return torch.from_numpy(np.asarray(stacked, dtype=bool))
 
     @staticmethod
-    def _range_mask(xy: np.ndarray, metric_range: MetricRange) -> np.ndarray:
+    def _range_mask(
+        xy: Float[np.ndarray, "num_rows 2"], metric_range: MetricRange
+    ) -> Bool[np.ndarray, " num_rows"]:
         distance = np.linalg.norm(xy, axis=1)
         keep = distance >= metric_range.min_distance
         if metric_range.max_distance is not None:
@@ -579,7 +671,9 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         return keep
 
 
-def valid_point_mask(frame: FramePoints, num_classes: int, ignore_index: int) -> np.ndarray:
+def valid_point_mask(
+    frame: FramePoints, num_classes: int, ignore_index: int
+) -> Bool[np.ndarray, " num_points"]:
     """Mask of points with an in-range target and prediction (ignore excluded).
 
     Args:
@@ -614,7 +708,9 @@ def class_token(index: int, class_names: tuple[str, ...] | None) -> str:
     return f"class_{index}"
 
 
-def normalized_entropy(scores: np.ndarray) -> np.ndarray:
+def normalized_entropy(
+    scores: Float[np.ndarray, "num_points num_classes"],
+) -> Float[np.ndarray, " num_points"]:
     """Per-point Shannon entropy of the softmax distribution, normalized to [0, 1].
 
     Args:
@@ -629,7 +725,9 @@ def normalized_entropy(scores: np.ndarray) -> np.ndarray:
     return entropy / np.log(num_classes)
 
 
-def confidence(scores: np.ndarray) -> np.ndarray:
+def confidence(
+    scores: Float[np.ndarray, "num_points num_classes"],
+) -> Float[np.ndarray, " num_points"]:
     """Per-point max softmax probability.
 
     Matches the cached :attr:`FramePoints.confidence` for an argmax prediction,

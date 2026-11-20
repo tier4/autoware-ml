@@ -22,6 +22,11 @@ import torch
 
 from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.class_groups import fold_labels, resolve_class_groups
+from autoware_ml.metrics.eval_output import (
+    EvalOutput,
+    Segmentation3DEvalFrame,
+    Segmentation3DEvalOutput,
+)
 from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
 from autoware_ml.metrics.segmentation3d.iou import IoU
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
@@ -208,3 +213,32 @@ def test_point_suite_grouped_confidence_is_the_predicted_groups_mass() -> None:
     assert grouped.frames[0].pred[0] == 0  # grouped_vehicle
     assert grouped.frames[0].confidence[0] == pytest.approx(0.4)
     assert grouped.frames[0].target[0] == 1  # grouped_flat
+
+
+def test_point_suite_validates_the_frame_at_update_before_caching() -> None:
+    # The frame is checked once here, every bucket then slices the cache unchecked.
+    suite = Segmentation3DPointCloudMetricSuite(
+        components=[ErrorClusters(stages=["test"])], num_classes=4, class_names=NAMES, ranges=()
+    )
+    # The typed eval output already rejects this, so it is built unchecked to reach the suite.
+    bad_frame = Segmentation3DEvalFrame.model_construct(
+        coord=torch.zeros((1, 2)),
+        pred=torch.tensor([0]),
+        target=torch.tensor([0]),
+        scores=torch.tensor([[1.0, 0.0, 0.0, 0.0]]),
+        frame_meta=None,
+        gt_boxes=None,
+        gt_box_labels=None,
+    )
+
+    eval_output = EvalOutput.model_construct(
+        detection3d=None,
+        segmentation3d=Segmentation3DEvalOutput.model_construct(frames=[bad_frame]),
+    )
+
+    with pytest.raises(ValueError, match="coord needs x, y and z"):
+        suite.update(eval_output)
+
+    assert len(suite.coord) == 0
+    assert len(suite.gt_boxes) == 0
+    assert len(suite.state_for(None).frames) == 0

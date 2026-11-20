@@ -69,6 +69,12 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
         self.num_classes = int(num_classes)
         self.ignore_index = int(ignore_index)
         self.class_names = tuple(class_names) if class_names is not None else None
+        if self.class_names is not None and len(self.class_names) != self.num_classes:
+            # The state rejects this at compute, fail before the epoch runs instead.
+            raise ValueError(
+                f"class_names names {len(self.class_names)} classes, num_classes is "
+                f"{self.num_classes}."
+            )
         self._group_lut, self._grouped_names = (
             resolve_class_groups(self.class_names, class_groups) if class_groups else (None, None)
         )

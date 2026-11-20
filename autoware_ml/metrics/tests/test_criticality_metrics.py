@@ -18,7 +18,6 @@ collision provider would), plus the shared matching / weighted-AP helpers."""
 
 from __future__ import annotations
 
-from dataclasses import replace
 from math import inf, isnan
 
 import numpy as np
@@ -113,18 +112,15 @@ def test_critical_fp_fn_excludes_uncovered_frames() -> None:
     covered_fp = _sample(
         [collision_box(10.0), collision_box(30.0)], [0.9, 0.9], [0, 0], [collision_box(10.0)], [0]
     )
-    uncovered = replace(
-        _sample(
-            [collision_box(30.0)],
-            [0.9],
-            [0],
-            [collision_box(50.0)],
-            [0],
-            pred_ttc=[inf],
-            gt_ttc=[inf],
-        ),
-        ttc_covered=False,
-    )
+    uncovered = _sample(
+        [collision_box(30.0)],
+        [0.9],
+        [0],
+        [collision_box(50.0)],
+        [0],
+        pred_ttc=[inf],
+        gt_ttc=[inf],
+    ).model_copy(update={"ttc_covered": False})
     state = Detection3DState(samples=[covered_fp, uncovered], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,), match_threshold=2.0).evaluate(state, EvalStage.TEST)
     # Denominator is 1 (the covered frame), not 2.
@@ -137,8 +133,8 @@ def test_critical_fp_fn_excludes_uncovered_frames() -> None:
 
 
 def test_critical_fp_fn_no_coverage_is_nan() -> None:
-    frame = replace(
-        _sample([collision_box(10.0)], [0.9], [0], [collision_box(10.0)], [0]), ttc_covered=False
+    frame = _sample([collision_box(10.0)], [0.9], [0], [collision_box(10.0)], [0]).model_copy(
+        update={"ttc_covered": False}
     )
     state = Detection3DState(samples=[frame], class_names=("car",))
     out = CriticalFPFN(confidences=(0.5,)).evaluate(state, EvalStage.TEST)
