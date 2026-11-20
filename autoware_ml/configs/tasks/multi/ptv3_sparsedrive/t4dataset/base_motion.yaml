@@ -1,0 +1,42 @@
+# @package _global_
+defaults:
+  - /datamodule/t4dataset/datasets/motion@datasets.train.dataset_tasks.motion: default_motion
+  - /datamodule/t4dataset/datasets/motion@datasets.test.dataset_tasks.motion: default_motion
+  - /metrics/t4dataset/motion@motion_metrics: default_motion_metric_suites
+  - _self_
+
+metrics: ${merge_lists:${detection3d_metrics},${segmentation3d_metrics},${det3d_seg3d_metrics},${tracking_metrics},${motion_metrics}}
+
+model:
+  _target_: autoware_ml.models.multi.ptv3_sparsedrive_motion.PTv3SparseDriveMotionModel
+  motion_loss_weight: 1.0
+  motion_eval_queries: ${model.bbox_head.num_output}
+  motion_head:
+    _target_: autoware_ml.models.motion.motion_head.MotionHead
+    num_classes: ${model.bbox_head.num_classes}
+    embed_dims: ${model.bbox_head.embed_dims}
+    anchor_recipe:
+      _target_: autoware_ml.anchors.trajectories.TrajectoryAnchorRecipe
+      cache_path: ${cache_root_path}/anchors
+      taxonomy: ${taxonomy.detection3d}
+      num_modes: ${model.motion_head.agent_modes}
+      record_stride: 5
+      max_agent_distance: 55.0
+      iterations: 100
+      seed: 0
+      class_donors: {}
+      filter_attributes: ${filter_attributes}
+    agent_modes: 6
+    agent_steps: ${datasets.train.dataset_tasks.motion.agent_steps}
+    queue_stride: 5
+    detach_detection: true
+
+deploy:
+  onnx:
+    modules:
+      ptv3_motion_head:
+        metainfo:
+          step_seconds: ${datasets.train.dataset_tasks.motion.step_seconds}
+          agent_steps: ${model.motion_head.agent_steps}
+          agent_modes: ${model.motion_head.agent_modes}
+          queue_stride: ${model.motion_head.queue_stride}

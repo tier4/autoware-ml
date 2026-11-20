@@ -24,6 +24,7 @@ from autoware_ml.dataclasses.models.calibration_status.head_outputs import (
     CalibrationStatusHeadOutputs,
 )
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
+from autoware_ml.dataclasses.models.motion.head_outputs import MotionHeadOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 
 
@@ -37,6 +38,7 @@ class ModelOutputs(BaseModel):
         detection3d_head_outputs: Raw outputs from a 3D detection head.
         segmentation3d_head_outputs: Raw outputs from a 3D segmentation head.
         calibration_status_head_outputs: Raw outputs from a calibration status head.
+        motion_head_outputs: Raw outputs from a motion head.
     """
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
@@ -44,6 +46,7 @@ class ModelOutputs(BaseModel):
     detection3d_head_outputs: Detection3DHeadOutputs | None = None
     segmentation3d_head_outputs: Segmentation3DHeadOutputs | None = None
     calibration_status_head_outputs: CalibrationStatusHeadOutputs | None = None
+    motion_head_outputs: MotionHeadOutputs | None = None
 
     def detection3d(self) -> Detection3DHeadOutputs:
         """
@@ -77,3 +80,14 @@ class ModelOutputs(BaseModel):
         if self.calibration_status_head_outputs is None:
             raise ValueError("The model outputs carry no calibration status head outputs.")
         return self.calibration_status_head_outputs
+
+    def motion(self) -> MotionHeadOutputs:
+        """
+        Read the motion head outputs.
+
+        Raises:
+            ValueError: If the model predicts no motion.
+        """
+        if self.motion_head_outputs is None:
+            raise ValueError("The model outputs carry no motion head outputs.")
+        return self.motion_head_outputs
