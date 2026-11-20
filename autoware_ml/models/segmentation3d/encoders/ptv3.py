@@ -793,12 +793,14 @@ class Cpe(PointSequential):
         followed by its layer norm. Meant for an export copy, the parameters change in place.
         """
         conv, linear, _ = self.children()
-        weight = conv.weight.double()
+        conv_weight = conv.weight.double()
         linear_weight = linear.weight.double()
-        folded = (linear_weight @ weight.reshape(weight.shape[0], -1)).reshape(weight.shape)
-        bias = linear.bias.double() + linear_weight @ conv.bias.double()
-        conv.weight.copy_(folded.to(conv.weight.dtype))
-        conv.bias.copy_(bias.to(conv.bias.dtype))
+        folded_conv_weight = (
+            linear_weight @ conv_weight.reshape(conv_weight.shape[0], -1)
+        ).reshape(conv_weight.shape)
+        folded_conv_bias = linear.bias.double() + linear_weight @ conv.bias.double()
+        conv.weight.copy_(folded_conv_weight.to(conv.weight.dtype))
+        conv.bias.copy_(folded_conv_bias.to(conv.bias.dtype))
         self.add_module("1", nn.Identity())
 
 
