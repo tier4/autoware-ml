@@ -225,7 +225,7 @@ model:
   _target_: autoware_ml.models.my_task.my_model.MyModel
   num_classes: ${class_count:${taxonomy.segmentation3d.class_names}}
   ignore_index: ${taxonomy.segmentation3d.ignore_index}
-  metrics: ${metrics}
+  metric_suites: ${metric_suites}
 
   encoder:
     _target_: torch.nn.Linear
@@ -264,7 +264,7 @@ and writes the pipelines under `datasets.train` and `datasets.test`:
 defaults:
   - ../base
   - /metrics/t4dataset/segmentation3d/default_segmentation3d_metrics
-  - /metrics/t4dataset/segmentation3d@metrics: default_segmentation3d_metric_suites
+  - /metrics/t4dataset/segmentation3d@metric_suites: default_segmentation3d_metric_suites
   - /metrics/t4dataset/segmentation3d@metric_ranges: default_segmentation3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_segmentation3d_datamodule
   # The experiment selects the taxonomy that folds the labels of its database onto the classes

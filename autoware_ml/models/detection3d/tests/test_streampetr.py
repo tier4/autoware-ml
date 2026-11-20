@@ -105,7 +105,7 @@ class _ResetCountingSuite(MetricSuite[None]):
 
 
 def _build_model(
-    metrics: Sequence[MetricSuite] | None = None,
+    metric_suites: Sequence[MetricSuite] | None = None,
     auxiliary_2d_head: FocalHead2D | None = None,
     partial_annotations: PartialAnnotations | None = None,
     class_names: Sequence[str] = CLASS_NAMES,
@@ -113,7 +113,7 @@ def _build_model(
     """Build a small StreamPETR on the tiny backbone, without preprocessing.
 
     Args:
-        metrics: Metric suites the model evaluates, if any.
+        metric_suites: Metric suites the model evaluates, if any.
         auxiliary_2d_head: The auxiliary 2D head, ``None`` to train without it.
         partial_annotations: The partially annotated classes, ``None`` to supervise every class.
         class_names: Classes of the detection head.
@@ -128,7 +128,7 @@ def _build_model(
         bbox_head=_build_head(class_names=class_names),
         log_dict_configs=LogDictConfigs(prog_bar=False),
         auxiliary_2d_head=auxiliary_2d_head,
-        metrics=metrics,
+        metric_suites=metric_suites,
         partial_annotations=partial_annotations,
     )
 
@@ -969,9 +969,9 @@ def test_phase_hooks_reset_the_metrics_before_starting_new_streams() -> None:
     does not accumulate across validation epochs.
     Check: each suite was reset once more, and the streams were reset as well.
     """
-    model = _build_model(metrics=[_ResetCountingSuite()])
-    val_suite = model._stage_metrics(EvalStage.VAL)[0]
-    test_suite = model._stage_metrics(EvalStage.TEST)[0]
+    model = _build_model(metric_suites=[_ResetCountingSuite()])
+    val_suite = model._stage_suites(EvalStage.VAL)[0]
+    test_suite = model._stage_suites(EvalStage.TEST)[0]
     resets_after_construction = (val_suite.resets, test_suite.resets)
 
     model.on_validation_epoch_start()

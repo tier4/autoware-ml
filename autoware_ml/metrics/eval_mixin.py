@@ -29,6 +29,7 @@ inside ``result`` at epoch end.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -39,30 +40,73 @@ from autoware_ml.metrics.base import EvalStage, MetricSuite
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.metrics.report import MetricReport
 
+logger = logging.getLogger(__name__)
+
+
+def resolve_metric_suites(
+    metric_suites: Sequence[MetricSuite] | None, metrics: Sequence[MetricSuite] | None
+) -> Sequence[MetricSuite] | None:
+    """The metric suites a model was given, under their name or the deprecated one.
+
+    Models took their suites as ``metrics``, which reads as if it held metric
+    components. The argument and the config key are now ``metric_suites``;
+    ``metrics`` keeps working until it is removed, and logs a warning so a config
+    that still uses it shows up in the run's output.
+
+    Args:
+        metric_suites: Suites under their current name.
+        metrics: Suites under the deprecated name.
+
+    Returns:
+        Whichever of the two was given, ``None`` when neither was.
+
+    Raises:
+        ValueError: If both were given.
+    """
+    if metrics is None:
+        return metric_suites
+    if metric_suites is not None:
+        raise ValueError(
+            "Got metric suites as both `metric_suites` and `metrics`. Pass them as "
+            "`metric_suites` only, `metrics` is its deprecated name."
+        )
+    logger.warning(
+        "Passing metric suites as `metrics` is deprecated, pass them as `metric_suites` "
+        "(in a model config: `metric_suites: ${metric_suites}`)."
+    )
+    return metrics
+
 
 class MetricEvalMixin:
     """Owns the metric suites and the validation/test epoch lifecycle."""
 
     def __init__(
-        self, *args: Any, metrics: Sequence[MetricSuite] | None = None, **kwargs: Any
+        self,
+        *args: Any,
+        metric_suites: Sequence[MetricSuite] | None = None,
+        metrics: Sequence[MetricSuite] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Clone the metric suites per stage and register them as submodules.
 
         Args:
-            metrics: Suites attached from config. Empty means only losses are
+            metric_suites: Suites attached from config. Empty means only losses are
                 logged.
+            metrics: Deprecated name of ``metric_suites``, still accepted with a logged
+                warning.
             *args: Positional arguments forwarded to the next base.
             **kwargs: Keyword arguments forwarded to the next base.
         """
         super().__init__(*args, **kwargs)
-        prototypes = list(metrics) if metrics else []
-        for metric in prototypes:
-            if not metric.prefix:
+        metric_suites = resolve_metric_suites(metric_suites, metrics)
+        prototypes = list(metric_suites) if metric_suites else []
+        for suite in prototypes:
+            if not suite.prefix:
                 raise ValueError(
-                    f"{type(metric).__name__} has an empty prefix, every suite attached "
+                    f"{type(suite).__name__} has an empty prefix, every suite attached "
                     "to a model needs one so its log keys are namespaced."
                 )
-        prefixes = [metric.prefix for metric in prototypes]
+        prefixes = [suite.prefix for suite in prototypes]
         duplicates = sorted({prefix for prefix in prefixes if prefixes.count(prefix) > 1})
         if duplicates:
             raise ValueError(
@@ -71,13 +115,13 @@ class MetricEvalMixin:
             )
         # A suite is cloned only for stages it actually reports at, so a heavy
         # test-only suite (and its deep-copied providers) never exists at val.
-        self._metrics_by_stage = nn.ModuleDict(
+        self._suites_by_stage = nn.ModuleDict(
             {
                 stage.value: nn.ModuleList(
                     [
-                        self._stage_clone(metric, stage)
-                        for metric in prototypes
-                        if metric.runs_at(stage)
+                        self._stage_clone(suite, stage)
+                        for suite in prototypes
+                        if suite.runs_at(stage)
                     ]
                 )
                 for stage in (EvalStage.VAL, EvalStage.TEST)
@@ -85,8 +129,8 @@ class MetricEvalMixin:
         )
 
     @staticmethod
-    def _stage_clone(metric: MetricSuite, stage: EvalStage) -> MetricSuite:
-        clone = metric.clone()
+    def _stage_clone(suite: MetricSuite, stage: EvalStage) -> MetricSuite:
+        clone = suite.clone()
         clone.bind_stage(stage)
         return clone
 
@@ -105,23 +149,23 @@ class MetricEvalMixin:
         """
         return EvalOutput()
 
-    def _stage_metrics(self, stage: EvalStage) -> nn.ModuleList:
-        return self._metrics_by_stage[stage.value]
+    def _stage_suites(self, stage: EvalStage) -> nn.ModuleList:
+        return self._suites_by_stage[stage.value]
 
     def on_validation_epoch_start(self) -> None:
         """Reset the validation metric state for a fresh epoch."""
-        for metric in self._stage_metrics(EvalStage.VAL):
-            metric.reset()
+        for suite in self._stage_suites(EvalStage.VAL):
+            suite.reset()
 
     def on_test_epoch_start(self) -> None:
         """Reset the test metric state for a fresh epoch."""
-        for metric in self._stage_metrics(EvalStage.TEST):
-            metric.reset()
+        for suite in self._stage_suites(EvalStage.TEST):
+            suite.reset()
 
     def on_validation_batch_end(
         self, outputs: Any, batch: Any, batch_idx: int, dataloader_idx: int = 0
     ) -> None:
-        """Accumulate one validation batch into every metric.
+        """Accumulate one validation batch into every suite.
 
         Args:
             outputs: Raw forward outputs of the batch.
@@ -134,7 +178,7 @@ class MetricEvalMixin:
     def on_test_batch_end(
         self, outputs: Any, batch: Any, batch_idx: int, dataloader_idx: int = 0
     ) -> None:
-        """Accumulate one test batch into every metric.
+        """Accumulate one test batch into every suite.
 
         Args:
             outputs: Raw forward outputs of the batch.
@@ -153,8 +197,8 @@ class MetricEvalMixin:
         self._log_metrics(EvalStage.TEST)
 
     def _update_metrics(self, stage: EvalStage, outputs: Any, batch: Any, batch_idx: int) -> None:
-        metrics = self._stage_metrics(stage)
-        if not len(metrics):
+        suites = self._stage_suites(stage)
+        if not len(suites):
             return
         raw_outputs = (
             outputs["model_outputs"]
@@ -163,23 +207,23 @@ class MetricEvalMixin:
         )
         eval_output = self.build_eval_output(batch, raw_outputs)
         if batch_idx == 0:
-            self._check_requirements(list(metrics), eval_output)
-        for metric in metrics:
-            metric.update(eval_output)
+            self._check_requirements(list(suites), eval_output)
+        for suite in suites:
+            suite.update(eval_output)
 
-    def _check_requirements(self, metrics: list[MetricSuite], eval_output: EvalOutput) -> None:
-        for metric in metrics:
-            missing = metric.requirements().check_requirements(eval_output)
+    def _check_requirements(self, suites: list[MetricSuite], eval_output: EvalOutput) -> None:
+        for suite in suites:
+            missing = suite.requirements().check_requirements(eval_output)
             if missing:
                 raise ValueError(
-                    f"Metric {type(metric).__name__!r} needs {list(missing)}, not produced by "
+                    f"Suite {type(suite).__name__!r} needs {list(missing)}, not produced by "
                     f"{type(self).__name__}.build_eval_output."
                 )
 
     def _log_metrics(self, stage: EvalStage) -> None:
         report = MetricReport()
-        for metric in self._stage_metrics(stage):
-            report.merge(metric.result(stage), prefix=metric.prefix)
+        for suite in self._stage_suites(stage):
+            report.merge(suite.result(stage), prefix=suite.prefix)
         if not len(report):
             return
         # Values are already global and identical on every rank after sync, so no sync_dist.

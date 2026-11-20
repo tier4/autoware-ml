@@ -337,7 +337,8 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
-        metrics: Sequence[MetricSuite] | None = None,
+        metric_suites: Sequence[MetricSuite] | None = None,
+        metrics: Sequence[MetricSuite] | None = None,  # deprecated name of metric_suites
     ):
         ...
 

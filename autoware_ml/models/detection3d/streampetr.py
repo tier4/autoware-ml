@@ -222,6 +222,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
         scheduler: Callable[[Optimizer], LRScheduler] | None = None,
         optimizer_group_overrides: Mapping[str, Mapping[str, Any]] | None = None,
         scheduler_config: Mapping[str, Any] | None = None,
+        metric_suites: Sequence[MetricSuite] | None = None,
         metrics: Sequence[MetricSuite] | None = None,
         partial_annotations: PartialAnnotations | None = None,
     ) -> None:
@@ -241,7 +242,8 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             optimizer_group_overrides: Optimizer overrides keyed by the groups of
                 :meth:`build_optimizer_groups`.
             scheduler_config: Lightning scheduler metadata such as ``interval``.
-            metrics: Detection metrics accumulated during validation and test.
+            metric_suites: Detection metric suites accumulated during validation and test.
+            metrics: Deprecated name of ``metric_suites``.
             partial_annotations: Maps the dataset's per-sample annotation flag to the classes
                 the heads must not supervise in that sample. None supervises every class.
 
@@ -256,6 +258,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             scheduler=scheduler,
             optimizer_group_overrides=optimizer_group_overrides,
             scheduler_config=scheduler_config,
+            metric_suites=metric_suites,
             metrics=metrics,
         )
         # The attribute keeps the checkpoint keys and the AWML converter prefixes,

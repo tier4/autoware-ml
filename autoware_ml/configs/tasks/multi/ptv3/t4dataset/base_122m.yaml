@@ -7,9 +7,9 @@ defaults:
   - /metrics/t4dataset/detection3d/default_detection3d_metrics
   - /metrics/t4dataset/segmentation3d/default_segmentation3d_metrics
   - /metrics/t4dataset/det3d_seg3d/default_det3d_seg3d_metrics
-  - /metrics/t4dataset/detection3d@detection3d_metrics: default_detection3d_metric_suites
-  - /metrics/t4dataset/segmentation3d@segmentation3d_metrics: default_segmentation3d_metric_suites
-  - /metrics/t4dataset/det3d_seg3d@det3d_seg3d_metrics: default_det3d_seg3d_metric_suites
+  - /metrics/t4dataset/detection3d@detection3d_metric_suites: default_detection3d_metric_suites
+  - /metrics/t4dataset/segmentation3d@segmentation3d_metric_suites: default_segmentation3d_metric_suites
+  - /metrics/t4dataset/det3d_seg3d@det3d_seg3d_metric_suites: default_det3d_seg3d_metric_suites
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_det3d_seg3d_datamodule
   - /datamodule/frame_sampling@datamodule.train_frame_sampling: default_frame_sampling
@@ -53,7 +53,7 @@ taxonomy:
 point_cloud_range: [-122.88, -122.88, -2.30, 122.88, 122.88, 5.38]
 
 # The model scores the detection suites, the segmentation suites and the joint suite.
-metrics: ${merge_lists:${detection3d_metrics},${segmentation3d_metrics},${det3d_seg3d_metrics}}
+metric_suites: ${merge_lists:${detection3d_metric_suites},${segmentation3d_metric_suites},${det3d_seg3d_metric_suites}}
 
 # Boxes carrying one of these (class, attribute) pairs are dropped from training, evaluation
 # and the frame sampler alike.

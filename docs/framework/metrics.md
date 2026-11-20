@@ -1343,7 +1343,8 @@ confident error is what hides an obstacle.
 
 ## Attaching metrics
 
-`model.metrics` is a list of suites, so a joint segmentation and detection model lists several.
+`model.metric_suites` is a list of metric suites, so a joint segmentation and detection model lists several.
+The key used to be `model.metrics`, which still works but logs a deprecation warning until it is removed.
 Each suite is given its `components`, and each component its stages and optional filter. The
 suites live in the `metrics` config groups of each database and read the tunable pieces (class
 names, ranges, filters, groups) from interpolation variables, because Hydra replaces a list wholesale rather than merging
@@ -1351,7 +1352,7 @@ it, so overriding a suite directly would mean restating every field.
 
 ```yaml
 model:
-  metrics:
+  metric_suites:
     - _target_: autoware_ml.metrics.detection3d.suite.Detection3DMetricSuite
       class_names: ${taxonomy.detection3d.class_names}
       max_distances: ${metric_params.detection3d.max_distances}

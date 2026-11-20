@@ -5,7 +5,7 @@ defaults:
   # The metric suites, their ranges and the datamodule belong to the evaluated database, so the
   # range base composes them. Loaded before _self_ so the overrides below win over the defaults.
   - /metrics/t4dataset/detection3d/default_detection3d_metrics
-  - /metrics/t4dataset/detection3d@metrics: default_detection3d_metric_suites
+  - /metrics/t4dataset/detection3d@metric_suites: default_detection3d_metric_suites
   - /metrics/t4dataset/detection3d@metric_ranges: default_detection3d_120m_metric_ranges
   - /datamodule@datamodule: t4dataset/default_detection3d_datamodule
   # The temporal memory needs the scenes streamed, so the datamodule is a StreamingDataModule.
