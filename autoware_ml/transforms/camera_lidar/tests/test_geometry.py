@@ -21,6 +21,7 @@ the raw intrinsics, or touching the intrinsics) fails. The expected matrices are
 with numpy from the sampled yaw, scale and translation, independently of the transform.
 """
 
+from collections.abc import Sequence
 import math
 import unittest
 
@@ -43,6 +44,7 @@ from autoware_ml.transforms.camera_lidar.geometry import (
     GlobalRotScaleTrans,
     RandomRotateTargetAngle,
 )
+from autoware_ml.transforms.base import TransformsCompose
 from autoware_ml.types.geometry import (
     Box3DCenterCoordinateType,
     Box3DFieldIndex,
@@ -1237,6 +1239,94 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
                 atol=1e-5,
             )
         )
+
+
+class TestStreamParameters(BaseCameraLidarGeometryTestCase):
+    """The global augmentations applied with the parameters they draw for a stream."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.pipeline = TransformsCompose(
+            [
+                GlobalRotScaleTrans(
+                    yaw_rot_range=[-0.4, 0.4],
+                    scale_ratio_range=[0.9, 1.1],
+                    translation_std=[0.5, 0.5, 0.2],
+                ),
+                GlobalBEVRandomFlip(horizontal_flip_ratio=0.5, vertical_flip_ratio=0.5),
+            ]
+        )
+
+    def augment(self, stream_seed: Sequence[int] | None = None) -> Tensor:
+        """Augmentation matrix the pipeline applies to a fresh sample of a stream."""
+        output = self.pipeline(self.build_multi_task_gt_sample(), stream_seed=stream_seed)
+        assert output.lidar_transformation_sample is not None
+        return output.lidar_transformation_sample.transformation_matrix
+
+    def test_frames_of_a_stream_get_the_same_augmentation(self) -> None:
+        """
+        Input: a pipeline of a global rotation, scale and translation and a BEV flip, two
+        frames with the seed of one stream, one frame with the seed of another, and two
+        frames without a seed afterwards.
+        Expected: the frames of a stream are moved alike, another stream differently, and a
+        frame outside a stream draws for itself.
+        Check: two frames of one stream get the same transformation matrix, the frame of the
+        other stream another one, and the two frames outside a stream differ.
+        """
+        first, second = self.augment((0, 0, 0)), self.augment((0, 0, 0))
+        other = self.augment((0, 0, 1))
+
+        self.assertTrue(torch.equal(first, second))
+        self.assertFalse(torch.equal(first, other))
+        self.assertFalse(torch.equal(self.augment(), self.augment()))
+
+    def test_the_parameters_of_a_stream_are_the_ones_applied(self) -> None:
+        """
+        Input: the rotation, scale and translation and the flips the two transforms sample
+        from the random states the pipeline seeds for a stream, by the seed of the stream
+        and the position of the transform, and one frame of the stream.
+        Expected: the frame is moved by the yaw, scale and translation of the stream, then
+        flipped along the axes of the stream.
+        Check: the transformation matrix of the frame equals the one built here from the
+        sampled values.
+        """
+        rot_scale_trans, flips = self.pipeline.pipeline
+        _, moved = rot_scale_trans.sample_rot_scale_trans(np.random.RandomState([0, 0, 0, 0]))
+        horizontal, vertical = flips.sample_flip(np.random.RandomState([0, 0, 0, 1]))
+        flip = torch.diag(
+            torch.tensor([-1.0 if vertical else 1.0, -1.0 if horizontal else 1.0, 1.0])
+        )
+        expected = torch.eye(4)
+        expected[:3, :3] = flip @ moved.rotation_matrix * moved.scale_factor
+        expected[:3, 3] = flip @ moved.translation_vector.flatten()
+
+        self.assertTrue(torch.allclose(self.augment((0, 0, 0)), expected, atol=1e-6))
+
+    def test_a_stream_applies_or_skips_a_transform_in_every_frame(self) -> None:
+        """
+        Input: a rotation applied with a probability of one half, 20 streams and 3 frames of
+        every stream.
+        Expected: the probability is decided once per stream, so a stream is rotated in all
+        of its frames or in none.
+        Check: the 3 frames of a stream all record a lidar transformation or all record
+        none, and both outcomes occur over the 20 streams.
+        """
+        rotate = RandomRotateTargetAngle(probability=0.5, yaw_angle_ratios=[0.5])
+        pipeline = TransformsCompose([rotate])
+
+        outcomes = set()
+        for scene in range(20):
+            rotated = {
+                pipeline(
+                    self.build_multi_task_gt_sample(), stream_seed=(0, 0, scene)
+                ).lidar_transformation_sample
+                is not None
+                for _ in range(3)
+            }
+            self.assertEqual(len(rotated), 1)
+            outcomes.update(rotated)
+
+        self.assertEqual(outcomes, {True, False})
 
 
 if __name__ == "__main__":

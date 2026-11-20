@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
+from jaxtyping import Bool, Float
 import numpy as np
 import torch.distributed
 import torchmetrics
@@ -120,14 +121,15 @@ class MetricFilter(ABC):
     (detection boxes, segmentation points) a metric sees, exactly as the range
     bins do. ``name`` prefixes the metric's keys (empty for the identity filter).
     ``cache_key`` groups components that share a filter so the suite builds the
-    filtered sub-state once. ``required_eval_keys`` names the fields of the frame
-    metadata (:class:`~autoware_ml.dataclasses.batch.frame_meta.FrameMetaSample`)
-    the filter reads, e.g. the ego pose. A filter that names any makes its suite
-    require the frame metadata, checked loud at the first batch.
+    filtered sub-state once. ``needs_frame_meta`` tells whether the filter reads
+    the frame metadata
+    (:class:`~autoware_ml.dataclasses.batch.frame_meta.FrameMetaSample`), e.g. the
+    ego pose. A filter that does makes its suite require the frame metadata,
+    checked loud at the first batch.
     """
 
     name: str = ""
-    required_eval_keys: tuple[str, ...] = ()
+    needs_frame_meta: bool = False
 
     @property
     def cache_key(self) -> str:
@@ -135,22 +137,39 @@ class MetricFilter(ABC):
         return self.name
 
     @abstractmethod
-    def keep(self, xyz: Any, context: dict[str, Any]) -> Any:
-        """Boolean mask over elements to retain.
+    def keep_points(
+        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
+    ) -> Bool[np.ndarray, " num_points"]:
+        """Boolean mask over the points to retain.
 
         Args:
-            xyz: Bare base_link points ``(N, 3)`` or full detection box rows
-                ``(N, 7+)``. Concrete filters dispatch on the column count so a
-                box's whole footprint (not just its center) can be tested.
-            context: Per-frame values named in ``required_eval_keys`` (e.g.
-                ``ego2global``, ``scene_token``), read by the suite off the frame's
-                metadata.
+            points: Point positions in base_link.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
 
         Returns:
-            Boolean mask over the input elements, true for those to keep.
+            Boolean mask over the points, true for those to keep.
         """
 
-    def available(self, context: dict[str, Any]) -> bool:
+    @abstractmethod
+    def keep_boxes(
+        self,
+        boxes: Float[np.ndarray, "num_boxes num_box_params"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_boxes"]:
+        """Boolean mask over the detection boxes to retain.
+
+        The full box rows are given, so a filter can test the whole footprint of a
+        box and not only its center.
+
+        Args:
+            boxes: Box rows ``[cx, cy, cz, dx, dy, dz, yaw, ...]`` in base_link.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
+
+        Returns:
+            Boolean mask over the boxes, true for those to keep.
+        """
+
+    def available(self, frame_meta: FrameMetaSample | None) -> bool:
         """Whether this filter can evaluate the given frame.
 
         A filter that needs external data absent for some frames (e.g. a lanelet
@@ -158,15 +177,34 @@ class MetricFilter(ABC):
         frame from this filter's bucket (the unfiltered metrics still see it)
         and counts the exclusion. The default filter always applies. This is an
         explicit availability check by design: a resource that *should* exist but
-        is corrupt must still fail loud inside ``keep``, never be caught here.
+        is corrupt must still fail loud inside the keep methods, never be caught here.
 
         Args:
-            context: Per-frame values named in ``required_eval_keys``.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
 
         Returns:
             Whether the frame enters this filter's bucket.
         """
         return True
+
+    def require_frame_meta(self, frame_meta: FrameMetaSample | None) -> FrameMetaSample:
+        """The frame metadata, for a filter that cannot work without it.
+
+        Args:
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
+
+        Returns:
+            The frame metadata.
+
+        Raises:
+            ValueError: If the frame carries no metadata.
+        """
+        if frame_meta is None:
+            raise ValueError(
+                f"Filter {self.name!r} reads the frame metadata, the model's "
+                "build_eval_output must attach it."
+            )
+        return frame_meta
 
 
 class IdentityFilter(MetricFilter):
@@ -174,17 +212,35 @@ class IdentityFilter(MetricFilter):
 
     name = ""
 
-    def keep(self, xyz: Any, context: dict[str, Any]) -> Any:
-        """All-true mask over the given elements.
+    def keep_points(
+        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
+    ) -> Bool[np.ndarray, " num_points"]:
+        """All-true mask over the given points.
 
         Args:
-            xyz: Point or box rows ``(N, ...)``.
-            context: Per-frame values, unused here.
+            points: Point positions in base_link.
+            frame_meta: Metadata of the frame, unused here.
 
         Returns:
-            Boolean mask of ``N`` true values.
+            Boolean mask of true values, one per point.
         """
-        return np.ones((len(xyz),), dtype=bool)
+        return np.ones((len(points),), dtype=bool)
+
+    def keep_boxes(
+        self,
+        boxes: Float[np.ndarray, "num_boxes num_box_params"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_boxes"]:
+        """All-true mask over the given boxes.
+
+        Args:
+            boxes: Box rows in base_link.
+            frame_meta: Metadata of the frame, unused here.
+
+        Returns:
+            Boolean mask of true values, one per box.
+        """
+        return np.ones((len(boxes),), dtype=bool)
 
 
 IDENTITY = IdentityFilter()
@@ -404,7 +460,7 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
     def _filters_need_frame_meta(self) -> bool:
         """Whether a filter active at this stage reads the frame metadata."""
         return any(
-            component.filter.required_eval_keys
+            component.filter.needs_frame_meta
             for component in self._filterable_components()
             if self._stage in component.stages
         )
@@ -505,51 +561,47 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
         if available:
             self.region_frames_covered[index] += 1
 
-    @staticmethod
-    def _filter_context(
-        metric_filter: MetricFilter, frame_meta: FrameMetaSample | None
-    ) -> dict[str, Any]:
-        """The per-frame values a filter reads, taken off the frame's metadata.
-
-        Args:
-            metric_filter: The filter asking for its context.
-            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
-
-        Returns:
-            The values named by the filter's ``required_eval_keys``.
-
-        Raises:
-            ValueError: If the filter reads the metadata and the frame carries none.
-        """
-        if not metric_filter.required_eval_keys:
-            return {}
-        if frame_meta is None:
-            raise ValueError(
-                f"Filter {metric_filter.name!r} reads {list(metric_filter.required_eval_keys)} "
-                "of the frame metadata, the model's build_eval_output must attach it."
-            )
-        return {key: getattr(frame_meta, key) for key in metric_filter.required_eval_keys}
-
-    def _frame_filter_context(
+    def _frame_available(
         self, index: int, metric_filter: MetricFilter, frame_meta: FrameMetaSample | None
-    ) -> dict[str, Any] | None:
-        """The filter's context for one frame, ``None`` for a frame it cannot cover.
+    ) -> bool:
+        """Whether the filter covers one frame, tallying its coverage.
 
         Coverage is tallied for the filter at ``index`` either way, so a slice
         reported over fewer scenes is never silent.
 
         Args:
             index: Position of the filter in the registered component filters.
-            metric_filter: The filter asking for its context.
+            metric_filter: The filter asked about the frame.
             frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
 
         Returns:
-            The context, or ``None`` for a scene the filter cannot cover.
+            Whether the frame enters the filter's slice.
         """
-        context = self._filter_context(metric_filter, frame_meta)
-        available = metric_filter.available(context)
+        available = self._filter_available(metric_filter, frame_meta)
         self._note_frame_coverage(index, available)
-        return context if available else None
+        return available
+
+    @staticmethod
+    def _filter_available(metric_filter: MetricFilter, frame_meta: FrameMetaSample | None) -> bool:
+        """Whether the filter covers one frame, checking its metadata first.
+
+        The check lives here and not only in the filters, so a filter that sets
+        ``needs_frame_meta`` and forgets ``require_frame_meta`` cannot count a
+        frame without metadata as covered.
+
+        Args:
+            metric_filter: The filter asked about the frame.
+            frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
+
+        Returns:
+            Whether the frame enters the filter's slice.
+
+        Raises:
+            ValueError: If the filter reads the metadata and the frame carries none.
+        """
+        if metric_filter.needs_frame_meta:
+            metric_filter.require_frame_meta(frame_meta)
+        return metric_filter.available(frame_meta)
 
     def _log_coverage(self) -> None:
         """Log per-filter frame coverage once per epoch.

@@ -38,7 +38,7 @@ from torch import Tensor
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.dataclasses.geometry.transformation import LiDARTransformationSample
-from autoware_ml.transforms.base import BaseTransform
+from autoware_ml.transforms.base import BaseTransform, random_source
 from autoware_ml.types.spatial import BEVDirection
 from autoware_ml.types.geometry import TransformationName
 
@@ -129,6 +129,8 @@ class GlobalRotScaleTrans(BaseTransform):
         - ``lidar_transformation_sample``: the (composed) 4x4 augmentation.
     """
 
+    stream_consistent = True
+
     def __init__(
         self,
         yaw_rot_range: Sequence[float],
@@ -153,52 +155,73 @@ class GlobalRotScaleTrans(BaseTransform):
             else None
         )
 
-    def sample_yaw(self) -> float:
+    def sample_yaw(self, random_state: np.random.RandomState | None = None) -> float:
         """
         Sample the yaw rotation applied to the sample.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             float: Rotation around yaw in radians.
         """
-        return float(np.random.uniform(self.yaw_rot_range[0], self.yaw_rot_range[1]))
+        return float(
+            random_source(random_state).uniform(self.yaw_rot_range[0], self.yaw_rot_range[1])
+        )
 
-    def sample_scale(self) -> float:
+    def sample_scale(self, random_state: np.random.RandomState | None = None) -> float:
         """
         Sample the scale factor applied to the sample.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             float: Scale factor.
         """
-        return float(np.random.uniform(self.scale_ratio_range[0], self.scale_ratio_range[1]))
+        return float(
+            random_source(random_state).uniform(
+                self.scale_ratio_range[0], self.scale_ratio_range[1]
+            )
+        )
 
-    def sample_translation(self) -> Float32[Tensor, "1 3"]:
+    def sample_translation(
+        self, random_state: np.random.RandomState | None = None
+    ) -> Float32[Tensor, "1 3"]:
         """
         Sample the translation applied to the sample.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             Float32[Tensor, "1 3"]: Translation vector, zero when no std is configured.
         """
         if self.translation_std is None:
             return torch.zeros((1, 3), dtype=torch.float32)
-        translation = np.random.normal(0.0, self.translation_std, size=(1, 3))
+        translation = random_source(random_state).normal(0.0, self.translation_std, size=(1, 3))
         return torch.tensor(translation, dtype=torch.float32)
 
     def sample_rot_scale_trans(
-        self,
+        self, random_state: np.random.RandomState | None = None
     ) -> tuple[LiDARTransformationSample, RotationScaleTranslationData]:
         """Sample the rotation, scale and translation applied to the sample.
 
         The yaw, the scale and the translation are drawn in this order, so a test seeding the
         random state replays the draw of :meth:`transform`.
 
+        Args:
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
+
         Returns:
             The sampled augmentation as a lidar transformation, rotation first, then scaling,
             then translation, together with its raw components.
         """
         rotation_scale_translation_data = RotationScaleTranslationData(
-            rotation_matrix=yaw_rotation_matrix(self.sample_yaw()),
-            scale_factor=self.sample_scale(),
-            translation_vector=self.sample_translation(),
+            rotation_matrix=yaw_rotation_matrix(self.sample_yaw(random_state)),
+            scale_factor=self.sample_scale(random_state),
+            translation_vector=self.sample_translation(random_state),
         )
         lidar_transformation_sample = LiDARTransformationSample.create_lidar_transformation_sample(
             rotation_matrix=rotation_scale_translation_data.rotation_matrix,
@@ -213,8 +236,42 @@ class GlobalRotScaleTrans(BaseTransform):
         return lidar_transformation_sample, rotation_scale_translation_data
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Rotate, scale, and translate the available modalities and the bboxes."""
-        lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans()
+        """Rotate, scale, and translate the available modalities and the bboxes.
+
+        The augmentation is drawn for the sample alone.
+        """
+        return self.apply_rot_scale_trans(model_gt_sample, None)
+
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
+    ) -> ModelGTSample:
+        """Rotate, scale, and translate the sample by the augmentation of its stream.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are moved.
+            random_state: Random state seeded by the stream, the same for every frame of it.
+
+        Returns:
+            The moved sample with the augmentation recorded.
+        """
+        return self.apply_rot_scale_trans(model_gt_sample, random_state)
+
+    def apply_rot_scale_trans(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState | None
+    ) -> ModelGTSample:
+        """Draw a rotation, scale and translation and move the sample by it.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are moved.
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
+
+        Returns:
+            The moved sample with the augmentation recorded.
+        """
+        lidar_transformation_sample, rotation_scale_translation_data = self.sample_rot_scale_trans(
+            random_state
+        )
         # Points and boxes are rows, so they take the transposed rotation
         row_vector_rotation_matrix = rotation_scale_translation_data.rotation_matrix.T
         scale_factor = rotation_scale_translation_data.scale_factor
@@ -251,14 +308,17 @@ class RandomRotateTargetAngle(GlobalRotScaleTrans):
         )
         self.yaw_angle_ratios = list(yaw_angle_ratios)
 
-    def sample_yaw(self) -> float:
+    def sample_yaw(self, random_state: np.random.RandomState | None = None) -> float:
         """
         Pick one of the target angles instead of drawing from a continuous range.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
 
         Returns:
             float: Rotation around yaw in radians.
         """
-        return float(np.random.choice(self.yaw_angle_ratios)) * float(np.pi)
+        return float(random_source(random_state).choice(self.yaw_angle_ratios)) * float(np.pi)
 
 
 class GlobalBEVRandomFlip(BaseTransform):
@@ -274,6 +334,8 @@ class GlobalBEVRandomFlip(BaseTransform):
         - ``lidar_transformation_sample``: the (composed) 4x4 flip.
     """
 
+    stream_consistent = True
+
     def __init__(
         self, horizontal_flip_ratio: float = 0.5, vertical_flip_ratio: float = 0.5
     ) -> None:
@@ -287,12 +349,16 @@ class GlobalBEVRandomFlip(BaseTransform):
         self.horizontal_flip_ratio = horizontal_flip_ratio
         self.vertical_flip_ratio = vertical_flip_ratio
 
-    def sample_flip(self) -> tuple[bool, bool]:
+    def sample_flip(self, random_state: np.random.RandomState | None = None) -> tuple[bool, bool]:
         """
         Sample random horizontal and vertical flips.
+
+        Args:
+            random_state: Random state to draw from, None for the global one of NumPy.
         """
-        horizontal_flip = np.random.rand() < self.horizontal_flip_ratio
-        vertical_flip = np.random.rand() < self.vertical_flip_ratio
+        random = random_source(random_state)
+        horizontal_flip = bool(random.rand() < self.horizontal_flip_ratio)
+        vertical_flip = bool(random.rand() < self.vertical_flip_ratio)
         return horizontal_flip, vertical_flip
 
     def apply_flip(
@@ -320,9 +386,41 @@ class GlobalBEVRandomFlip(BaseTransform):
         return BEV_FLIP_MATRICES[bev_flip_direction] @ rotation_matrix
 
     def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
-        """Flip the available modalities and the bboxes along the sampled axes."""
+        """Flip the available modalities and the bboxes along the sampled axes.
+
+        The flips are drawn for the sample alone.
+        """
+        return self.apply_flips(model_gt_sample, None)
+
+    def transform_in_stream(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState
+    ) -> ModelGTSample:
+        """Flip the sample along the axes drawn for its stream.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are flipped.
+            random_state: Random state seeded by the stream, the same for every frame of it.
+
+        Returns:
+            The flipped sample with the flips recorded.
+        """
+        return self.apply_flips(model_gt_sample, random_state)
+
+    def apply_flips(
+        self, model_gt_sample: ModelGTSample, random_state: np.random.RandomState | None
+    ) -> ModelGTSample:
+        """Draw the flips and flip the sample along the drawn axes.
+
+        Args:
+            model_gt_sample: Sample whose available modalities and bboxes are flipped.
+            random_state: Random state to draw from, the one of a stream or None for the
+                global one of NumPy.
+
+        Returns:
+            The flipped sample with the flips recorded.
+        """
         rotation_matrix = torch.eye(3, dtype=torch.float32)
-        horizontal_flip, vertical_flip = self.sample_flip()
+        horizontal_flip, vertical_flip = self.sample_flip(random_state)
         transformation_order = []
 
         if horizontal_flip:

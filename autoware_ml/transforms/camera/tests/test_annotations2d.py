@@ -99,6 +99,29 @@ class TestLoadAnnotations2DFromBoxes3D(PinholeCameraTestCase):
         self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex)))
         self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
 
+    def test_drops_a_box_whose_center_is_not_in_front_of_the_camera(self) -> None:
+        """Test that a box straddling the camera plane with its center behind it is no target.
+
+        Input: a 2 m cube centered 0.3 m behind the forward camera, with its front corners
+        0.7 m in front of it; the same cube centered on the camera plane; and the cube
+        centered 0.3 m in front of it, with its rear corners behind.
+        Expected: a center behind the camera projects mirrored and a center on the plane to
+        NaN, which clamping would turn into a center on the wrong edge, so both boxes are
+        dropped although corners of theirs are in front; the box whose center is in front
+        stays a target with a finite center.
+        Check: the first two cameras hold no box and no label, the third holds one finite row.
+        """
+        for center_x in (-0.3, 0.0):
+            with self.subTest(center_x=center_x):
+                annotations = self.project_annotations([[center_x, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
+                self.assertEqual(
+                    tuple(annotations.gt_bboxes_2d[0].shape), (0, len(Box2DFieldIndex))
+                )
+                self.assertEqual(tuple(annotations.gt_labels_2d[0].shape), (0,))
+        annotations = self.project_annotations([[0.3, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0]])
+        self.assertEqual(tuple(annotations.gt_bboxes_2d[0].shape), (1, len(Box2DFieldIndex)))
+        self.assertTrue(bool(torch.isfinite(annotations.gt_bboxes_2d[0]).all()))
+
     def test_keeps_a_box_whose_center_leaves_the_image(self) -> None:
         """
         Input: a 6 m wide box 10 m ahead and 9 m to the left, whose center projects to x = -10

@@ -144,11 +144,10 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             for index, metric_filter in enumerate(self._component_filters):
                 if metric_filter.cache_key not in active_filter_keys:
                     continue
-                context = self._frame_filter_context(index, metric_filter, frame.frame_meta)
-                if context is None:
+                if not self._frame_available(index, metric_filter, frame.frame_meta):
                     continue  # scene without a lanelet map, excluded from this slice
                 keep = torch.from_numpy(
-                    np.asarray(metric_filter.keep(coord_np, context), dtype=bool)
+                    np.asarray(metric_filter.keep_points(coord_np, frame.frame_meta), dtype=bool)
                 ).to(predictions.device)
                 self._accumulate(index + 1, predictions[keep], targets[keep], coord[keep])
 
