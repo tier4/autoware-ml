@@ -54,7 +54,7 @@ def tolerant_error_mask(
 
     Evaluated per true class: a wrong point of class ``c`` is rescued exactly when
     its nearest point *predicted* ``c`` lies within ``radius``, so each class is one
-    nearest-neighbour query that stops at the first hit. Only the candidates in the
+    nearest-neighbour query bounded by the radius. Only the candidates in the
     grid cells around a wrong point of the class can rescue one, so the tree of a
     class is built over those alone, not over every point predicted the class.
 
