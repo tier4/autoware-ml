@@ -21,7 +21,11 @@ import unittest
 from pydantic import ValidationError
 import torch
 
-from autoware_ml.dataclasses.models.detection2d.head_outputs import FocalHead2DOutputs
+from autoware_ml.dataclasses.models.detection2d.head_outputs import (
+    FocalHead2DOutputs,
+    RTDETRv2DenoisingOutputs,
+    RTDETRv2HeadOutputs,
+)
 
 
 class TestFocalHead2DOutputs(unittest.TestCase):
@@ -83,3 +87,61 @@ class TestFocalHead2DOutputs(unittest.TestCase):
         """
         with self.assertRaises(ValidationError):
             self.build(num_tokens_of_boxes=5)
+
+
+class TestRTDETRv2HeadOutputs(unittest.TestCase):
+    """Unit tests for the outputs of the RT-DETRv2 decoder."""
+
+    def build(
+        self,
+        num_box_queries: int = 5,
+        encoder: bool = True,
+        num_encoder_classes: int = 3,
+        num_denoising_layers: int = 2,
+        num_positive_images: int = 4,
+    ) -> RTDETRv2HeadOutputs:
+        """The outputs of 2 layers, 4 images, 5 queries and 3 classes, with 6 denoising queries.
+
+        One field can be changed from the valid ones.
+        """
+        denoising = RTDETRv2DenoisingOutputs(
+            cls_scores=torch.zeros(num_denoising_layers, 4, 6, 3),
+            bbox_preds=torch.zeros(num_denoising_layers, 4, 6, 4),
+            positive_indices=tuple(torch.tensor([0, 3]) for _ in range(num_positive_images)),
+            num_groups=1,
+        )
+        return RTDETRv2HeadOutputs(
+            all_cls_scores=torch.zeros(2, 4, 5, 3),
+            all_bbox_preds=torch.zeros(2, 4, num_box_queries, 4),
+            encoder_cls_scores=torch.zeros(4, 5, num_encoder_classes) if encoder else None,
+            encoder_bbox_preds=torch.zeros(4, 5, 4),
+            denoising=denoising,
+        )
+
+    def test_valid_outputs_are_accepted(self) -> None:
+        """
+        Input: outputs whose predictions describe the same layers, images, queries and
+            classes.
+        Expected: built without error.
+        Check: the stored denoising group count.
+        """
+        self.assertEqual(self.build().denoising.num_groups, 1)
+
+    def test_inconsistent_predictions_are_refused(self) -> None:
+        """
+        Input: outputs whose boxes cover 4 queries for 5 logits; whose query selection has
+            boxes without logits, or logits of 2 classes for 3; whose denoising queries cover
+            1 layer for 2; whose positives cover 3 images for 4.
+        Expected: the predictions of a query are read at the same index of every tensor, so
+            each is rejected when the outputs are built.
+        Check: a ValidationError is raised.
+        """
+        for kwargs in (
+            {"num_box_queries": 4},
+            {"encoder": False},
+            {"num_encoder_classes": 2},
+            {"num_denoising_layers": 1},
+            {"num_positive_images": 3},
+        ):
+            with self.subTest(**kwargs), self.assertRaises(ValidationError):
+                self.build(**kwargs)
