@@ -152,9 +152,19 @@ class MatchCurve(BaseModel):
     def _check_rows(self) -> MatchCurve:
         """Check that every array describes the same predictions."""
         num_predictions = self.scores.shape[0]
-        for name in type(self).model_fields:
-            value = getattr(self, name)
-            if isinstance(value, np.ndarray) and value.shape[0] != num_predictions:
+        for name, value in (
+            ("true_positive", self.true_positive),
+            ("false_positive", self.false_positive),
+            ("heading_score", self.heading_score),
+            ("translation_error", self.translation_error),
+            ("orientation_error", self.orientation_error),
+            ("scale_error", self.scale_error),
+            ("velocity_error", self.velocity_error),
+            ("attribute_error", self.attribute_error),
+            ("corner_error", self.corner_error),
+            ("nearest_surface_error", self.nearest_surface_error),
+        ):
+            if value.shape[0] != num_predictions:
                 raise ValueError(
                     f"{name} describes {value.shape[0]} predictions, scores {num_predictions}."
                 )

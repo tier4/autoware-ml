@@ -587,8 +587,16 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             gt_box_labels=labels_np,
         )
         if whole:
-            for name in FramePoints.model_fields:
-                getattr(frame, name).flags.writeable = False
+            for array in (
+                frame.coord,
+                frame.pred,
+                frame.target,
+                frame.confidence,
+                frame.entropy,
+                frame.gt_boxes,
+                frame.gt_box_labels,
+            ):
+                array.flags.writeable = False
         return frame
 
     def _filter_masks(
