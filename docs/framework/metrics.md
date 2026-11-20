@@ -208,6 +208,11 @@ implements `evaluate` and declares `stages` and an optional `filter`. The suite 
 metrics it was given and runs each one against the state its filter selects. Adding a metric
 means adding a `Metric` subclass and listing it in config, never editing the suite.
 
+A filter implements `keep_points` and `keep_boxes`, one mask over the points and one over the
+detection boxes of a frame, and reads what it needs off the frame's `FrameMetaSample`. A filter
+that reads it sets `needs_frame_meta`, which makes its suite require the frame metadata, and may
+override `available` to leave out the frames it cannot cover.
+
 ## Data requirements
 
 The baseline metrics need nothing beyond the model's predictions and the ground truth. Each

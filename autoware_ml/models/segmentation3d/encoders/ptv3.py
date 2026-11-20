@@ -666,7 +666,7 @@ class SerializedAttention(PointModule):
             pad, unpad, cu_seqlens = self._get_padding_and_inverse(point)
             order = point.serialized_order[self.order_index][pad]
             inverse = unpad[point.serialized_inverse[self.order_index]]
-        qkv = self.qkv(point.feat)[order]
+        qkv = self.qkv(point.feat[order])
         head_dim = channel_count // head_count
 
         # With RoPE the projection has to be split before attention so queries
@@ -763,6 +763,47 @@ class MLP(nn.Module):
         return self.drop(self.fc2(self.drop(self.act(self.fc1(x)))))
 
 
+class Cpe(PointSequential):
+    """Encode point positions conditioned on their sparse neighbourhood.
+
+    PTv3's conditional positional encoding applies a 3x3x3 submanifold convolution,
+    a linear projection, and layer normalization to the block input.
+    """
+
+    def __init__(self, channels: int, indice_key: str) -> None:
+        """Initialize the positional encoding.
+
+        Args:
+            channels: Input and output feature dimension.
+            indice_key: Sparse convolution indice key for the submanifold convolution.
+        """
+        super().__init__(
+            SubMConv3d(channels, channels, kernel_size=3, bias=True, indice_key=indice_key),
+            nn.Linear(channels, channels),
+            nn.LayerNorm(channels),
+        )
+
+    @torch.no_grad()
+    def fold_linear(self) -> None:
+        """Fold the linear layer into the convolution before it.
+
+        The submanifold convolution is linear in its weights, so ``Linear(W1, b1)(conv_W(x) + b0)``
+        equals ``conv_{W1 W}(x) + W1 b0 + b1``, with ``W1`` applied along the output channels of
+        the KRSC weight ``[C_out, kd, kh, kw, C_in]``. The encoding then runs as the convolution
+        followed by its layer norm. Meant for an export copy, the parameters change in place.
+        """
+        conv, linear, _ = self.children()
+        conv_weight = conv.weight.double()
+        linear_weight = linear.weight.double()
+        folded_conv_weight = (
+            linear_weight @ conv_weight.reshape(conv_weight.shape[0], -1)
+        ).reshape(conv_weight.shape)
+        folded_conv_bias = linear.bias.double() + linear_weight @ conv.bias.double()
+        conv.weight.copy_(folded_conv_weight.to(conv.weight.dtype))
+        conv.bias.copy_(folded_conv_bias.to(conv.bias.dtype))
+        self.add_module("1", nn.Identity())
+
+
 class Block(PointModule):
     """Compose positional encoding, attention, and MLP for one PTv3 block.
 
@@ -832,11 +873,7 @@ class Block(PointModule):
         self.enable_attn = bool(enable_attn)
 
         if self.enable_conv:
-            self.cpe = PointSequential(
-                SubMConv3d(channels, channels, kernel_size=3, bias=True, indice_key=cpe_indice_key),
-                nn.Linear(channels, channels),
-                nn.LayerNorm(channels),
-            )
+            self.cpe = Cpe(channels, cpe_indice_key)
             self.norm0 = None
         else:
             # No convolution to inject position, so the block normalizes on
@@ -1025,7 +1062,7 @@ class SerializedPooling(PointModule):
                 pooled_order = pooled_order[permutation]
                 pooled_inverse = pooled_inverse[permutation]
 
-        scatter_feat = segment_csr(self.proj(point.feat)[indices], idx_ptr, "max")
+        scatter_feat = segment_csr(self.proj(point.feat[indices]), idx_ptr, "max")
         if self.export_mode:
             scatter_coord = grid_coord.to(dtype=point.coord.dtype)
         else:
@@ -1181,8 +1218,8 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
     """Switch a PTv3 point-module hierarchy into export mode in place.
 
     Args:
-        module: Module hierarchy whose attention, pooling, and sparse-conv
-            children are reconfigured for ONNX export.
+        module: Module hierarchy whose attention, pooling, sparse-conv, and
+            positional-encoding children are reconfigured for ONNX export.
     """
     replace_submconv3d_for_export(module)
     pooling_stage_index = 0
@@ -1196,6 +1233,8 @@ def prepare_point_module_for_export(module: nn.Module) -> None:
             pooling_stage_index += 1
         if hasattr(child, "shuffle_orders"):
             child.shuffle_orders = False
+        if isinstance(child, Cpe):
+            child.fold_linear()
 
 
 def deepcopy_without_flash(module: nn.Module) -> nn.Module:

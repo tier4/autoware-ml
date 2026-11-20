@@ -66,7 +66,7 @@ from functools import cached_property
 from math import ceil, cos, hypot, inf, isfinite, pi, sin, tan
 
 import numpy as np
-import shapely
+import shapely  # TODO: remove the shapely operations of this module to speed up the evaluation.
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 

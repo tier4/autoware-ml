@@ -523,7 +523,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         instead of leaking into it.
 
         Args:
-            frame_meta: Metadata of the frame, the source of the filter context.
+            frame_meta: Metadata of the frame, read by the filters.
             coord_np: ``(N, 3+)`` point coordinates of the frame.
             boxes_np: ``(M, 7+)`` detection GT boxes of the frame.
             active: Cache keys of the filters this stage reads.
@@ -536,21 +536,17 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         box_columns = []
         available = []
         for index, metric_filter in enumerate(self._component_filters):
-            context = (
-                self._frame_filter_context(index, metric_filter, frame_meta)
-                if metric_filter.cache_key in active
-                else None
+            is_available = metric_filter.cache_key in active and self._frame_available(
+                index, metric_filter, frame_meta
             )
-            available.append(context is not None)
-            if context is None:
+            available.append(is_available)
+            if not is_available:
                 columns.append(np.zeros(coord_np.shape[0], dtype=bool))
                 box_columns.append(np.zeros(boxes_np.shape[0], dtype=bool))
                 continue
-            # xyz only: a wide per-point array must never trip the filters' box-vs-point
-            # dispatch. Boxes go through the same filter as full rows, footprint-overlap
-            # membership.
-            columns.append(metric_filter.keep(coord_np[:, :3], context))
-            box_columns.append(metric_filter.keep(boxes_np, context))
+            # Points go in as xyz only, boxes as full rows for footprint-overlap membership.
+            columns.append(metric_filter.keep_points(coord_np[:, :3], frame_meta))
+            box_columns.append(metric_filter.keep_boxes(boxes_np, frame_meta))
         return (
             self._stack_masks(columns, coord_np.shape[0]),
             self._stack_masks(box_columns, boxes_np.shape[0]),
