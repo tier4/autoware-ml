@@ -490,7 +490,7 @@ class TestTolerantErrorMask(unittest.TestCase):
         as the previous counting query (``query_ball_point``) rescued it, so the distance
         check must use the query's own arithmetic.
         Check: the mask equals the counting query's mask, and the pairs include both
-        rescued and unrescued points.
+        points that are rescued and points that are not.
         """
         rng = np.random.default_rng(7)
         radius, pairs = 1.0, 20_000
