@@ -41,6 +41,7 @@ from typing import Any, Generic, TypeVar
 from jaxtyping import Bool, Float
 import numpy as np
 import torch.distributed
+from torch import Tensor
 import torchmetrics
 
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
@@ -138,12 +139,19 @@ class MetricFilter(ABC):
 
     @abstractmethod
     def keep_points(
-        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
-    ) -> Bool[np.ndarray, " num_points"]:
+        self,
+        points: Float[np.ndarray, "num_points 3"] | Float[Tensor, "num_points 3"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_points"] | Bool[Tensor, " num_points"]:
         """Boolean mask over the points to retain.
 
+        The mask comes back the way the points came in: an array for an array, and for
+        a tensor a tensor on the same device. The suites hand the points over as the
+        tensor the model produced, so a filter that can work on a tensor keeps a frame's
+        points on the GPU, and one that cannot converts them itself.
+
         Args:
-            points: Point positions in base_link.
+            points: Point positions in base_link, an array or a tensor.
             frame_meta: Metadata of the frame, ``None`` when the dataset attached none.
 
         Returns:
@@ -213,17 +221,21 @@ class IdentityFilter(MetricFilter):
     name = ""
 
     def keep_points(
-        self, points: Float[np.ndarray, "num_points 3"], frame_meta: FrameMetaSample | None
-    ) -> Bool[np.ndarray, " num_points"]:
+        self,
+        points: Float[np.ndarray, "num_points 3"] | Float[Tensor, "num_points 3"],
+        frame_meta: FrameMetaSample | None,
+    ) -> Bool[np.ndarray, " num_points"] | Bool[Tensor, " num_points"]:
         """All-true mask over the given points.
 
         Args:
-            points: Point positions in base_link.
+            points: Point positions in base_link, an array or a tensor.
             frame_meta: Metadata of the frame, unused here.
 
         Returns:
             Boolean mask of true values, one per point.
         """
+        if isinstance(points, Tensor):
+            return torch.ones(len(points), dtype=torch.bool, device=points.device)
         return np.ones((len(points),), dtype=bool)
 
     def keep_boxes(

@@ -47,11 +47,19 @@ from typing import Protocol
 import lanelet2
 import numpy as np
 import shapely  # TODO: remove the shapely operations of this module to speed up the evaluation.
+import torch
 from shapely import STRtree
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
+from autoware_ml.metrics.geometry.region_raster import RegionRaster
+
 logger = logging.getLogger(__name__)
+
+# Raster cell side, in metres, of the per-map lookup behind LaneletMap.contains. The
+# lookup is exact at any size, the size only sets how many points take the exact
+# edge test (fewer with smaller cells) against memory and build time.
+REGION_RASTER_CELL_SIZE = 0.5
 
 
 # Way ``type`` values that describe a closed area we can use as a region.
@@ -415,12 +423,34 @@ class LaneletMap:
         shapely.prepare(eroded)
         return eroded
 
+    @lru_cache(maxsize=None)
+    def _region_raster(
+        self, geometry: str, tokens: tuple[str, ...] = (), margin: float = 0.0
+    ) -> RegionRaster:
+        """Raster lookup of one of the geometries :meth:`contains` reads, built once.
+
+        Args:
+            geometry: ``region``, ``expanded``, ``full`` or ``eroded_full``.
+            tokens: Region tokens, for ``region`` and ``expanded``.
+            margin: Positive buffer distance, for ``expanded`` and ``eroded_full``.
+
+        Returns:
+            The raster of that geometry.
+        """
+        shapes = {
+            "region": lambda: self.region_union(tokens),
+            "expanded": lambda: self._expanded_region(tokens, margin),
+            "full": self._full_surface,
+            "eroded_full": lambda: self._eroded_full_surface(margin),
+        }
+        return RegionRaster(shapes[geometry](), cell_size=REGION_RASTER_CELL_SIZE)
+
     def contains(
         self,
         tokens: tuple[str, ...],
-        xy: np.ndarray,
+        xy: np.ndarray | torch.Tensor,
         margin: float = 0.0,
-    ) -> np.ndarray:
+    ) -> np.ndarray | torch.Tensor:
         """Boolean mask of map-frame ``xy`` points inside the union of ``tokens``.
 
         ``margin`` moves the region border by that many meters, its sign picking
@@ -434,29 +464,39 @@ class LaneletMap:
           points within ``margin`` of it. Points belonging to another mapped
           region are never claimed, so adjacent regions do not overlap.
 
+        Each geometry is answered by a raster lookup built once per map
+        (:class:`RegionRaster`), equal to ``shapely.contains`` point for point.
+        A tensor is answered on its own device, so points that live on the GPU
+        need no round trip.
+
         Args:
             tokens: Region tokens to unite.
-            xy: Map-frame points ``(N, 2)``.
+            xy: Map-frame points ``(N, 2)``, an array or a tensor.
             margin: Border shift in meters, negative erodes and positive dilates.
 
         Returns:
-            Boolean mask ``(N,)``.
+            Boolean mask ``(N,)``, a tensor on the device of ``xy`` when ``xy`` is one.
         """
-        if xy.shape[0] == 0:
-            return np.zeros((0,), dtype=bool)
-        points = shapely.points(xy[:, 0], xy[:, 1])
-        mask = np.asarray(shapely.contains(self.region_union(tuple(tokens)), points), dtype=bool)
-        if margin == 0.0:
-            return mask
+        tokens = tuple(tokens)
+        margin = float(margin)
+        if isinstance(xy, torch.Tensor):
+            xy = xy.to(torch.float64)
+
+            def inside(geometry: str, *key) -> torch.Tensor:
+                return self._region_raster(geometry, *key).contains_tensor(xy)
+
+        else:
+            xy = np.asarray(xy, dtype=np.float64)
+
+            def inside(geometry: str, *key) -> np.ndarray:
+                return self._region_raster(geometry, *key).contains(xy)
+
+        mask = inside("region", tokens)
         if margin > 0.0:
-            in_expanded = np.asarray(
-                shapely.contains(self._expanded_region(tuple(tokens), float(margin)), points),
-                dtype=bool,
-            )
-            on_map = np.asarray(shapely.contains(self._full_surface(), points), dtype=bool)
-            return mask | (in_expanded & ~on_map)
-        eroded = self._eroded_full_surface(-float(margin))
-        return mask & np.asarray(shapely.contains(eroded, points), dtype=bool)
+            return mask | (inside("expanded", tokens, margin) & ~inside("full"))
+        if margin < 0.0:
+            return mask & inside("eroded_full", (), -margin)
+        return mask
 
     def intersects(
         self,
