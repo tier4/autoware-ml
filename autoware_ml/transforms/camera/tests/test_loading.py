@@ -225,6 +225,98 @@ class TestLoadImagesFromFile(unittest.TestCase):
         self.assertEqual(raw.camera_image_data.images.min().item(), 0.0)
         self.assertEqual(raw.camera_image_data.images.max().item(), 255.0)
 
+    def test_cover_size_leaves_a_covered_image_as_stored(self) -> None:
+        """Test that an image already covering ``cover_size`` is served as stored, not upscaled."""
+        sample = self.build_model_gt_sample([self.build_image_sample("camera0")])
+
+        output = LoadImagesFromFile(
+            cover_size=[IMAGE_HEIGHT, IMAGE_WIDTH], normalize_to_unit=False
+        )(sample)
+        larger = LoadImagesFromFile(cover_size=[IMAGE_HEIGHT * 4, IMAGE_WIDTH * 4])(sample)
+
+        assert output.camera_image_data is not None
+        assert larger.camera_image_data is not None
+        self.assertTrue(
+            torch.equal(
+                output.camera_image_data.images,
+                self.expected_images(["camera0"], normalize_to_unit=False),
+            )
+        )
+        self.assertEqual(larger.camera_image_data.images.shape[-2:], (IMAGE_HEIGHT, IMAGE_WIDTH))
+        for camera_image_data in (output.camera_image_data, larger.camera_image_data):
+            self.assertTrue(
+                torch.equal(
+                    camera_image_data.augmented_camera_intrinsics,
+                    camera_image_data.camera_intrinsics,
+                )
+            )
+            self.assertTrue(
+                torch.equal(
+                    camera_image_data.image_augmentation_matrices,
+                    torch.eye(4, dtype=torch.float32).repeat(1, 1, 1),
+                )
+            )
+
+    def test_cover_size_downscales_the_images_and_their_intrinsics(self) -> None:
+        """Test that a smaller ``cover_size`` downscales to just cover it, intrinsics following."""
+        # 4x6 stored, 2x3 cover: the factor is 0.5 on both sides, so the covering size is exact.
+        sample = self.build_model_gt_sample(
+            [self.build_image_sample("camera0"), self.build_image_sample("camera1")]
+        )
+        assert sample.image_samples is not None
+        intrinsic = sample.image_samples[0].camera_intrinsic
+
+        output = LoadImagesFromFile(cover_size=[2, 3])(sample)
+        reference = LoadImagesFromFile()(sample)
+
+        assert output.camera_image_data is not None
+        assert reference.camera_image_data is not None
+        camera_image_data = output.camera_image_data
+        self.assertEqual(camera_image_data.images.shape, (2, 3, 2, 3))
+        self.assertEqual(camera_image_data.images.dtype, torch.float32)
+        # The blue marker is uniform, so it survives the antialiased downscale exactly.
+        self.assertTrue(torch.equal(camera_image_data.images[0, 2], torch.full((2, 3), 10 / 255)))
+        self.assertTrue(torch.equal(camera_image_data.images[1, 2], torch.full((2, 3), 20 / 255)))
+        # The gradients keep their direction: red grows along the rows, green along the columns.
+        red, green = camera_image_data.images[0, 0], camera_image_data.images[0, 1]
+        self.assertLess(red[0, 0].item(), red[1, 0].item())
+        self.assertLess(green[0, 0].item(), green[0, 2].item())
+        # The stored intrinsics are kept, the augmented ones are scaled by 0.5, and the
+        # augmentation matrix and lidar2images are those of a resize by 0.5.
+        self.assertTrue(torch.equal(camera_image_data.camera_intrinsics[0], intrinsic))
+        scale = torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.5, 0.0], [0.0, 0.0, 1.0]])
+        self.assertTrue(
+            torch.allclose(camera_image_data.augmented_camera_intrinsics[0], scale @ intrinsic)
+        )
+        expected_augmentation = torch.eye(4)
+        expected_augmentation[:3, :3] = scale
+        self.assertTrue(
+            torch.allclose(camera_image_data.image_augmentation_matrices[0], expected_augmentation)
+        )
+        expected_lidar2image = torch.eye(4)
+        expected_lidar2image[:3, :3] = scale @ intrinsic
+        self.assertTrue(torch.allclose(camera_image_data.lidar2images[0], expected_lidar2image))
+        self.assertFalse(
+            torch.equal(
+                reference.camera_image_data.augmented_camera_intrinsics,
+                camera_image_data.augmented_camera_intrinsics,
+            )
+        )
+
+    def test_cover_size_keeps_the_aspect_ratio_and_covers_after_rounding(self) -> None:
+        """Test that the larger covering factor is used and every side is rounded up."""
+        transform = LoadImagesFromFile(cover_size=[480, 640])
+
+        # 1860x2880: 480/1860 = 0.258 > 640/2880 = 0.222 -> the height drives the factor.
+        self.assertEqual(transform.covering_size(1860, 2880), (480, 744))
+        # 1080x1440: both sides give 4/9 -> exact.
+        self.assertEqual(transform.covering_size(1080, 1440), (480, 640))
+        # 900x1600: 480/900 = 0.533 -> width rounds up to 854 and still covers 640.
+        self.assertEqual(transform.covering_size(900, 1600), (480, 854))
+        # A stored size covered by cover_size is never upscaled.
+        self.assertEqual(transform.covering_size(300, 500), (300, 500))
+        self.assertEqual(LoadImagesFromFile().covering_size(1860, 2880), (1860, 2880))
+
     def test_metadata_carried_over(self) -> None:
         """Test that the calibration metadata of the sample is carried over."""
         sample = self.build_model_gt_sample([self.build_image_sample("camera0", timestamp=2.5)])
