@@ -438,10 +438,11 @@ class TestHungarianAssigner3D(unittest.TestCase):
 
     def test_assign_skips_an_interior_padded_gt_column(self) -> None:
         """
-        Input: the shared proposals with sample 0 padded between its real gts at columns 0 and 2,
-        and sample 1 holding one real gt followed by two padded columns.
-        Expected: no proposal takes a padded column, and the gt at column 2 keeps its index, so
-        proposal 1 of sample 0 points at it with the one-based index 3.
+        Input: a batch whose first sample has ground truth boxes in columns 0 and 2 and padding
+        in column 1, and whose second sample has one ground truth box followed by two padding
+        columns.
+        Expected: no proposal is matched to a padding column, and the box in column 2 keeps its
+        index, so the proposal sitting on it gets the one-based index 3.
         Check: ``num_gts``, ``gt_inds`` and ``labels`` of both samples.
         """
         gt_bboxes = self._boxes_from_centers(
