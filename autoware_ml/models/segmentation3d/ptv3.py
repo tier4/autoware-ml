@@ -32,6 +32,7 @@ from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
+from autoware_ml.deployment.graphs import DeploymentGraph
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
     PTv3Seg3DDecoderHead,
     segmentation3d_eval_output,
@@ -41,12 +42,10 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
-    build_encoder_export_spec,
-    build_ptv3_export_context,
-    build_seg3d_head_export_spec,
+    build_ptv3_graphs,
+    build_seg3d_head_graph,
     split_block_parameters,
 )
-from autoware_ml.utils.deploy import ExportSpec
 from autoware_ml.metrics.eval_output import EvalOutput
 
 
@@ -159,25 +158,6 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
             )
         )
 
-    def get_export_output_names(self) -> list[str]:
-        """Return ordered PTv3 segmentation export output names."""
-        return ["pred_labels", "pred_probs"]
-
-    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
-        """Build split PTv3 segmentation ONNX export specs for encoder and head.
-
-        Args:
-            batch_inputs: Example preprocessed batch with the voxels.
-
-        Returns:
-            Export specs of the encoder and the segmentation head.
-        """
-        context = build_ptv3_export_context(self, batch_inputs)
-        return {
-            "ptv3_encoder": build_encoder_export_spec(context),
-            "ptv3_seg3d_head": build_seg3d_head_export_spec(
-                context,
-                self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
-                self.get_export_output_names(),
-            ),
-        }
+    def deployment_graphs(self) -> Sequence[DeploymentGraph]:
+        """Declare ``ptv3_encoder`` and ``ptv3_seg3d_head``, the runtime's split."""
+        return build_ptv3_graphs(self, build_seg3d_head_graph(self, self.seg3d_head))

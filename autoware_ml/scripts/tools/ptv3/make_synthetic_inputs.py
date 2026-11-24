@@ -37,7 +37,7 @@ from autoware_ml.models.segmentation3d.encoders.voxel import (
 )
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
-    prepare_ptv3_export_inputs,
+    serialize_points,
 )
 from autoware_ml.utils.deploy import validate_cuda_available
 from autoware_ml.utils.runtime import configure_torch_runtime, get_config_path, set_seed
@@ -116,8 +116,14 @@ def main(cfg: DictConfig) -> None:
     )
     batch_inputs = model.on_after_batch_transfer(batch.to_device(model.device), dataloader_idx=0)
 
-    inputs = prepare_ptv3_export_inputs(model, batch_inputs)
-    stages = [inputs.grid_coord, *(meta.grid_coord for meta in inputs.pooling_metadata)]
+    tensors = serialize_points(model, batch_inputs, model.device)
+    stages = [
+        tensors["grid_coord"],
+        *(
+            tensors[f"serialized_pooling_{index}_grid_coord"]
+            for index in range(len(model.encoder.stride))
+        ),
+    ]
     counts = [len(stage) for stage in stages]
     if counts != list(spec.voxel_counts):
         raise RuntimeError(f"The stages hold {counts} voxels, not {spec.voxel_counts}.")

@@ -95,7 +95,7 @@ is future work.
 | Path                                                  | Description                                   |
 | ----------------------------------------------------- | --------------------------------------------- |
 | `autoware_ml/models/segmentation3d/encoders/ptv3.py`  | `LitePTEncoder`, `Point3DRoPE`, block gating  |
-| `autoware_ml/models/segmentation3d/ptv3_base.py`      | `PTv3EncoderExportBase`, shared export inputs |
+| `autoware_ml/models/segmentation3d/ptv3_base.py`      | Deployment graph builders, export modules     |
 | `autoware_ml/models/segmentation3d/heads/ptv3.py`     | Decoder gating (`dec_conv`, `dec_attn`)       |
 | `autoware_ml/configs/tasks/*/litept/`                 | LitePT bases, encoder and decoder head        |
 | `autoware_ml/models/detection3d/tests/test_litept.py` | Rotary, gating, and export tests              |

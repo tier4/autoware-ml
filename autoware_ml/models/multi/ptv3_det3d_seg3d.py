@@ -21,7 +21,7 @@ labels (e.g. segmentation ground truth mixed in for rehearsal, or a GT
 segmentation validation split) train and evaluate only the segmentation
 branch. The deliberate trade-off: genuinely empty scenes also provide no
 pure-background detection supervision. The same class supports training
-(forward / compute_metrics) and the split ONNX export (build_export_specs).
+(forward / compute_metrics) and deployment (deployment_graphs).
 """
 
 from __future__ import annotations
@@ -41,10 +41,11 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.deployment.graphs import DeploymentGraph
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, build_det3d_head_export_spec
+from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, build_det3d_head_graph
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
@@ -55,20 +56,19 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
+    SEG3D_HEAD_OUTPUT_NAMES,
     PTv3BaseModel,
-    build_encoder_export_spec,
-    build_ptv3_export_context,
-    build_seg3d_head_export_spec,
+    build_ptv3_graphs,
+    build_seg3d_head_graph,
     split_block_parameters,
 )
-from autoware_ml.utils.deploy import ExportSpec
 
 
 class PTv3Det3DSeg3DModel(PTv3BaseModel):
     """PTv3 joint segmentation and detection model.
 
     Training: call forward() then compute_metrics().
-    Export: call build_export_specs() - requires export_output_names, grid_size,
+    Deployment: deployment_graphs() - requires export_output_names, grid_size,
     and point_cloud_range to be provided at construction time.
     """
 
@@ -338,52 +338,26 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
             ),
         )
 
-    def get_export_output_names(self) -> list[str]:
-        """Return configured ONNX export output names.
+    def deployment_graphs(self) -> Sequence[DeploymentGraph]:
+        """Declare ``ptv3_encoder``, ``ptv3_seg3d_head`` and ``ptv3_det3d_head``.
 
-        Returns:
-            Output names passed to the export spec.
+        The heads do not read each other, so the model outputs are the seg head's, then the
+        det head's: ``export_output_names`` minus the seg head's names.
 
         Raises:
-            ValueError: If export output names were not configured.
+            ValueError: If the export output names or the geometry were not configured.
         """
         if self._export_output_names is None:
-            raise ValueError(
-                "export_output_names must be provided at construction time to use export."
-            )
-        return list(self._export_output_names)
-
-    def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
-        """Build split PTv3 det3d_seg3d ONNX export specs for encoder, seg head, and det head.
-
-        Args:
-            batch_inputs: Example preprocessed batch with the voxels.
-
-        Returns:
-            Export specs of the encoder, the segmentation head, and the detection head.
-        """
+            raise ValueError("export_output_names must be provided at construction time to deploy.")
         if self.grid_size is None or self.point_cloud_range is None:
             raise ValueError(
-                "grid_size and point_cloud_range must be provided at construction time to use "
-                "export."
+                "grid_size and point_cloud_range must be provided at construction time to deploy."
             )
-        context = build_ptv3_export_context(self, batch_inputs)
         det3d_output_names = [
-            n for n in self.get_export_output_names() if n not in ("pred_labels", "pred_probs")
+            name for name in self._export_output_names if name not in SEG3D_HEAD_OUTPUT_NAMES
         ]
-        return {
-            "ptv3_encoder": build_encoder_export_spec(context),
-            "ptv3_seg3d_head": build_seg3d_head_export_spec(
-                context,
-                self.seg3d_head.prepare_for_export(self.EXPORT_ORDER),
-                ["pred_labels", "pred_probs"],
-            ),
-            "ptv3_det3d_head": build_det3d_head_export_spec(
-                context,
-                self.bev_neck,
-                self.bbox_head.prepare_for_export(
-                    bev_shape=self.bev_neck.bev_projector.output_shape
-                ),
-                det3d_output_names,
-            ),
-        }
+        return build_ptv3_graphs(
+            self,
+            build_seg3d_head_graph(self, self.seg3d_head),
+            build_det3d_head_graph(self, self.bev_neck, self.bbox_head, det3d_output_names),
+        )
