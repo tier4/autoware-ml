@@ -173,10 +173,10 @@ class PartialDetection3DScore(Metric[PointCloudSeg3DState]):
                     # gates).
                     radius = float(np.linalg.norm(box[3:5])) / 2.0 * (1.0 + 1e-9)
                     center = box[:2].astype(np.float64)
-                    near = (np.abs(coord[:, 0] - center[0]) <= radius) & (
+                    in_bounding_square = (np.abs(coord[:, 0] - center[0]) <= radius) & (
                         np.abs(coord[:, 1] - center[1]) <= radius
                     )
-                    candidates = np.flatnonzero(near)
+                    candidates = np.flatnonzero(in_bounding_square)
                     if candidates.shape[0]:
                         inside = candidates[points_in_rotated_box(coord[candidates], box)]
                     else:
