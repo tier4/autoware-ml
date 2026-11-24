@@ -45,7 +45,7 @@ from autoware_ml.deployment.graphs import DeploymentGraph
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, build_det3d_head_graph
+from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
@@ -357,5 +357,7 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         return (
             self.build_encoder_graph(),
             self.build_seg3d_head_graph(self.seg3d_head),
-            build_det3d_head_graph(self, self.bev_neck, self.bbox_head, det3d_output_names),
+            self.bev_neck.build_head_graph(
+                len(self.encoder.stride) + 1, self.bbox_head, det3d_output_names
+            ),
         )
