@@ -82,7 +82,7 @@ def build_ptv3_encoder(
         enc_depths=(1, 1),
         enc_channels=(8, 16),
         enc_num_head=(1, 2),
-        enc_patch_size=tuple(patch_sizes),
+        enc_patch_size=patch_sizes,
         mlp_ratio=2.0,
         qkv_bias=True,
         qk_scale=None,
