@@ -434,6 +434,38 @@ class TestHungarianAssigner3D(unittest.TestCase):
                     ),
                 )
 
+    def test_assign_skips_an_interior_padded_gt_column(self) -> None:
+        """
+        Input: a batch whose first sample has ground truth boxes in columns 0 and 2 and padding
+        in column 1, and whose second sample has one ground truth box followed by two padding
+        columns.
+        Expected: no proposal is matched to a padding column, and the box in column 2 keeps its
+        index, so the proposal sitting on it gets the one-based index 3.
+        Check: ``num_gts``, ``gt_inds`` and ``labels`` of both samples.
+        """
+        gt_bboxes = self._boxes_from_centers(
+            [
+                [(2.1, 2.0), (-99.0, -99.0), (20.2, 20.0)],
+                [(5.1, 5.0), (-99.0, -99.0), (-99.0, -99.0)],
+            ]
+        )
+        gt_labels = torch.tensor([[1, -1, 0], [0, -1, -1]], dtype=torch.int64, device=self.device)
+        valid_masks = torch.tensor([[True, False, True], [True, False, False]], device=self.device)
+
+        result = self.assigner.assign(
+            bboxes=self.bboxes,
+            gt_bboxes=gt_bboxes,
+            gt_labels=gt_labels,
+            cls_pred=self.cls_pred,
+            valid_masks=valid_masks,
+        )
+
+        self.assertEqual(result.num_gts.tolist(), [2, 1])
+        self.assertEqual(result.gt_inds[0].tolist(), [1, 3, 0])
+        self.assertEqual(result.gt_inds[1].tolist(), [1, 0, 0])
+        self.assertEqual(result.labels[0].tolist(), [1, 0, -1])
+        self.assertEqual(result.labels[1].tolist(), [0, -1, -1])
+
     def test_assign_negatives_carry_no_gt_or_label(self) -> None:
         """Test that unmatched proposals are negatives rather than ignored."""
         result = self._assign()
