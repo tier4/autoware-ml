@@ -76,14 +76,19 @@ class TestSeg3dDeployment(unittest.TestCase):
         self.model = build_seg3d_model().cuda().eval()
         self.batch = build_inputs(device=torch.device("cuda"))
 
-    def test_seg3d_declaration_names_the_runtime_modules_and_is_name_covered(self) -> None:
-        """Test that the seg3d declaration names the runtime modules and every input is produced.
+    def test_seg3d_declaration_and_specs(self) -> None:
+        """Test that the segmentation model declares the encoder and the seg3d head graphs.
 
-        Input: the segmentation model's deployment declaration and one serialized batch.
-        Expected: the graphs are the encoder and the seg3d head, named as the
-            runtime names them; every graph input is a serialized tensor or an encoder output.
-        Check: the graph names, the encoder's leading input names, the head's output names, and
-            the input names against the serialized tensors.
+        Input: the segmentation model's deployment declaration, its export specs and one
+            serialized batch.
+        Expected: the graphs are the encoder and the seg3d head, named as the runtime names
+            them; every graph input is a serialized tensor or an encoder output; the encoder
+            spec takes the encoder graph's inputs with the voxel count dynamic, and both specs'
+            modules run on their args.
+        Check: the graph names, the encoder's leading input names, the head's output names, the
+            input names against the serialized tensors, the spec input names, the dynamic axis
+            of ``voxels``, and the shapes of the level features and of the head's labels and
+            probabilities.
         """
         graphs = {graph.name: graph for graph in self.model.deployment_declaration().graphs}
         self.assertEqual(set(graphs), {ENCODER_GRAPH, SEG3D_HEAD_GRAPH})
@@ -95,23 +100,13 @@ class TestSeg3dDeployment(unittest.TestCase):
         self.assertLessEqual(set(encoder.input_names), set(tensors))
         self.assertLessEqual(set(head.input_names), set(tensors) | set(encoder.output_names))
 
-    def test_seg3d_export_specs_are_derived_and_keep_the_split_contract(self) -> None:
-        """Test that the export specs derived from the graphs keep the split export contract.
-
-        Input: the segmentation model and one batch.
-        Expected: an encoder spec and a seg3d head spec whose inputs follow the encoder graph's
-            input names, with the voxel count dynamic, and whose modules run on their args.
-        Check: the spec names and input names, the dynamic axis of ``voxels``, and the shapes
-            of the level features and of the head's labels and probabilities.
-        """
         specs = self.model.build_export_specs(self.batch)
-        self.assertEqual(set(specs), {ENCODER_GRAPH, SEG3D_HEAD_GRAPH})
+        self.assertEqual(set(specs), set(graphs))
         encoder_spec, head_spec = specs[ENCODER_GRAPH], specs[SEG3D_HEAD_GRAPH]
         self.assertEqual(
             encoder_spec.input_names,
             list(encoder_graph_input_names(len(self.model.encoder.stride))),
         )
-        self.assertIn("serialized_pooling_0_patch_order", encoder_spec.input_names)
         self.assertEqual(encoder_spec.dynamic_axes["voxels"], {0: "num_voxels"})
         with torch.no_grad():
             level_feats = encoder_spec.module(*encoder_spec.args)
@@ -121,7 +116,7 @@ class TestSeg3dDeployment(unittest.TestCase):
         self.assertEqual(pred_labels.shape, (num_voxels,))
         self.assertEqual(pred_probs.shape[0], num_voxels)
 
-    def test_derived_specs_export_onnx_with_the_declared_io_contract(self) -> None:
+    def test_seg3d_specs_export_onnx_with_the_declared_io_contract(self) -> None:
         """Test that each derived spec exports an ONNX with the graph's declared names and axes.
 
         Input: the segmentation model's specs, exported with the base config's ONNX settings.
