@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import unittest
 from typing import Any
 
 import numpy as np
@@ -25,7 +26,7 @@ import torch
 
 from autoware_ml.metrics.base import EvalStage, MetricRange
 from autoware_ml.metrics.detection3d.heading_ap import HeadingAP
-from autoware_ml.metrics.detection3d.matching import cost_center, match_by_cost
+from autoware_ml.metrics.detection3d.matching import cost_center, gt_keep_mask, match_by_cost
 from autoware_ml.metrics.detection3d.mean_ap import MeanAP
 from autoware_ml.metrics.detection3d.nds import Nds
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
@@ -617,3 +618,80 @@ def test_match_by_cost_equals_reference_global_greedy() -> None:
             np.testing.assert_allclose(curve.scores, scores)
             np.testing.assert_array_equal(curve.true_positive, tp)
             np.testing.assert_allclose(curve.translation_error, ate, rtol=1e-9)
+
+
+class TestGtKeepMask(unittest.TestCase):
+    """Tests for the ground truth keep mask of one frame."""
+
+    CLASS_NAMES = ("car", "truck", "bus", "pedestrian")
+
+    @staticmethod
+    def _box_by_box(
+        gt_boxes: torch.Tensor,
+        gt_labels: torch.Tensor,
+        class_names: tuple[str, ...],
+        max_distances: dict[str, float | None],
+    ) -> torch.Tensor:
+        """Apply the distance caps one box at a time, as the rule is stated."""
+        keep = torch.ones(gt_boxes.shape[0], dtype=torch.bool)
+        distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
+        for index, label in enumerate(gt_labels.tolist()):
+            if not 0 <= label < len(class_names):
+                continue
+            cap = max_distances.get(class_names[label])
+            if cap is not None and float(distances[index]) > cap:
+                keep[index] = False
+        return keep
+
+    def test_distance_caps_match_the_box_by_box_rule(self) -> None:
+        """Test that the caps drop exactly the boxes a box-by-box check drops."""
+        generator = torch.Generator().manual_seed(0)
+        # A cap per class but one, one class with an explicit ``None``, and labels on
+        # both sides of the class list, which no cap applies to.
+        max_distances = {"car": 50.2, "truck": 90.0, "pedestrian": None, "bicycle": 10.0}
+        for num_boxes in (0, 1, 7, 400):
+            gt_boxes = torch.zeros((num_boxes, 7), dtype=torch.float32)
+            gt_boxes[:, :2] = (torch.rand((num_boxes, 2), generator=generator) - 0.5) * 240.0
+            gt_labels = torch.randint(-1, 6, (num_boxes,), generator=generator)
+            keep = gt_keep_mask(
+                gt_boxes, gt_labels, None, self.CLASS_NAMES, max_distances, min_num_points=0
+            )
+            expected = self._box_by_box(gt_boxes, gt_labels, self.CLASS_NAMES, max_distances)
+            self.assertEqual(keep.dtype, torch.bool)
+            self.assertEqual(keep.tolist(), expected.tolist())
+        self.assertFalse(bool(expected.all()))
+        self.assertTrue(bool(expected.any()))
+
+    def test_distance_cap_is_not_rounded_to_float32(self) -> None:
+        """Test that a box is compared with the cap itself, not its float32 rounding.
+
+        float32 rounds 50.2 up, so a box at that rounded distance lies beyond the cap
+        and is dropped, while the next float32 below it is kept.
+        """
+        beyond = torch.tensor(50.2, dtype=torch.float32)
+        within = torch.nextafter(beyond, torch.tensor(0.0))
+        self.assertGreater(float(beyond), 50.2)
+        self.assertLess(float(within), 50.2)
+        gt_boxes = torch.zeros((2, 7), dtype=torch.float32)
+        gt_boxes[0, 0] = beyond
+        gt_boxes[1, 1] = -within
+        gt_labels = torch.zeros(2, dtype=torch.long)
+
+        keep = gt_keep_mask(
+            gt_boxes, gt_labels, None, self.CLASS_NAMES, {"car": 50.2}, min_num_points=0
+        )
+
+        self.assertEqual(keep.tolist(), [False, True])
+
+    def test_distance_caps_combine_with_the_point_count(self) -> None:
+        """Test that a box has to pass both its class's cap and the point count."""
+        gt_boxes = torch.zeros((4, 7), dtype=torch.float32)
+        gt_boxes[:, 0] = torch.tensor([10.0, 10.0, 60.0, 60.0])
+        gt_labels = torch.zeros(4, dtype=torch.long)
+        gt_num_points = torch.tensor([5, 1, 5, 1])
+
+        keep = gt_keep_mask(
+            gt_boxes, gt_labels, gt_num_points, self.CLASS_NAMES, {"car": 50.0}, min_num_points=2
+        )
+
+        self.assertEqual(keep.tolist(), [True, False, False, False])
