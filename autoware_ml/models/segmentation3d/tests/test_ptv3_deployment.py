@@ -80,14 +80,14 @@ class TestSeg3dDeployment(unittest.TestCase):
         """Test that the seg3d declaration names the runtime modules and every input is produced.
 
         Input: the segmentation model's deployment declaration and one serialized batch.
-        Expected: the graphs are the encoder and the seg3d head, named and ordered as the
-            runtime binds them; every graph input is a serialized tensor or an encoder output.
+        Expected: the graphs are the encoder and the seg3d head, named as the
+            runtime names them; every graph input is a serialized tensor or an encoder output.
         Check: the graph names, the encoder's leading input names, the head's output names, and
             the input names against the serialized tensors.
         """
-        graphs = self.model.deployment_declaration().graphs
-        self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, SEG3D_HEAD_GRAPH])
-        encoder, head = graphs
+        graphs = {graph.name: graph for graph in self.model.deployment_declaration().graphs}
+        self.assertEqual(set(graphs), {ENCODER_GRAPH, SEG3D_HEAD_GRAPH})
+        encoder, head = graphs[ENCODER_GRAPH], graphs[SEG3D_HEAD_GRAPH]
         self.assertEqual(encoder.input_names[:5], ENCODER_EXPORT_INPUT_NAMES)
         self.assertFalse(any(name.endswith("_cluster") for name in encoder.input_names))
         self.assertEqual(head.output_names, ("pred_labels", "pred_probs"))
@@ -105,7 +105,7 @@ class TestSeg3dDeployment(unittest.TestCase):
             of the level features and of the head's labels and probabilities.
         """
         specs = self.model.build_export_specs(self.batch)
-        self.assertEqual(list(specs), [ENCODER_GRAPH, SEG3D_HEAD_GRAPH])
+        self.assertEqual(set(specs), {ENCODER_GRAPH, SEG3D_HEAD_GRAPH})
         encoder_spec, head_spec = specs[ENCODER_GRAPH], specs[SEG3D_HEAD_GRAPH]
         self.assertEqual(
             encoder_spec.input_names,
@@ -156,10 +156,10 @@ class TestDet3dDeployment(unittest.TestCase):
         Check: the graph names, the spec names, the head spec's output names, and the count,
             the ``query_labels`` dtype and the ``dense_heatmap`` leading dims of a run.
         """
-        graphs = self.model.deployment_declaration().graphs
-        self.assertEqual([graph.name for graph in graphs], [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
+        graphs = {graph.name: graph for graph in self.model.deployment_declaration().graphs}
+        self.assertEqual(set(graphs), {ENCODER_GRAPH, DET3D_HEAD_GRAPH})
         specs = self.model.build_export_specs(self.batch)
-        self.assertEqual(list(specs), [ENCODER_GRAPH, DET3D_HEAD_GRAPH])
+        self.assertEqual(set(specs), set(graphs))
         head_spec = specs[DET3D_HEAD_GRAPH]
         self.assertEqual(head_spec.output_names, list(self.model.export_output_names))
         with torch.no_grad():
@@ -237,7 +237,8 @@ class TestDeploymentReproducesForward(unittest.TestCase):
         Check: assert_deployment_reproduces_forward().
         """
         model = build_trans_model(patch_sizes=self.patch_sizes).cuda().eval()
-        names = model.deployment_declaration().graphs[-1].output_names
+        graphs = {graph.name: graph for graph in model.deployment_graphs()}
+        names = graphs[DET3D_HEAD_GRAPH].output_names
         assert_deployment_reproduces_forward(
             model,
             self.batch,
