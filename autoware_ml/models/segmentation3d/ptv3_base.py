@@ -306,9 +306,12 @@ class PTv3BaseModel(ModuleBaseModel):
 
         Returns:
             Copy of the encoder prepared for ONNX export with the configured
-            export order.
+            export order and its rotary embeddings bounded to the export grid.
         """
-        return self.encoder.prepare_for_export(self.EXPORT_ORDER)
+        encoder = self.encoder.prepare_for_export(self.EXPORT_ORDER)
+        sparse_shape, _ = self.compute_export_geometry(torch.device("cpu"))
+        encoder.bound_rope_to_grid(sparse_shape)
+        return encoder
 
 
 def build_serialized_pooling_metadata(
