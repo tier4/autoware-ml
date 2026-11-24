@@ -43,7 +43,6 @@ from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import P
 from autoware_ml.models.detection3d.encoders.pillars.point_pillar_scatter import PointPillarsScatter
 from autoware_ml.models.detection3d.heads.centerhead import CenterHead
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.utils.deploy import ExportSpec
 
 
 class _CenterPointVoxelEncoderExportWrapper(nn.Module):
@@ -229,15 +228,6 @@ class CenterPointDetection3DModel(ModuleBaseModel):
             outputs=outputs.detection3d_head_outputs
         )
         return multi_task_predictions
-
-    # TODO(vividf): Remove together with ModuleBaseModel.build_export_spec().
-    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
-        """Reject single-module CenterPoint deployment export."""
-        del multi_task_batch_inputs
-        raise RuntimeError(
-            "CenterPoint deployment uses split modules; build_export_specs() derives them "
-            "from deployment_graphs()."
-        )
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
         """Declare the two graphs the Autoware runtime loads, named like its artifacts.

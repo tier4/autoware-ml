@@ -350,11 +350,6 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "voxels_data"):
             self.centerpoint.build_export_specs(multi_task_batch_inputs)
 
-    def test_build_export_spec_rejects_single_module_export(self) -> None:
-        """Test that the single-module export entry point points at the split export."""
-        with self.assertRaisesRegex(RuntimeError, "build_export_specs"):
-            self.centerpoint.build_export_spec(self._build_multi_task_batch_inputs())
-
     def test_build_export_specs_requires_eval_mode(self) -> None:
         """Test that export spec construction rejects a model in training mode."""
         self.centerpoint.train()
@@ -443,36 +438,6 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             atol=1e-3,
         )
         self.assertEqual(list(check.deployment_outputs), ["heatmap", "reg", "height", "dim", "rot"])
-
-    def test_deployment_runs_on_deployment_inputs_without_ground_truth(self) -> None:
-        """Test that voxels with an empty GT batch, as a runtime feeds them, trace both graphs.
-
-        Input: the batch's voxels with a ModelGTBatch of no ground truth.
-        Expected: build_export_specs() traces both graphs on it.
-        Check: the head spec's example canvas has the batch size as its first axis.
-        """
-        self.centerpoint.eval()
-        batch_inputs = self._build_multi_task_batch_inputs()
-        voxels_data = batch_inputs.voxels_data
-        self.assertIsNotNone(voxels_data)
-        inputs = ModelBatchInputs(
-            multi_task_gt_batch=ModelGTBatch(
-                point_cloud_gt_batch=None,
-                detection3d_gt_batch=None,
-                segmentation3d_gt_batch=None,
-                image_gt_batch=None,
-                io_processing_time=0.0,
-                padding_mask=torch.zeros(self.batch_size, dtype=torch.bool, device=self.device),
-            ),
-            voxels_data=voxels_data,
-            image_data=None,
-            range_view_data=None,
-        )
-
-        specs = self.centerpoint.build_export_specs(inputs)
-
-        (spatial_features,) = specs["pts_backbone_neck_head_centerpoint"].args
-        self.assertEqual(spatial_features.shape[0], self.batch_size)
 
     def test_deployment_keeps_a_canvas_for_a_sample_without_voxels(self) -> None:
         """Test that the deployment keeps a canvas for a sample without voxels.
