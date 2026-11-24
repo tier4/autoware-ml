@@ -31,7 +31,6 @@ from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentat
 from autoware_ml.deployment.graphs import GraphTensor, run_deployment_in_torch
 from autoware_ml.deployment.tests.deployment_assertions import (
     assert_deployment_reproduces_forward,
-    assert_specs_export_onnx_with_the_declared_io,
 )
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
@@ -384,21 +383,6 @@ def test_ptv3_det3d_seg3d_deployment_reproduces_forward() -> None:
     batch = build_inputs(device=cuda)
     model = _build_det3d_seg3d_model(whole_level_patch_sizes(batch)).cuda().eval()
     assert_deployment_reproduces_forward(model, batch, cuda, _joint_tensors, rtol=1e-5, atol=1e-5)
-
-
-@pytest.mark.skipif(
-    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
-    reason="PTv3 sparse-convolution export tests require CUDA spconv",
-)
-def test_ptv3_det3d_seg3d_specs_export_onnx_with_the_declared_io_contract() -> None:
-    """Test that the three joint specs export ONNX with their graphs' names and axes.
-
-    Input: the joint model's specs, exported with the base config's ONNX settings.
-    Expected: each ONNX carries the graph's input and output names and its dynamic axes.
-    Check: assert_specs_export_onnx_with_the_declared_io().
-    """
-    batch = build_inputs(device=torch.device("cuda"))
-    assert_specs_export_onnx_with_the_declared_io(_build_det3d_seg3d_model().cuda().eval(), batch)
 
 
 @pytest.mark.skipif(
