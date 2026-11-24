@@ -29,7 +29,10 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DH
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
 from autoware_ml.deployment.graphs import GraphTensor, run_deployment_in_torch
-from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
+from autoware_ml.deployment.tests.deployment_assertions import (
+    assert_deployment_reproduces_forward,
+    assert_specs_export_onnx_with_the_declared_io,
+)
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
@@ -56,9 +59,6 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     ENCODER_GRAPH,
     SEG3D_HEAD_GRAPH,
     seg3d_head_export_input_names,
-)
-from autoware_ml.models.segmentation3d.tests.test_ptv3_deployment import (
-    assert_specs_export_onnx_with_the_declared_io,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor

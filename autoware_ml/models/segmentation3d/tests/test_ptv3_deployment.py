@@ -18,18 +18,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
-from pathlib import Path
-import tempfile
 import unittest
 
-import onnx
 import torch
-from omegaconf import OmegaConf
 
-from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.deployment.graphs import GraphTensor
-from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
+from autoware_ml.deployment.tests.deployment_assertions import (
+    assert_deployment_reproduces_forward,
+    assert_specs_export_onnx_with_the_declared_io,
+)
 from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     CLASS_NAMES,
     build_inputs,
@@ -37,7 +35,6 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_trans_model,
     whole_level_patch_sizes,
 )
-from autoware_ml.models.module_base_model import ModuleBaseModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
     ENCODER_EXPORT_INPUT_NAMES,
@@ -47,47 +44,10 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     encoder_graph_input_names,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
-from autoware_ml.utils.deploy import export_to_onnx
 
 REQUIRES_SPARSE_CUDA = unittest.skipUnless(
     IS_SPCONV_AVAILABLE and torch.cuda.is_available(), "PTv3 export needs spconv and CUDA"
 )
-
-
-def assert_specs_export_onnx_with_the_declared_io(
-    model: ModuleBaseModel, multi_task_batch_inputs: ModelBatchInputs
-) -> None:
-    """Export every spec derived from a model's graphs to ONNX and check it against its graph.
-
-    Args:
-        model: Model in eval mode declaring its deployment graphs.
-        multi_task_batch_inputs: One batch, on the model's device, to trace on.
-
-    Raises:
-        AssertionError: When an ONNX's input or output names are not its graph's, or a declared
-            dynamic axis is not the ``dim_param`` of the ONNX tensor.
-    """
-    case = unittest.TestCase()
-    graphs = {graph.name: graph for graph in model.deployment_graphs()}
-    onnx_cfg = OmegaConf.create(
-        {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
-    )
-    with tempfile.TemporaryDirectory() as directory:
-        for name, spec in model.build_export_specs(multi_task_batch_inputs).items():
-            path = Path(directory) / f"{name}.onnx"
-            export_to_onnx(spec, onnx_cfg, path)
-            onnx_graph = onnx.load(path).graph
-            declared = graphs[name]
-            case.assertEqual(
-                [tensor.name for tensor in onnx_graph.input], list(declared.input_names), name
-            )
-            case.assertEqual(
-                [tensor.name for tensor in onnx_graph.output], list(declared.output_names), name
-            )
-            for tensor in [*onnx_graph.input, *onnx_graph.output]:
-                axes = declared.onnx_dynamic_axes.get(tensor.name, {})
-                dims = tensor.type.tensor_type.shape.dim
-                case.assertEqual({i: dims[i].dim_param for i in axes}, dict(axes), tensor.name)
 
 
 class TestDeclarationKeepsTheModelMode(unittest.TestCase):
