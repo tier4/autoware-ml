@@ -121,17 +121,6 @@ def split_block_parameters(
     return default_params, block_params
 
 
-def _voxels_data(batch_inputs: ModelBatchInputs) -> VoxelsData:
-    """Read the voxels a voxelizer added to the model inputs.
-
-    Raises:
-        ValueError: If the model inputs carry no voxels.
-    """
-    if batch_inputs.voxels_data is None:
-        raise ValueError("PTv3 needs the voxels of a voxelizer in the model inputs.")
-    return batch_inputs.voxels_data
-
-
 class PTv3BaseModel(ModuleBaseModel):
     """Abstract base class for all PTv3 task models.
 
@@ -249,7 +238,9 @@ class PTv3BaseModel(ModuleBaseModel):
         point_batch = batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
         if point_batch is None:
             raise ValueError("PTv3 needs the points of the batch.")
-        return _voxels_data(batch_inputs), point_batch.timestamp_difference_dim
+        if batch_inputs.voxels_data is None:
+            raise ValueError("PTv3 needs the voxels of a voxelizer in the model inputs.")
+        return batch_inputs.voxels_data, point_batch.timestamp_difference_dim
 
     def build_encoder_inputs(
         self, voxels: torch.Tensor, num_points: torch.Tensor, voxel_coords: torch.Tensor
