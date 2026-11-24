@@ -38,7 +38,13 @@ from torch.utils.data.distributed import DistributedSampler
 from autoware_ml.databases.schemas.box3d_schemas import Box3DDatasetSchema
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.taxonomy import LabelTaxonomy
-from autoware_ml.datamodule.base_dataset import BaseDataset, ConcatDataset, PaddingSlot
+from autoware_ml.datamodule.base_dataset import (
+    BaseDataset,
+    ConcatDataset,
+    PaddingSlot,
+    StreamPaddingSlot,
+    StreamSlot,
+)
 from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
@@ -329,9 +335,19 @@ class GroupStreamingSampler(DistributedSampler):
     ``num_lanes`` slots of an epoch are padding, and no frame is dropped or served twice as a
     real sample, in training, evaluation and prediction alike.
 
+    With ``consistent_augmentation`` every frame of a scene is a ``StreamSlot`` carrying the
+    seed of the scene, the run, the epoch and the scene, from which a dataset draws one
+    augmentation for the whole scene, as Sparse4D keeps the augmentation of a sequence. The
+    next scene and the same scene in the next epoch carry another seed.
+
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
+
+    Class Attributes:
+        MAX_STREAM_SEED: Largest seed a stream can carry, the largest a NumPy random state is seeded by.
     """
+
+    MAX_STREAM_SEED = 2**32 - 1
 
     def __init__(
         self,
@@ -340,6 +356,7 @@ class GroupStreamingSampler(DistributedSampler):
         *,
         shuffle: bool,
         seed: int,
+        consistent_augmentation: bool,
     ) -> None:
         """Initialize the streaming sampler.
 
@@ -350,7 +367,19 @@ class GroupStreamingSampler(DistributedSampler):
                 the dataloader batch size.
             shuffle: Whether to shuffle the scene order every epoch.
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
+            consistent_augmentation: Whether every frame of a scene carries the seed of its
+                scene, so a dataset augments the frames of a scene alike.
+
+        Raises:
+            ValueError: If ``consistent_augmentation`` is set and ``seed`` is outside 0 to
+                ``MAX_STREAM_SEED``. The seed is part of every stream seed, which a pipeline
+                hands to ``np.random.seed``.
         """
+        if consistent_augmentation and not 0 <= seed <= self.MAX_STREAM_SEED:
+            raise ValueError(
+                f"GroupStreamingSampler with consistent_augmentation needs a seed from 0 to "
+                f"{self.MAX_STREAM_SEED}, the range a NumPy random state is seeded by, but got {seed}."
+            )
         num_replicas, rank = _world_size_and_rank()
         # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
         # __iter__ below replace them.
@@ -359,6 +388,7 @@ class GroupStreamingSampler(DistributedSampler):
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
+        self.consistent_augmentation: bool = consistent_augmentation
         self.total_frames = sum(len(group) for group in self.scene_groups)
         self._validate_lanes()
 
@@ -389,16 +419,39 @@ class GroupStreamingSampler(DistributedSampler):
         generator.manual_seed(self.seed + epoch)
         return torch.randperm(len(self.scene_groups), generator=generator).tolist()
 
-    def _cut_lanes(self, scene_order: Sequence[int]) -> Sequence[Sequence[int]]:
-        """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length."""
-        frames = [index for scene_index in scene_order for index in self.scene_groups[scene_index]]
+    def _scene_frames(self, scene_index: int, epoch: int) -> Sequence[int]:
+        """Frames of one scene for an epoch, stream slots of one seed when it is augmented alike.
+
+        The seed is the run, the epoch and the scene, so every worker and rank and a resumed
+        run draw the same augmentation for the scene, and the next epoch draws another one.
+        """
+        frames = self.scene_groups[scene_index]
+        if not self.consistent_augmentation:
+            return frames
+        stream_seed = (self.seed, epoch, scene_index)
+        return [StreamSlot(index, stream_seed) for index in frames]
+
+    def _cut_lanes(self, scene_order: Sequence[int], epoch: int) -> Sequence[Sequence[int]]:
+        """Cut the joined frames of the epoch into ``num_lanes`` lanes of (almost) equal length.
+
+        The epoch is part of the stream seed of every frame, so it is always given.
+        """
+        frames = [
+            index for scene_index in scene_order for index in self._scene_frames(scene_index, epoch)
+        ]
         bounds = [lane * len(frames) // self.num_lanes for lane in range(self.num_lanes + 1)]
         return [frames[start:end] for start, end in zip(bounds[:-1], bounds[1:])]
 
     @staticmethod
     def _pad_lane(lane: Sequence[int], rounds: int) -> Sequence[int]:
         """End a lane with padding slots holding its last frame, up to a length of ``rounds``."""
-        return [*lane, *[PaddingSlot(lane[-1])] * (rounds - len(lane))]
+        last = lane[-1]
+        padding = (
+            StreamPaddingSlot(last, last.stream_seed)
+            if isinstance(last, StreamSlot)
+            else PaddingSlot(last)
+        )
+        return [*lane, *[padding] * (rounds - len(lane))]
 
     def _log_epoch(self, epoch: int) -> None:
         """Log the padding slots that keep the lanes of an epoch aligned."""
@@ -415,7 +468,7 @@ class GroupStreamingSampler(DistributedSampler):
 
     def __iter__(self):
         """Yield this rank's lanes for the current epoch, one frame of every lane a round."""
-        lanes = self._cut_lanes(self._scene_order(self.epoch))
+        lanes = self._cut_lanes(self._scene_order(self.epoch), self.epoch)
         first_lane = self.rank * self.batch_size
         rank_lanes = [
             self._pad_lane(lane, self.rounds_per_epoch)

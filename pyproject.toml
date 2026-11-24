@@ -37,6 +37,7 @@ dependencies = [
     "optuna-dashboard==0.20.0",
     "polars>=1.38.1,<2.0.0",
     "psutil==7.2.2",
+    "pyarrow==23.0.1",
     "pydantic>=2.12.5,<2.13.0",
     "rerun-sdk==0.23.1",
     "rich==14.3.3",

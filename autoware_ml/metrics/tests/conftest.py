@@ -26,6 +26,10 @@ hands that path over in the frame context, and a frame without a map hands ``Non
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from unittest import mock
+
 import pytest
 
 from autoware_ml.metrics.geometry.lanelet import LaneletMap
@@ -36,9 +40,14 @@ STUB_MAP_PATH = "stub://map"
 _SERVED_MAPS: dict[str, object] = {}
 
 
-@pytest.fixture(autouse=True)
-def stub_lanelet_map_loader(monkeypatch: pytest.MonkeyPatch):
-    """Load lanelet maps from the registry instead of OSM files, empty for every test."""
+@contextmanager
+def stubbed_lanelet_map_loader() -> Iterator[None]:
+    """Load lanelet maps from the registry instead of OSM files, empty on entry and exit.
+
+    The autouse fixture below applies it to every pytest test. A ``unittest.TestCase`` that
+    serves maps enters it in ``setUp`` as well, so the plain unittest runner, which does not
+    read this module's fixtures, sees the same loader.
+    """
     _SERVED_MAPS.clear()
     load_osm = LaneletMap.from_osm
 
@@ -47,9 +56,18 @@ def stub_lanelet_map_loader(monkeypatch: pytest.MonkeyPatch):
         # the None of a map-less frame, still goes through the real loader and fails as loud.
         return _SERVED_MAPS[path] if path in _SERVED_MAPS else load_osm(path)
 
-    monkeypatch.setattr(LaneletMap, "from_osm", classmethod(from_osm_or_served))
-    yield
-    _SERVED_MAPS.clear()
+    try:
+        with mock.patch.object(LaneletMap, "from_osm", classmethod(from_osm_or_served)):
+            yield
+    finally:
+        _SERVED_MAPS.clear()
+
+
+@pytest.fixture(autouse=True)
+def stub_lanelet_map_loader():
+    """Apply :func:`stubbed_lanelet_map_loader` to every test."""
+    with stubbed_lanelet_map_loader():
+        yield
 
 
 def serve_lanelet_map(lanelet_map: object, path: str = STUB_MAP_PATH) -> str:
