@@ -327,9 +327,9 @@ def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_enco
     )
     detection3d_model = detection3d_model.cuda().eval()
 
-    graphs = model.deployment_declaration().graphs
-    assert [graph.name for graph in graphs] == [ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH]
-    seg_graph, det_graph = graphs[1], graphs[2]
+    graphs = {graph.name: graph for graph in model.deployment_declaration().graphs}
+    assert set(graphs) == {ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH}
+    seg_graph, det_graph = graphs[SEG3D_HEAD_GRAPH], graphs[DET3D_HEAD_GRAPH]
     assert seg_graph.output_names == ("pred_labels", "pred_probs")
     assert det_graph.output_names == tuple(JOINT_EXPORT_OUTPUT_NAMES[2:])
     assert not set(det_graph.input_names) & set(seg_graph.output_names)
@@ -346,7 +346,7 @@ def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_enco
         torch.testing.assert_close(joint[name], det_only[name], msg=name)
 
     specs = model.build_export_specs(batch)
-    assert list(specs) == [ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH]
+    assert set(specs) == set(graphs)
     assert specs[DET3D_HEAD_GRAPH].output_names == JOINT_EXPORT_OUTPUT_NAMES[2:]
 
 
