@@ -437,7 +437,13 @@ class TestHungarianAssigner3D(unittest.TestCase):
                 )
 
     def test_assign_skips_an_interior_padded_gt_column(self) -> None:
-        """Test that a padded column between real ones is left out and the real ones keep their index."""
+        """
+        Input: the shared proposals with sample 0 padded between its real gts at columns 0 and 2,
+        and sample 1 holding one real gt followed by two padded columns.
+        Expected: no proposal takes a padded column, and the gt at column 2 keeps its index, so
+        proposal 1 of sample 0 points at it with the one-based index 3.
+        Check: ``num_gts``, ``gt_inds`` and ``labels`` of both samples.
+        """
         gt_bboxes = self._boxes_from_centers(
             [
                 [(2.1, 2.0), (-99.0, -99.0), (20.2, 20.0)],
