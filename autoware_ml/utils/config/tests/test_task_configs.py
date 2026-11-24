@@ -23,6 +23,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from autoware_ml.utils.config.tests.config_roots import compose_task, task_config_names
+from autoware_ml.utils.deploy import validate_onnx_names_not_configured
 
 # Building blocks and bases are not runnable on their own, only the leaves are.
 _BLOCKS = (
@@ -31,6 +32,7 @@ _BLOCKS = (
     "bev_neck",
     "encoder",
     "seg3d_head",
+    "focal2d_head",
     "voxel_encoder",
     "default_task",
 )
@@ -74,3 +76,16 @@ def test_every_database_config_names_only_arguments_of_its_database(config_name:
     parameters = inspect.signature(hydra.utils.get_class(database._target_)).parameters
 
     assert set(database) - {"_target_", "_convert_"} <= set(parameters)
+
+
+@pytest.mark.parametrize("config_name", EXPERIMENT_CONFIGS)
+def test_every_experiment_leaves_the_onnx_tensor_names_to_the_export_spec(config_name: str) -> None:
+    """Test that every experiment passes the ONNX name check of the deploy command.
+
+    Input: the composed config of every experiment.
+    Expected: ``autoware-ml deploy`` refuses tensor names and dynamic axes under
+    ``deploy.onnx`` before the run starts, since the export spec declares them, so no
+    experiment configures them.
+    Check: ``validate_onnx_names_not_configured`` accepts the ``deploy.onnx`` of the config.
+    """
+    validate_onnx_names_not_configured(compose_task(config_name).deploy.onnx)
