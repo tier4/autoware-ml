@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import unittest
 
 import numpy as np
 import pytest
+import shapely
 import torch
 from shapely.geometry import Point, Polygon
 
@@ -40,7 +42,11 @@ from autoware_ml.metrics.segmentation3d.error_clusters import ErrorClusters
 from autoware_ml.metrics.segmentation3d.frame_count import FrameCount
 from autoware_ml.metrics.segmentation3d.point_cloud import Segmentation3DPointCloudMetricSuite
 from autoware_ml.metrics.segmentation3d.suite import Segmentation3DConfusionMatrixMetricSuite
-from autoware_ml.metrics.tests.conftest import STUB_MAP_PATH, serve_lanelet_map
+from autoware_ml.metrics.tests.conftest import (
+    STUB_MAP_PATH,
+    serve_lanelet_map,
+    stubbed_lanelet_map_loader,
+)
 from autoware_ml.metrics.report import MetricKey
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.metrics.eval_output import Detection3DEvalFrame, Segmentation3DEvalFrame
@@ -715,3 +721,42 @@ def test_region_filter_eroded_margin_tests_the_surviving_region_part() -> None:
     mask = lanelet_map.intersects(("road",), [band_straddler, inside], margin=-2.0)
 
     assert mask.tolist() == [False, True]
+
+
+class TestCollisionFilterPoints(unittest.TestCase):
+    """Tests for the point mask of the collision filter."""
+
+    def setUp(self) -> None:
+        """Serve stub maps under the plain unittest runner too."""
+        self.enterContext(stubbed_lanelet_map_loader())
+
+    def test_point_mask_equals_the_containment_of_every_point(self) -> None:
+        """Test that a point is kept exactly when the collision area contains it.
+
+        The ego sits at map (40, 0) heading along map +y, so a mask taken in base_link,
+        or with the two map axes swapped, keeps other points. The grid covers the area
+        and its surroundings on every side.
+        """
+        ego2global = torch.tensor(
+            [
+                [0.0, -1.0, 0.0, 40.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
+        meta = frame_meta(STUB_MAP_PATH, ego2global=ego2global)
+        collision_filter = _collision_filter(_road_map(), vehicle=EGO, region=["road"])
+        axis = np.arange(-30.0, 30.0, 0.25)
+        forward, left = np.meshgrid(axis, axis, indexing="ij")
+        xyz = np.column_stack([forward.ravel(), left.ravel(), np.zeros(forward.size)])
+
+        keep = collision_filter.keep_points(xyz, meta)
+
+        # base_link (forward, left) is map (40 - left, forward) under this pose.
+        area = collision_filter._ego_region(meta)
+        expected = shapely.contains(area, shapely.points(40.0 - xyz[:, 1], xyz[:, 0]))
+        self.assertEqual(keep.dtype, np.bool_)
+        np.testing.assert_array_equal(keep, expected)
+        self.assertTrue(expected.any())
+        self.assertFalse(expected.all())
