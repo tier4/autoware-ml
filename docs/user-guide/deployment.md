@@ -36,8 +36,8 @@ checkpoint (see [Multi-head exports](#multi-head-exports)).
     quick iteration but never for a release build.
 
 This generates one ONNX (`<module>.onnx`) and one TensorRT engine
-(`<module>.engine`) per deployable module, when both stages are enabled and
-supported by the model. The deploy command also creates a dedicated MLflow run
+(`<module>.engine`) per deployable module, when both stages are enabled. The
+deploy command also creates a dedicated MLflow run
 linked to the source training run and logs exported artifacts there.
 
 You can disable either stage during iteration:
@@ -154,9 +154,10 @@ hand-written spec lists; the export log prints them. A spec names every one of
 its inputs and at least one output, or it is refused when built. `deploy.onnx`
 carries no `input_names` or `output_names`; an entry fails the deploy before its
 MLflow run is created or the model loads. The keys of each module's
-`deploy.tensorrt.modules.<module>.input_shapes` are these names. A model that lets a config
-choose its names exposes them as a model parameter, as PTv3's
-`export_output_names`.
+`deploy.tensorrt.modules.<module>.input_shapes` are these names. A graph that
+exports a head's raw outputs takes the names from the head, as the PTv3
+detection head graph takes `TransFusionHead.export_output_names`; no config
+chooses them.
 
 **Dynamic axes**: which axes vary between runs is a property of the model, so
 the export spec declares them once (`ExportSpec.dynamic_axes`, keyed by its
@@ -234,9 +235,11 @@ def deployment_forward(self, multi_task_batch_inputs, executors, device):
     return executors["head"].run(bev=self.scatter(encoded).to(device))
 ```
 
-`build_export_specs()` runs `deployment_forward()` once in eval mode and returns
-one export spec per graph, traced on a copy of the tensors the function passed
-it. The rules the run enforces:
+`build_export_specs()` runs `deployment_forward()` once and returns one export
+spec per graph, traced on a copy of the tensors the function passed it. The
+model has to be in eval mode: a submodule left in training mode is refused,
+since tracing it would update its BatchNorm running statistics. The rules the
+run enforces:
 
 - Every declared graph runs exactly once: one graph is one engine with one
   optimization profile, traced on the inputs of that run. A sub-network the model
@@ -250,17 +253,54 @@ it. The rules the run enforces:
   mode for the export and changes nothing else, and declares the graphs again
   after replacing a module.
 
+Each model keeps a graph in an export module, a subclass of `ExportModule`
+(`PTv3EncoderExportModule`, `CenterPointVoxelEncoderExportModule`,
+`BEVFusionLidarExportModule`, ...): it takes the model's modules, makes the export copies it needs, runs the graph in
+`forward()` and declares it in `build_deployment_graph()`, so the graph's name,
+tensor names and dynamic axes live next to the code they describe.
+`deployment_graphs()` only collects the graphs these modules build.
+
 `forward()` and `deployment_forward()` compose the same modules twice, and
 nothing but a test keeps the two equal: every model that declares graphs runs
 `assert_deployment_reproduces_forward()` (in
 `autoware_ml/deployment/tests/deployment_assertions.py`) on one batch in its
 tests, comparing every model output.
 
-A model whose deployment is one graph without code around it can still override
-`build_export_spec()` and return an export module plus example tensor inputs;
-this single-graph path is kept until TransFusion, FRNet, CalibrationStatus and
+A model that declares no graphs keeps the hand-written path: it overrides
+`build_export_spec()` and returns one `end_to_end` export module plus example
+tensor inputs, or `build_export_specs()` with one spec per graph, as camera-lidar
+BEVFusion and StreamPETR do. Export treats these specs as it treats the derived
+ones. The path is kept until TransFusion, FRNet, CalibrationStatus and
 camera-lidar BEVFusion declare `deployment_graphs()` (see the TODO in
 `ModuleBaseModel`).
+
+## Running the Deployed Function
+
+A declared deployment runs after export, with each graph on its TensorRT engine.
+`TensorRTDeploymentRunner` (`autoware_ml/deployment/backends/tensorrt_deployment_runner.py`)
+loads `<artifacts_dir>/<graph>.engine` once per graph and runs the model's
+`deployment_forward()` on them, with torch CUDA tensors as the engine buffers.
+The function, the PyTorch code between the graphs, runs as it does in
+`run_deployment_in_torch()`, which runs each graph's module instead and gives
+the outputs to compare against.
+
+```python
+from autoware_ml.deployment.backends.tensorrt_deployment_runner import (
+    TensorRTDeploymentRunner,
+)
+
+runner = TensorRTDeploymentRunner(
+    model.deployment_declaration(), exports_dir, "cuda",
+    plugin_libraries=["<plugins_dir>/libautoware_tensorrt_plugins.so"],
+)
+outputs = runner.run(batch)  # the model outputs by name
+```
+
+The engine's tensor names are the graph's declared `input_names` and
+`output_names`, so an engine built elsewhere (with `trtexec` from the exported
+ONNX, say) loads the same way; `plugin_libraries` lists the plugin libraries it
+was built with. The runner is a Python API for now: the CLI does not verify or
+evaluate an export yet.
 
 ## Optional Graph Modification
 

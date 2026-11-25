@@ -363,11 +363,19 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def build_optimizer_groups(self) -> Mapping[str, Sequence[torch.nn.Parameter]]:
         ...
 
-    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
-        ...  # required by deploy
+    def deployment_graphs(self) -> Sequence[DeploymentGraph] | None:
+        ...  # the exported graphs, None for a model that does not deploy
+
+    def deployment_forward(
+        self,
+        multi_task_batch_inputs: ModelBatchInputs,
+        executors: Mapping[str, GraphExecutor],
+        device: torch.device,
+    ) -> Mapping[str, torch.Tensor]:
+        ...  # the deployed inference: the PyTorch code between the graphs
 
     def build_export_specs(self, multi_task_batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
-        ...  # one spec per deployable module, "end_to_end" by default
+        ...  # one spec per declared graph; hand-written specs for the models without graphs
 
     def configure_optimizers(self) -> Optimizer | dict[str, Any]:
         ...
@@ -381,7 +389,8 @@ The base class handles:
   additionally per training step when `log_dict_configs` asks for it, and feeds
   `build_eval_output()` into the attached metric suites at validation and test
 - **Predict step** - Runs forward and formats predictions via `decode_outputs()`
-- **Export contract** - Every model builds its own export specification from the model inputs
+- **Export contract** - Derives one export specification per declared graph by running
+  `deployment_forward()` once on the model inputs
 - **Example input** - Collates the first training sample as the example input so the model
   summary reports FLOPs
 
@@ -389,10 +398,11 @@ Models can have **any internal architecture**. `forward()` takes the typed `Mode
 and returns a typed `ModelOutputs` with the head outputs of every task the model predicts.
 `decode_outputs()` decodes them into a typed `ModelPredictions`. Both hold one optional field
 per task, so a single task model fills one field and a multi task model fills several. The
-deployment export cannot trace those dataclasses, so `build_export_spec()` flattens the batch
-into the tensor arguments of the exported graph. Specialized models can override hooks such as
-`decode_outputs()`, `build_eval_output()`, `get_log_batch_size()`, `build_optimizer_groups()`
-or `build_export_spec()` without leaving the shared framework contract.
+deployment export cannot trace those dataclasses, so `deployment_forward()` flattens the batch
+into the tensors of the exported graphs and runs each graph by name. Specialized models can
+override hooks such as `decode_outputs()`, `build_eval_output()`, `get_log_batch_size()`,
+`build_optimizer_groups()` or `deployment_forward()` without leaving the shared framework
+contract.
 
 ### Deployment Pipeline
 
@@ -427,8 +437,8 @@ The deployment process:
 
 1. **Load checkpoint** - Instantiates model from config and loads weights from checkpoint
 2. **Get input sample** - Uses the predict dataloader to obtain a preprocessed sample for deployment
-3. **Resolve export spec** - Builds the effective export module and example inputs through the model's `build_export_spec()` contract
-4. **Export to ONNX** - Traces the resolved export module, supporting dynamic shapes for variable input sizes
+3. **Resolve export specs** - Runs the model's `deployment_forward()` once on the sample and derives one export spec per declared graph, traced on the tensors the function passed it
+4. **Export to ONNX** - Traces each graph's module, supporting dynamic shapes for variable input sizes
 5. **Build TensorRT engine** - Optimizes the ONNX model for inference on NVIDIA GPUs with configurable optimization profile
 
 Configuration is done through the `deploy` section in task configs.

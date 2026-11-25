@@ -153,9 +153,11 @@ The exported ONNX model returns both `pred_labels` and `pred_probs`. The
 probability output is produced by a final softmax layer, while training and
 evaluation continue to use logits inside the Lightning model.
 
-Deployment uses an explicit PTv3 export wrapper and a copied encoder, so the
-training model is not mutated when export-only sparse-convolution and
-serialization settings are applied.
+Deployment runs through export modules (`PTv3EncoderExportModule`,
+`PTv3Seg3DHeadExportModule`, `PTv3Det3DHeadExportModule` in `ptv3_base.py` and
+`detection3d/ptv3.py`), each holding the export copy its `prepare_for_export()`
+makes and declaring its graph, so the training model is not mutated when
+export-only sparse-convolution and serialization settings are applied.
 
 The `height` channel of the detection head's `bbox_pred` output is the z of the
 box gravity center. Earlier releases regressed the top face (`z + 0.5 * h`), and
@@ -221,14 +223,15 @@ Preprocessing computes the fill into `patch_order` with `build_patch_order`
 
 ### Split-export module contract
 
-The split export produces one graph per `deploy.onnx.modules` entry:
+The split export produces one graph per `deploy.onnx.modules` entry, declared
+by the model's `deployment_graphs()`:
 
-- `encoder` - the encoder; outputs per-stage features `point_feat_0` …
+- `ptv3_encoder` - the encoder; outputs per-stage features `point_feat_0` …
   `point_feat_{S-1}` (finest to deepest, `S` encoder stages). It consumes the
   per-stage pooling metadata **except** `serialized_pooling_i_cluster`, which
   only drives head-side unpooling and enters the head graphs as
   `pooling_cluster_i` instead.
-- `seg3d_head` - consumes all per-stage features plus the per-pooling
+- `ptv3_seg3d_head` - consumes all per-stage features plus the per-pooling
   `pooling_cluster_i` tensors (the `serialized_pooling_i_cluster` metadata)
   and outputs `pred_labels`/`pred_probs`. For every decoder stage `i` with
   attention blocks (`dec_depths[i] > 0`) the graph additionally consumes that
@@ -239,9 +242,11 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   `patch_order`, `serialized_inverse` and `grid_coord`). The rule is implemented once in
   `seg3d_head_export_input_names` and must be mirrored by deployment consumers
   from the artifact's `dec_depths`.
-- `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,
-  `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the
-  detection head tensors.
+- `ptv3_det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,
+  `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the raw
+  detection head tensors under the names `TransFusionHead.export_output_names`
+  declares: `dense_heatmap`, `query_heatmap_score`, `query_labels`, `heatmap`,
+  `center`, `height`, `dim`, `rot`, and `vel` when the head regresses velocity.
 
 ## Implementation
 
