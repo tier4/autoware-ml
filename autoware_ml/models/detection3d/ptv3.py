@@ -46,6 +46,7 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
     PTv3BaseModel,
+    PTv3EncoderExportModule,
     stage_voxel_axis_name,
 )
 from autoware_ml.utils.point_cloud.batching import offset_to_batch
@@ -310,33 +311,6 @@ class PTv3Det3DBEVNeck(nn.Module):
         bev = self.bev_projector(fused, grid_coord, offset)
         return self.bev_encoder(bev)
 
-    def build_head_graph(
-        self, stage_count: int, bbox_head: nn.Module, output_names: Sequence[str]
-    ) -> DeploymentGraph:
-        """Build the ``ptv3_det3d_head`` graph over the two coarsest encoder stages.
-
-        Args:
-            stage_count: Number of encoder stages, the input level included.
-            bbox_head: Detection head; the graph traces its export copy.
-            output_names: The head outputs the graph returns, in order.
-
-        Returns:
-            The graph from the two coarsest stages' features through a copy of this neck to the
-            head outputs.
-        """
-        output_names = tuple(output_names)
-        return DeploymentGraph(
-            DET3D_HEAD_GRAPH,
-            module=_PTv3Det3DHeadExportModule(
-                bev_neck=deepcopy(self).eval(),
-                bbox_head=bbox_head.prepare_for_export(bev_shape=self.bev_projector.output_shape),
-                output_names=output_names,
-            ),
-            input_names=tuple(det3d_head_export_input_names(stage_count)),
-            output_names=output_names,
-            onnx_dynamic_axes=det3d_head_export_dynamic_axes(stage_count),
-        )
-
 
 def det3d_head_export_input_names(stage_count: int) -> list[str]:
     """Return the split det-head export input names for a given stage count."""
@@ -362,25 +336,28 @@ def det3d_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]
     }
 
 
-class _PTv3Det3DHeadExportModule(nn.Module):
+class PTv3Det3DHeadExportModule(nn.Module):
     """Export-only detection head consuming the two coarsest encoder stages."""
 
     def __init__(
         self,
         bev_neck: PTv3Det3DBEVNeck,
         bbox_head: nn.Module,
+        stage_count: int,
         output_names: Sequence[str],
     ) -> None:
         """Initialize the export-only detection head module.
 
         Args:
-            bev_neck: Export-ready detection BEV neck.
-            bbox_head: Export-ready detection head module.
+            bev_neck: The model's BEV neck; the graph traces a copy.
+            bbox_head: The model's detection head; the graph traces its export copy.
+            stage_count: Number of encoder stages, the input level included.
             output_names: Ordered output tensor names emitted by ``bbox_head``.
         """
         super().__init__()
-        self.bev_neck = bev_neck
-        self.bbox_head = bbox_head
+        self.bev_neck = deepcopy(bev_neck).eval()
+        self.bbox_head = bbox_head.prepare_for_export(bev_shape=bev_neck.bev_projector.output_shape)
+        self.stage_count = stage_count
         self.output_names = list(output_names)
 
     def forward(
@@ -397,6 +374,20 @@ class _PTv3Det3DHeadExportModule(nn.Module):
         bev = self.bev_neck(point)
         outputs = self.bbox_head(bev)
         return outputs.export_tensors(self.output_names)
+
+    def build_deployment_graph(self) -> DeploymentGraph:
+        """Declare this module as the ``ptv3_det3d_head`` graph.
+
+        Returns:
+            The graph from the two coarsest stages' features to the head outputs.
+        """
+        return DeploymentGraph(
+            DET3D_HEAD_GRAPH,
+            module=self,
+            input_names=tuple(det3d_head_export_input_names(self.stage_count)),
+            output_names=tuple(self.output_names),
+            onnx_dynamic_axes=det3d_head_export_dynamic_axes(self.stage_count),
+        )
 
 
 class PTv3Detection3DModel(PTv3BaseModel):
@@ -532,9 +523,19 @@ class PTv3Detection3DModel(PTv3BaseModel):
         Returns:
             The encoder graph, then the detection head graph.
         """
+        sparse_shape, serialization_depth = self.compute_export_geometry(torch.device("cpu"))
         return (
-            self.build_encoder_graph(),
-            self.bev_neck.build_head_graph(
-                len(self.encoder.stride) + 1, self.bbox_head, self.export_output_names
-            ),
+            PTv3EncoderExportModule(
+                self.encoder,
+                self.voxel_encoder,
+                self.EXPORT_ORDER,
+                sparse_shape,
+                serialization_depth,
+            ).build_deployment_graph(),
+            PTv3Det3DHeadExportModule(
+                self.bev_neck,
+                self.bbox_head,
+                len(self.encoder.stride) + 1,
+                self.export_output_names,
+            ).build_deployment_graph(),
         )
