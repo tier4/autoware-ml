@@ -479,17 +479,12 @@ class LaneletMap:
         """
         tokens = tuple(tokens)
         margin = float(margin)
-        if isinstance(xy, torch.Tensor):
-            xy = xy.to(torch.float64)
+        is_tensor = isinstance(xy, torch.Tensor)
+        xy = xy.to(torch.float64) if is_tensor else np.asarray(xy, dtype=np.float64)
 
-            def inside(geometry: str, *key) -> torch.Tensor:
-                return self._region_raster(geometry, *key).contains_tensor(xy)
-
-        else:
-            xy = np.asarray(xy, dtype=np.float64)
-
-            def inside(geometry: str, *key) -> np.ndarray:
-                return self._region_raster(geometry, *key).contains(xy)
+        def inside(geometry: str, *key) -> np.ndarray | torch.Tensor:
+            raster = self._region_raster(geometry, *key)
+            return raster.contains_tensor(xy) if is_tensor else raster.contains(xy)
 
         mask = inside("region", tokens)
         if margin > 0.0:
