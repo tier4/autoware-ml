@@ -45,8 +45,8 @@ from autoware_ml.models.detection3d.task_modules.partial_annotations import Part
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusion import (
     BEVFusionDetection3DModel,
+    BEVFusionLidarExportModule,
     _BEVFusionExportWrapper,
-    _BEVFusionLidarExportWrapper,
 )
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_camera import (
     BEVFusionCamera,
@@ -548,27 +548,28 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         with self.assertRaises(ValueError):
             self.model.build_export_specs(self._build_batch_inputs(voxels_data=None))
 
-    def test_build_export_specs_wraps_an_exportable_eval_copy(self) -> None:
+    def test_build_export_specs_wraps_exportable_eval_copies(self) -> None:
         """
-        Test that the exported wrapper holds a separate eval-mode copy of the model with the
-        exportable middle encoder and attention layers, leaving the model itself untouched.
+        Test that the export module holds separate eval-mode copies of the lidar branch and the
+        head, with the exportable middle encoder and attention layers, leaving the model untouched.
         """
         self.model.eval()
 
         export_specs = self.model.build_export_specs(self._build_single_sample_batch_inputs())
-        export_model = export_specs["bevfusion_lidar"].module.model
-
-        self.assertIsNot(export_model, self.model)
-        self.assertFalse(export_model.training)
-        assert export_model.lidar_network is not None
+        export_module = export_specs["bevfusion_lidar"].module
+        assert isinstance(export_module, BEVFusionLidarExportModule)
         assert self.model.lidar_network is not None
-        export_middle_encoder = export_model.lidar_network.pts_middle_encoder
+
+        self.assertIsNot(export_module.lidar_network, self.model.lidar_network)
+        self.assertIsNot(export_module.bbox_head, self.model.bbox_head)
+        self.assertFalse(export_module.training)
+        export_middle_encoder = export_module.lidar_network.pts_middle_encoder
         assert isinstance(export_middle_encoder, _StubMiddleEncoder)
         self.assertTrue(export_middle_encoder.exportable)
         original_middle_encoder = self.model.lidar_network.pts_middle_encoder
         assert isinstance(original_middle_encoder, _StubMiddleEncoder)
         self.assertFalse(original_middle_encoder.exportable)
-        for decoder_layer in export_model.bbox_head.decoder:
+        for decoder_layer in export_module.bbox_head.decoder:
             self.assertIsInstance(decoder_layer.self_attn, ExportableMultiheadAttention)
             self.assertIsInstance(decoder_layer.cross_attn, ExportableMultiheadAttention)
         for decoder_layer in self.model.bbox_head.decoder:
@@ -589,7 +590,7 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
 
         self.assertEqual(list(export_specs), ["bevfusion_lidar"])
         spec = export_specs["bevfusion_lidar"]
-        self.assertIsInstance(spec.module, _BEVFusionLidarExportWrapper)
+        self.assertIsInstance(spec.module, BEVFusionLidarExportModule)
         self.assertEqual(spec.input_names, ["voxels", "coors", "num_points_per_voxel"])
         self.assertEqual(
             spec.dynamic_axes,
