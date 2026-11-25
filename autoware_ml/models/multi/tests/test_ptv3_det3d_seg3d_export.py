@@ -42,7 +42,6 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_ptv3_encoder,
     build_seg3d_head,
     build_seg3d_model,
-    build_trans_model,
     build_transfusion_head,
 )
 from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
@@ -50,22 +49,6 @@ from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeat
 from autoware_ml.models.segmentation3d.ptv3_base import seg3d_head_export_input_names
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
-from autoware_ml.utils.checkpoints import apply_matching_weights
-
-EXPECTED_PTV3_INPUT_NAMES = [
-    "voxels",
-    "num_points_per_voxel",
-    "grid_coord",
-    "patch_order",
-    "serialized_inverse",
-    "serialized_pooling_0_indices",
-    "serialized_pooling_0_indptr",
-    "serialized_pooling_0_cluster",
-    "serialized_pooling_0_head_indices",
-    "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_patch_order",
-    "serialized_pooling_0_serialized_inverse",
-]
 
 JOINT_EXPORT_OUTPUT_NAMES = [
     "pred_labels",
@@ -286,44 +269,6 @@ def _build_det3d_seg3d_model() -> PTv3Det3DSeg3DModel:
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     )
-
-
-@pytest.mark.skipif(
-    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
-    reason="PTv3 sparse-convolution export tests require CUDA spconv",
-)
-def test_ptv3_transhead_det3d_seg3d_export_uses_named_joint_outputs(tmp_path: Path) -> None:
-    segmentation3d_checkpoint = _save_segmentation3d_checkpoint(tmp_path)
-    detection3d_model = build_trans_model(freeze_encoder=True)
-    apply_matching_weights(detection3d_model, (segmentation3d_checkpoint,))
-    detection3d_checkpoint = tmp_path / "ptv3_trans_detection3d.ckpt"
-    _save_detection3d_checkpoint(detection3d_checkpoint, detection3d_model)
-
-    model = _build_det3d_seg3d_model().cuda()
-    apply_matching_weights(
-        model,
-        (detection3d_checkpoint, segmentation3d_checkpoint),
-        map_location=torch.device("cuda"),
-        device=torch.device("cuda"),
-        set_eval=True,
-    )
-
-    batch = build_inputs(device=torch.device("cuda"))
-    spec = model.build_export_spec(batch)
-    outputs = spec.module(*spec.args)
-
-    assert spec.input_names == EXPECTED_PTV3_INPUT_NAMES
-    assert spec.dynamic_axes is not None
-    assert spec.dynamic_axes["pred_probs"] == {0: "num_voxels"}
-    assert spec.dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
-    assert spec.output_names == JOINT_EXPORT_OUTPUT_NAMES
-    assert len(outputs) == 11
-    assert outputs[0].dtype == torch.long
-    assert outputs[1].shape[1] == 3
-    assert outputs[2].shape[:2] == (1, 2)
-    assert outputs[4].dtype == torch.long
 
 
 @pytest.mark.skipif(
