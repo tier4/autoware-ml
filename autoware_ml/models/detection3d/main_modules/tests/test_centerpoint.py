@@ -30,9 +30,9 @@ from autoware_ml.deployment.tests.deployment_assertions import (
     assert_specs_export_onnx_with_the_declared_io,
 )
 from autoware_ml.models.detection3d.main_modules.centerpoint import (
+    CenterPointBackboneNeckHeadExportModule,
     CenterPointDetection3DModel,
-    _CenterPointBackboneNeckHeadExportWrapper,
-    _CenterPointVoxelEncoderExportWrapper,
+    CenterPointVoxelEncoderExportModule,
 )
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
@@ -282,7 +282,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         )
 
         voxel_spec = specs["pts_voxel_encoder_centerpoint"]
-        self.assertIsInstance(voxel_spec.module, _CenterPointVoxelEncoderExportWrapper)
+        self.assertIsInstance(voxel_spec.module, CenterPointVoxelEncoderExportModule)
         self.assertEqual(voxel_spec.input_names, ["input_features"])
         self.assertEqual(voxel_spec.output_names, ["pillar_features"])
         self.assertEqual(
@@ -302,7 +302,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(pillar_features.shape, (num_pillars, 1, 32))
 
         head_spec = specs["pts_backbone_neck_head_centerpoint"]
-        self.assertIsInstance(head_spec.module, _CenterPointBackboneNeckHeadExportWrapper)
+        self.assertIsInstance(head_spec.module, CenterPointBackboneNeckHeadExportModule)
         self.assertEqual(head_spec.input_names, ["spatial_features"])
         self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot", "vel"])
         expected_axes = {"spatial_features": {0: "batch_size", 2: "H", 3: "W"}}

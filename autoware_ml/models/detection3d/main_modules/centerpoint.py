@@ -34,7 +34,7 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
-from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor
+from autoware_ml.deployment.graphs import DeploymentGraph, ExportModule, GraphExecutor
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
@@ -45,11 +45,11 @@ from autoware_ml.models.detection3d.heads.centerhead import CenterHead
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 
 
-class _CenterPointVoxelEncoderExportWrapper(nn.Module):
-    """Export the PointPillars PFN stack from decorated input features."""
+class CenterPointVoxelEncoderExportModule(ExportModule):
+    """The ``pts_voxel_encoder_centerpoint`` graph: decorated pillar features in, PFN features out."""
 
     def __init__(self, voxel_encoder: PillarFeatureNet) -> None:
-        """Initialize the voxel encoder export wrapper.
+        """Initialize the voxel encoder export module.
 
         Args:
             voxel_encoder: Pillar feature network whose PFN layers are exported.
@@ -64,22 +64,39 @@ class _CenterPointVoxelEncoderExportWrapper(nn.Module):
         """Encode already-decorated pillar features."""
         return self.voxel_encoder.encode_decorated(input_features)
 
+    def build_deployment_graph(self) -> DeploymentGraph:
+        """Declare this module as the ``pts_voxel_encoder_centerpoint`` graph.
 
-class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
-    """Export CenterPoint backbone, neck, and dense head from BEV features."""
+        Returns:
+            The graph from the decorated pillar features to the pillar features.
+        """
+        return DeploymentGraph(
+            "pts_voxel_encoder_centerpoint",
+            module=self,
+            input_names=("input_features",),
+            output_names=("pillar_features",),
+            onnx_dynamic_axes={
+                "input_features": {0: "num_voxels", 1: "num_max_points"},
+                "pillar_features": {0: "num_voxels"},
+            },
+        )
+
+
+class CenterPointBackboneNeckHeadExportModule(ExportModule):
+    """The ``pts_backbone_neck_head_centerpoint`` graph: BEV features in, head maps out."""
 
     def __init__(self, backbone: nn.Module, neck: nn.Module, bbox_head: CenterHead) -> None:
-        """Initialize the backbone-neck-head export wrapper.
+        """Initialize the backbone-neck-head export module.
 
         Args:
             backbone: BEV backbone.
             neck: BEV neck.
-            bbox_head: Export-ready CenterPoint dense head, from ``prepare_for_export()``.
+            bbox_head: The model's CenterPoint dense head; the graph traces its export copy.
         """
         super().__init__()
         self.backbone = backbone
         self.neck = neck
-        self.bbox_head = bbox_head
+        self.bbox_head = bbox_head.prepare_for_export()
         # The order the deployed runtime expects, the velocity branch last. Do not reorder.
         self.output_names = ["heatmap", "reg", "height", "dim", "rot"]
         if self.bbox_head.use_velocity:
@@ -93,6 +110,25 @@ class _CenterPointBackboneNeckHeadExportWrapper(nn.Module):
         bev_features = self.backbone(spatial_features)
         bev_features = self.neck(bev_features)
         return self.bbox_head(bev_features).export_tensors(self.output_names)
+
+    def build_deployment_graph(self) -> DeploymentGraph:
+        """Declare this module as the ``pts_backbone_neck_head_centerpoint`` graph.
+
+        Returns:
+            The graph from the scattered BEV features to the head maps, in runtime order.
+        """
+        dynamic_axes = {"spatial_features": {0: "batch_size", 2: "H", 3: "W"}}
+        # The head maps are the canvas down-sampled by out_size_factor, so not H x W.
+        dynamic_axes.update(
+            {name: {0: "batch_size", 2: "out_height", 3: "out_width"} for name in self.output_names}
+        )
+        return DeploymentGraph(
+            "pts_backbone_neck_head_centerpoint",
+            module=self,
+            input_names=("spatial_features",),
+            output_names=tuple(self.output_names),
+            onnx_dynamic_axes=dynamic_axes,
+        )
 
 
 class CenterPointDetection3DModel(ModuleBaseModel):
@@ -235,35 +271,11 @@ class CenterPointDetection3DModel(ModuleBaseModel):
         Returns:
             The voxel encoder graph and the backbone-neck-head graph, in run order.
         """
-        head_wrapper = _CenterPointBackboneNeckHeadExportWrapper(
-            self.pts_backbone, self.pts_neck, self.bbox_head.prepare_for_export()
-        )
-        head_axes = {"spatial_features": {0: "batch_size", 2: "H", 3: "W"}}
-        # The head maps are the canvas down-sampled by out_size_factor, so not H x W.
-        head_axes.update(
-            {
-                name: {0: "batch_size", 2: "out_height", 3: "out_width"}
-                for name in head_wrapper.output_names
-            }
-        )
         return (
-            DeploymentGraph(
-                "pts_voxel_encoder_centerpoint",
-                module=_CenterPointVoxelEncoderExportWrapper(self.pts_voxel_encoder),
-                input_names=("input_features",),
-                output_names=("pillar_features",),
-                onnx_dynamic_axes={
-                    "input_features": {0: "num_voxels", 1: "num_max_points"},
-                    "pillar_features": {0: "num_voxels"},
-                },
-            ),
-            DeploymentGraph(
-                "pts_backbone_neck_head_centerpoint",
-                module=head_wrapper,
-                input_names=("spatial_features",),
-                output_names=tuple(head_wrapper.output_names),
-                onnx_dynamic_axes=head_axes,
-            ),
+            CenterPointVoxelEncoderExportModule(self.pts_voxel_encoder).build_deployment_graph(),
+            CenterPointBackboneNeckHeadExportModule(
+                self.pts_backbone, self.pts_neck, self.bbox_head
+            ).build_deployment_graph(),
         )
 
     def deployment_forward(
