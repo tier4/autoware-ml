@@ -100,9 +100,11 @@ autoware-ml test \
 
 ## Deployment
 
-PointTransformerV3 ONNX export is available. The generic TensorRT stage remains
-disabled in Autoware-ML because PTv3 requires a runtime with matching sparse
-convolution plugins.
+PointTransformerV3 ONNX export is available. The PTv3 configs keep
+`deploy.tensorrt.enabled=false`: the engines need the sparse convolution and
+`SegmentCSR` plugins (`autoware::GetIndicePairsImplicitGemm`, `ImplicitGemm`,
+`SegmentCSR`), which the TensorRT builder does not load yet, so enabling the
+stage fails in the TensorRT parser on `ptv3_encoder`.
 
 ```bash
 autoware-ml deploy \

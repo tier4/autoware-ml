@@ -12,21 +12,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Assertions the deployed models' tests share: the deployment reproduces ``forward()``."""
+"""Assertions the deployed models' tests share.
+
+The deployment reproduces ``forward()``, and every spec derived from the graphs exports an ONNX
+that carries its graph's names and dynamic axes.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from pathlib import Path
+import tempfile
 from typing import NamedTuple
 import unittest
 
 from jaxtyping import Shaped
+from omegaconf import OmegaConf
+import onnx
 import torch
 
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.deployment.graphs import GraphTensor, run_deployment_in_torch
 from autoware_ml.models.module_base_model import ModuleBaseModel
+from autoware_ml.utils.deploy import export_to_onnx
 
 
 class DeploymentForwardCheck(NamedTuple):
@@ -95,3 +104,42 @@ def assert_deployment_reproduces_forward(
             msg=lambda detail, name=name: f"Model output {name!r} differs from forward(): {detail}",
         )
     return DeploymentForwardCheck(forward_outputs, outputs)
+
+
+def assert_specs_export_onnx_with_the_declared_io(
+    model: ModuleBaseModel, multi_task_batch_inputs: ModelBatchInputs
+) -> None:
+    """Export every spec derived from a model's graphs to ONNX and check it against its graph.
+
+    The export runs with the base configs' ONNX settings: the TorchScript exporter, opset 17,
+    no constant folding.
+
+    Args:
+        model: Model in eval mode declaring its deployment graphs.
+        multi_task_batch_inputs: One batch, on the model's device, to trace on.
+
+    Raises:
+        AssertionError: When an ONNX's input or output names are not its graph's, or a declared
+            dynamic axis is not the ``dim_param`` of the ONNX tensor.
+    """
+    case = unittest.TestCase()
+    graphs = {graph.name: graph for graph in model.deployment_graphs()}
+    onnx_cfg = OmegaConf.create(
+        {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        for name, spec in model.build_export_specs(multi_task_batch_inputs).items():
+            path = Path(directory) / f"{name}.onnx"
+            export_to_onnx(spec, onnx_cfg, path)
+            onnx_graph = onnx.load(path).graph
+            declared = graphs[name]
+            case.assertEqual(
+                [tensor.name for tensor in onnx_graph.input], list(declared.input_names), name
+            )
+            case.assertEqual(
+                [tensor.name for tensor in onnx_graph.output], list(declared.output_names), name
+            )
+            for tensor in [*onnx_graph.input, *onnx_graph.output]:
+                axes = declared.onnx_dynamic_axes.get(tensor.name, {})
+                dims = tensor.type.tensor_type.shape.dim
+                case.assertEqual({i: dims[i].dim_param for i in axes}, dict(axes), tensor.name)
