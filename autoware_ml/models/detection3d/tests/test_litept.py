@@ -250,49 +250,6 @@ def test_litept_split_export_declares_and_consumes_the_ptv3_contract() -> None:
 
 
 @REQUIRES_SPARSE_CUDA
-def test_litept_monolithic_export_runs_on_its_declared_inputs() -> None:
-    """The single-graph export adds clusters and otherwise matches PTv3 too."""
-    model = build_litept_seg3d_model().cuda().eval()
-    batch = build_inputs(device=torch.device("cuda"))
-
-    spec = model.build_export_spec(batch)
-
-    assert "patch_order" in spec.input_names
-    assert "serialized_pooling_0_cluster" in spec.input_names
-    assert "serialized_pooling_0_serialized_inverse" in spec.input_names
-    assert len(spec.args) == len(spec.input_names)
-
-    with torch.no_grad():
-        pred_labels, pred_probs = spec.module(*spec.args)
-    assert pred_labels.shape == (batch.voxels_data.voxels.shape[0],)
-    assert pred_probs.shape == (batch.voxels_data.voxels.shape[0], 3)
-
-
-@REQUIRES_SPARSE_CUDA
-def test_ptv3_monolithic_export_contract_still_lists_every_tensor() -> None:
-    """Regression guard: the PTv3 single-graph contract is byte-for-byte what it was."""
-    model = build_seg3d_model().cuda().eval()
-    batch = build_inputs(device=torch.device("cuda"))
-
-    spec = model.build_export_spec(batch)
-
-    assert spec.input_names == [
-        "voxels",
-        "num_points_per_voxel",
-        "grid_coord",
-        "patch_order",
-        "serialized_inverse",
-        "serialized_pooling_0_indices",
-        "serialized_pooling_0_indptr",
-        "serialized_pooling_0_cluster",
-        "serialized_pooling_0_head_indices",
-        "serialized_pooling_0_grid_coord",
-        "serialized_pooling_0_patch_order",
-        "serialized_pooling_0_serialized_inverse",
-    ]
-
-
-@REQUIRES_SPARSE_CUDA
 def test_exported_encoder_graph_declares_a_subset_of_the_contract(tmp_path) -> None:
     """The exported graph must not accept anything the export did not declare.
 

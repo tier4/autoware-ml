@@ -43,14 +43,10 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3En
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
-    SERIALIZED_POOLING_FIELDS,
     PTv3BaseModel,
-    PTv3EncoderExportBase,
     PTv3ExportContext,
     build_encoder_export_spec,
     build_ptv3_export_context,
-    build_ptv3_input_dynamic_axes,
-    prepare_ptv3_export_inputs,
     stage_voxel_axis_name,
 )
 from autoware_ml.utils.deploy import ExportSpec
@@ -381,48 +377,6 @@ def build_det3d_head_export_spec(
     )
 
 
-class _PTv3Detection3DExportModule(PTv3EncoderExportBase):
-    """Export PTv3 detection as a tensor-only ONNX graph."""
-
-    def __init__(
-        self,
-        encoder: PointTransformerV3Encoder,
-        voxel_encoder: VoxelFeatureEncoder,
-        bev_neck: PTv3Det3DBEVNeck,
-        bbox_head: nn.Module,
-        sparse_shape: torch.Tensor,
-        serialized_depth: torch.Tensor,
-        output_names: Sequence[str],
-    ) -> None:
-        """Initialize the deployment-oriented PTv3 detection wrapper."""
-        super().__init__(encoder, voxel_encoder, sparse_shape, serialized_depth)
-        self.bev_neck = bev_neck
-        self.bbox_head = bbox_head
-        self.output_names = list(output_names)
-
-    def forward(
-        self,
-        voxels: torch.Tensor,
-        num_points_per_voxel: torch.Tensor,
-        grid_coord: torch.Tensor,
-        patch_order: torch.Tensor,
-        serialized_inverse: torch.Tensor,
-        *serialized_pooling_inputs: torch.Tensor,
-    ) -> tuple[torch.Tensor, ...]:
-        """Run export-time inference on serialized voxel inputs."""
-        point = self.run_encoder(
-            voxels,
-            num_points_per_voxel,
-            grid_coord,
-            patch_order,
-            serialized_inverse,
-            *serialized_pooling_inputs,
-        )
-        bev_features = self.bev_neck(point)
-        outputs = self.bbox_head(bev_features)
-        return outputs.export_tensors(self.output_names)
-
-
 class _PTv3Det3DHeadExportModule(nn.Module):
     """Export-only detection head consuming the two coarsest encoder stages."""
 
@@ -521,10 +475,6 @@ class PTv3Detection3DModel(PTv3BaseModel):
             detection3d=detection3d_eval_output(self.decode_outputs(batch, outputs), batch)
         )
 
-    def get_export_output_names(self) -> list[str]:
-        """Return the ordered export output names."""
-        return list(self.export_output_names)
-
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> ModelOutputs:
         """Run PTv3 feature extraction followed by the configured detection head.
 
@@ -590,38 +540,6 @@ class PTv3Detection3DModel(PTv3BaseModel):
         """
         del multi_task_batch_inputs
         return self.bbox_head.decode_outputs(outputs=outputs.detection3d())
-
-    def build_export_spec(self, batch_inputs: ModelBatchInputs) -> ExportSpec:
-        """Build the PTv3 detection ONNX export specification.
-
-        Args:
-            batch_inputs: Example preprocessed batch with the voxels.
-
-        Returns:
-            Deployment export specification for the PTv3 detector.
-        """
-        inputs = prepare_ptv3_export_inputs(self, batch_inputs)
-        input_args, input_names = inputs.encoder_args(SERIALIZED_POOLING_FIELDS)
-        export_module = _PTv3Detection3DExportModule(
-            encoder=self._prepare_encoder_export(),
-            voxel_encoder=self.voxel_encoder,
-            bev_neck=deepcopy(self.bev_neck).eval(),
-            bbox_head=self.bbox_head.prepare_for_export(
-                bev_shape=self.bev_neck.bev_projector.output_shape
-            ),
-            sparse_shape=inputs.sparse_shape,
-            serialized_depth=inputs.serialization_depth,
-            output_names=self.export_output_names,
-        )
-        export_module.eval()
-        return ExportSpec(
-            module=export_module,
-            args=input_args,
-            input_names=input_names,
-            output_names=self.get_export_output_names(),
-            dynamic_axes=build_ptv3_input_dynamic_axes(input_names),
-            supported_stages=self.EXPORT_SUPPORTED_STAGES,
-        )
 
     def build_export_specs(self, batch_inputs: ModelBatchInputs) -> dict[str, ExportSpec]:
         """Build split PTv3 detection ONNX export specs for encoder and detection head.
