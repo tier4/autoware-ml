@@ -416,62 +416,6 @@ class PTv3BaseModel(ModuleBaseModel):
         )
         return produced
 
-    def build_encoder_graph(self) -> DeploymentGraph:
-        """Build the ``ptv3_encoder`` graph every PTv3 model declares first.
-
-        Returns:
-            The graph from the voxels and their serialization to the per-stage point features.
-        """
-        num_pooling_stages = len(self.encoder.stride)
-        stage_count = num_pooling_stages + 1
-        sparse_shape, serialization_depth = self.compute_export_geometry(torch.device("cpu"))
-        input_names = encoder_graph_input_names(num_pooling_stages)
-        return DeploymentGraph(
-            ENCODER_GRAPH,
-            module=_PTv3EncoderExportModule(
-                encoder=self._prepare_encoder_export(),
-                voxel_encoder=self.voxel_encoder,
-                sparse_shape=sparse_shape,
-                serialized_depth=serialization_depth,
-            ),
-            input_names=input_names,
-            output_names=tuple(stage_feature_names(stage_count)),
-            onnx_dynamic_axes=build_ptv3_encoder_dynamic_axes(input_names, stage_count),
-        )
-
-    def build_seg3d_head_graph(self, seg3d_head: nn.Module) -> DeploymentGraph:
-        """Build the ``ptv3_seg3d_head`` graph over the encoder's per-stage features.
-
-        Args:
-            seg3d_head: The segmentation decoder head; the graph traces its export copy.
-
-        Returns:
-            The graph from the per-stage features to ``pred_labels`` and ``pred_probs``.
-        """
-        stage_count = len(self.encoder.stride) + 1
-        sparse_shape, _ = self.compute_export_geometry(torch.device("cpu"))
-        head = seg3d_head.prepare_for_export(self.EXPORT_ORDER)
-        dynamic_axes = build_seg3d_head_input_dynamic_axes(stage_count, head.dec_depths)
-        dynamic_axes.update(build_point_feature_dynamic_axes(SEG3D_HEAD_OUTPUT_NAMES))
-        return DeploymentGraph(
-            SEG3D_HEAD_GRAPH,
-            module=_PTv3Seg3DHeadExportModule(
-                head, stage_count, sparse_shape, tuple(self.encoder.stride)
-            ),
-            input_names=tuple(seg3d_head_export_input_names(stage_count, head.dec_depths)),
-            output_names=SEG3D_HEAD_OUTPUT_NAMES,
-            onnx_dynamic_axes=dynamic_axes,
-        )
-
-    def _prepare_encoder_export(self) -> PointTransformerV3Encoder:
-        """Return an export-ready copy of the encoder.
-
-        Returns:
-            Copy of the encoder prepared for ONNX export with the configured
-            export order.
-        """
-        return self.encoder.prepare_for_export(self.EXPORT_ORDER)
-
 
 def build_serialized_pooling_metadata(
     grid_coord: torch.Tensor,
@@ -637,26 +581,28 @@ def make_serialized_pooling_from_flat_inputs(
     return metadata
 
 
-class _PTv3EncoderExportModule(nn.Module):
+class PTv3EncoderExportModule(nn.Module):
     """The ``ptv3_encoder`` graph: voxels and serialization in, per-stage point features out."""
 
     def __init__(
         self,
         encoder: PointTransformerV3Encoder,
         voxel_encoder: VoxelFeatureEncoder,
+        serialization_orders: Sequence[str],
         sparse_shape: Int64[torch.Tensor, " 3"],
         serialized_depth: Int64[torch.Tensor, ""],
     ) -> None:
         """Initialize the encoder export module.
 
         Args:
-            encoder: Export-prepared PTv3 encoder copy.
+            encoder: The model's encoder; the graph traces its export copy.
             voxel_encoder: Voxel feature encoder feeding the embedding stem.
+            serialization_orders: Space-filling curves the export serializes the voxels along.
             sparse_shape: Static sparse shape baked at export time.
             serialized_depth: Serialization depth baked at export time.
         """
         super().__init__()
-        self.encoder = encoder
+        self.encoder = encoder.prepare_for_export(serialization_orders)
         self.voxel_encoder = voxel_encoder
         self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
         self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
@@ -701,6 +647,23 @@ class _PTv3EncoderExportModule(nn.Module):
             }
         )
         return tuple(stage.feat for stage in collect_encoder_stage_points(point))
+
+    def build_deployment_graph(self) -> DeploymentGraph:
+        """Declare this module as the ``ptv3_encoder`` graph.
+
+        Returns:
+            The graph from the voxels and their serialization to the per-stage point features.
+        """
+        num_pooling_stages = len(self.encoder.stride)
+        stage_count = num_pooling_stages + 1
+        input_names = encoder_graph_input_names(num_pooling_stages)
+        return DeploymentGraph(
+            ENCODER_GRAPH,
+            module=self,
+            input_names=input_names,
+            output_names=tuple(stage_feature_names(stage_count)),
+            onnx_dynamic_axes=build_ptv3_encoder_dynamic_axes(input_names, stage_count),
+        )
 
 
 def link_stage_points(
@@ -791,30 +754,30 @@ def build_seg3d_head_input_dynamic_axes(
     return dynamic_axes
 
 
-class _PTv3Seg3DHeadExportModule(nn.Module):
+class PTv3Seg3DHeadExportModule(nn.Module):
     """Export-only segmentation head decoding per-stage encoder features."""
 
     def __init__(
         self,
         seg3d_head: nn.Module,
-        stage_count: int,
+        serialization_orders: Sequence[str],
         sparse_shape: torch.Tensor,
         strides: Sequence[int],
     ) -> None:
         """Initialize the segmentation head export module.
 
         Args:
-            seg3d_head: Export-prepared decoder head copy.
-            stage_count: Number of encoder stages feeding the decoder.
+            seg3d_head: The model's decoder head; the graph traces its export copy.
+            serialization_orders: Space-filling curves the export serializes the voxels along.
             sparse_shape: Static base sparse shape baked at export time;
                 block stages use it pooled by their cumulative pooling depth
                 (rounded up, see :func:`pooled_sparse_shape`).
             strides: Encoder pooling strides (one per pooling stage).
         """
         super().__init__()
-        self.seg3d_head = seg3d_head
-        self.stage_count = int(stage_count)
-        self.dec_depths = list(seg3d_head.dec_depths)
+        self.seg3d_head = seg3d_head.prepare_for_export(serialization_orders)
+        self.stage_count = len(strides) + 1
+        self.dec_depths = list(self.seg3d_head.dec_depths)
         cumulative_depth = 0
         stage_depths = [0]
         for stride in strides:
@@ -856,6 +819,22 @@ class _PTv3Seg3DHeadExportModule(nn.Module):
         logits = self.seg3d_head(link_stage_points(stage_feats, clusters, block_stage_metadata))
         probs = torch.softmax(logits, dim=1)
         return probs.argmax(dim=1), probs
+
+    def build_deployment_graph(self) -> DeploymentGraph:
+        """Declare this module as the ``ptv3_seg3d_head`` graph.
+
+        Returns:
+            The graph from the per-stage features to ``pred_labels`` and ``pred_probs``.
+        """
+        dynamic_axes = build_seg3d_head_input_dynamic_axes(self.stage_count, self.dec_depths)
+        dynamic_axes.update(build_point_feature_dynamic_axes(SEG3D_HEAD_OUTPUT_NAMES))
+        return DeploymentGraph(
+            SEG3D_HEAD_GRAPH,
+            module=self,
+            input_names=tuple(seg3d_head_export_input_names(self.stage_count, self.dec_depths)),
+            output_names=SEG3D_HEAD_OUTPUT_NAMES,
+            onnx_dynamic_axes=dynamic_axes,
+        )
 
 
 def encoder_graph_input_names(num_pooling_stages: int) -> tuple[str, ...]:

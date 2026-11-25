@@ -42,6 +42,8 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     PTv3BaseModel,
+    PTv3EncoderExportModule,
+    PTv3Seg3DHeadExportModule,
     split_block_parameters,
 )
 from autoware_ml.metrics.eval_output import EvalOutput
@@ -162,4 +164,16 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
         Returns:
             The encoder graph, then the segmentation head graph.
         """
-        return (self.build_encoder_graph(), self.build_seg3d_head_graph(self.seg3d_head))
+        sparse_shape, serialization_depth = self.compute_export_geometry(torch.device("cpu"))
+        return (
+            PTv3EncoderExportModule(
+                self.encoder,
+                self.voxel_encoder,
+                self.EXPORT_ORDER,
+                sparse_shape,
+                serialization_depth,
+            ).build_deployment_graph(),
+            PTv3Seg3DHeadExportModule(
+                self.seg3d_head, self.EXPORT_ORDER, sparse_shape, self.encoder.stride
+            ).build_deployment_graph(),
+        )

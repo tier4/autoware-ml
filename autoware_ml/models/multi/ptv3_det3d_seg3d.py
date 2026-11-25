@@ -45,7 +45,7 @@ from autoware_ml.deployment.graphs import DeploymentGraph
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
-from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck
+from autoware_ml.models.detection3d.ptv3 import PTv3Det3DBEVNeck, PTv3Det3DHeadExportModule
 from autoware_ml.models.segmentation3d.encoders.ptv3 import PointTransformerV3Encoder
 from autoware_ml.models.segmentation3d.encoders.voxel import VoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.heads.ptv3 import (
@@ -58,6 +58,8 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.segmentation3d.ptv3_base import (
     SEG3D_HEAD_OUTPUT_NAMES,
     PTv3BaseModel,
+    PTv3EncoderExportModule,
+    PTv3Seg3DHeadExportModule,
     split_block_parameters,
 )
 
@@ -354,10 +356,19 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         det3d_output_names = [
             name for name in self._export_output_names if name not in SEG3D_HEAD_OUTPUT_NAMES
         ]
+        sparse_shape, serialization_depth = self.compute_export_geometry(torch.device("cpu"))
         return (
-            self.build_encoder_graph(),
-            self.build_seg3d_head_graph(self.seg3d_head),
-            self.bev_neck.build_head_graph(
-                len(self.encoder.stride) + 1, self.bbox_head, det3d_output_names
-            ),
+            PTv3EncoderExportModule(
+                self.encoder,
+                self.voxel_encoder,
+                self.EXPORT_ORDER,
+                sparse_shape,
+                serialization_depth,
+            ).build_deployment_graph(),
+            PTv3Seg3DHeadExportModule(
+                self.seg3d_head, self.EXPORT_ORDER, sparse_shape, self.encoder.stride
+            ).build_deployment_graph(),
+            PTv3Det3DHeadExportModule(
+                self.bev_neck, self.bbox_head, len(self.encoder.stride) + 1, det3d_output_names
+            ).build_deployment_graph(),
         )
