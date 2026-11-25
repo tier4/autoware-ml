@@ -32,15 +32,19 @@ with part of its body already on the road. Map coverage is what fixes that, not
 the speed fallback: off the map the speed is only the ``max_speed_mps`` default.
 
 One box costs one propagation, and a detection head emits hundreds per frame:
-200 predictions inside 60 m take about 15 s for a single frame. Metrics that
+200 boxes inside 80 m take about a second for a single frame. Metrics that
 only read confident predictions declare a ``ttc_score_floor`` so the suite can
 skip the rest, which is why the provider takes the scores and that floor.
+Providers that describe the same ego share a frame's ego sets and the time of
+every box already propagated, so a suite reporting the same boxes under another
+prefix does not pay for them again.
 """
 
 from __future__ import annotations
 
 from math import inf, nan
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -59,6 +63,30 @@ from autoware_ml.metrics.geometry.reachability import (
     VehicleGeometry,
 )
 from autoware_ml.types.metrics import MotionModel
+
+
+@lru_cache(maxsize=64)
+def _ego_frame(
+    lanelet_map: LaneletMap,
+    x: float,
+    y: float,
+    heading: float,
+    max_speed_mps: float,
+    vehicle: VehicleGeometry,
+    region: tuple[str, ...],
+    params: ReachabilityParams,
+) -> EgoReachability:
+    """Ego's reachable sets for one frame, shared by everyone who asks about that frame.
+
+    The ground truth and the predictions of a frame are propagated against the same ego, and so
+    are the suites that report the same boxes under another prefix, each through a provider of
+    its own. Everything that shapes the ego side is in the arguments, so equal arguments mean
+    the same sets and the same collision time for an equal object, which
+    :class:`EgoReachability` remembers. The cache spans the frames of a few batches, the suites
+    of a model being updated one after the other on each batch.
+    """
+    ego = ego_collision_agent(lanelet_map, x, y, heading, max_speed_mps, vehicle)
+    return EgoReachability(ego, lanelet_map.region_union(region), params)
 
 
 class CollisionTTC:
@@ -159,12 +187,17 @@ class CollisionTTC:
             return ttc
 
         lanelet_map = LaneletMap.from_osm(lanelet_map_path)
-        drivable = lanelet_map.region_union(self.region)
         ego_x, ego_y, ego_heading = ego2global_pose(ego2global)
-        ego = ego_collision_agent(
-            lanelet_map, ego_x, ego_y, ego_heading, self.max_speed_mps, self.vehicle
+        frame = _ego_frame(
+            lanelet_map,
+            ego_x,
+            ego_y,
+            ego_heading,
+            self.max_speed_mps,
+            self.vehicle,
+            self.region,
+            self.params,
         )
-        frame = EgoReachability(ego, drivable, self.params)
         footprints = box_footprints_map(boxes, ego2global)
         centroids = np.array([[p.centroid.x, p.centroid.y] for p in footprints], dtype=np.float64)
 
@@ -180,7 +213,7 @@ class CollisionTTC:
                 footprints[index],
                 centroids[index],
                 lanelet_map,
-                ego.heading,
+                frame.ego.heading,
             )
             ttc[index] = frame.time_to_collision(agent)
         return ttc

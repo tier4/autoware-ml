@@ -27,7 +27,9 @@ from autoware_ml.utils.config.tests.config_roots import compose_task
 from autoware_ml.utils.config.tests.test_task_configs import EXPERIMENT_CONFIGS
 
 STAGES = [config for config in EXPERIMENT_CONFIGS if "/streampetr/" in config]
+# The T4 taxonomy swaps the last two classes, so stage 2 loads a permuted stage-1 checkpoint.
 NUSCENES_CLASSES = ["car", "truck", "bus", "bicycle", "pedestrian", "traffic_cone", "barrier"]
+T4_CLASSES = ["car", "truck", "bus", "bicycle", "pedestrian", "barrier", "traffic_cone"]
 
 
 class TestStreamPETRConfigs(unittest.TestCase):
@@ -52,27 +54,33 @@ class TestStreamPETRConfigs(unittest.TestCase):
         return [step["_target_"].rsplit(".", 1)[1] for step in config]
 
     def test_the_stages_are_bundled(self) -> None:
-        """Test that the nuScenes pretrain is the one bundled StreamPETR leaf.
+        """Test that the nuScenes pretrain and the T4 test leaf are the StreamPETR leaves.
 
-        Input: the experiment configs bundled under tasks/detection3d/streampetr.
-        Expected: the nuScenes pretrain stage is bundled as one leaf config and no other.
+        Input: the experiment configs of both config roots under tasks/detection3d/streampetr.
+        Expected: the nuScenes pretrain is bundled as one leaf config, and the T4Dataset leaf of
+        the test config root composes the bundled T4 base, as the T4 stages of the external
+        config root do; no other leaf.
         Check: the leaf names of the StreamPETR experiments, in the order the experiment
         configs are listed.
         """
         self.assertEqual(
             [stage.rsplit("/", 1)[1] for stage in STAGES],
-            ["vov99_flrfpn_320x800_b8_30e_nuscenes_51m_pretrain"],
+            [
+                "vov99_flrfpn_320x800_b8_30e_nuscenes_51m_pretrain",
+                "vov99_flrfpn_480x640_b16_35e_t4dataset_51m",
+            ],
         )
 
     def test_every_stage_streams_the_seven_classes_of_its_taxonomy(self) -> None:
         """Test that every stage trains the classes of its taxonomy on streamed scenes.
 
         Input: the composed config of every stage.
-        Expected: both heads train the seven classes in the order of the taxonomy. The head
-        carries a temporal memory across batches, so the datamodule is a StreamingDataModule
-        seeded by the experiment, whose loaders do not shuffle and whose evaluation runs one
-        lane per rank. The schedule is bound to the trainer, and the initial weights are left
-        for the command line.
+        Expected: both heads train the seven classes in the order of the taxonomy: the nuScenes
+        order in stage 1, and in the T4 stages the dynamic T4 order, the one the other T4
+        detectors train and the deployed node decodes. The head carries a temporal memory
+        across batches, so the datamodule is a StreamingDataModule seeded by the experiment,
+        whose loaders do not shuffle and whose evaluation runs one lane per rank. The schedule
+        is bound to the trainer, and the initial weights are left for the command line.
         Check: the class names of the taxonomy and of both heads, the datamodule class, its
         seed and its keys against the arguments of StreamingDataModule, the dataloader
         settings, the max_epochs of the scheduler and the missing weights.
@@ -80,10 +88,11 @@ class TestStreamPETRConfigs(unittest.TestCase):
         parameters = set(inspect.signature(StreamingDataModule.__init__).parameters) - {"self"}
         for stage, cfg in self.configs.items():
             with self.subTest(stage=stage):
+                expected = T4_CLASSES if "/t4dataset/" in stage else NUSCENES_CLASSES
                 taxonomy = hydra.utils.instantiate(cfg.taxonomy.detection3d)
-                self.assertEqual(list(taxonomy.class_names), NUSCENES_CLASSES)
-                self.assertEqual(list(cfg.model.bbox_head.class_names), NUSCENES_CLASSES)
-                self.assertEqual(list(cfg.model.auxiliary_2d_head.class_names), NUSCENES_CLASSES)
+                self.assertEqual(list(taxonomy.class_names), expected)
+                self.assertEqual(list(cfg.model.bbox_head.class_names), expected)
+                self.assertEqual(list(cfg.model.auxiliary_2d_head.class_names), expected)
                 datamodule = cfg.datamodule
                 self.assertIs(hydra.utils.get_class(datamodule._target_), StreamingDataModule)
                 self.assertEqual(datamodule.seed, cfg.seed)
@@ -149,6 +158,69 @@ class TestStreamPETRConfigs(unittest.TestCase):
                 steps = self._step_names(cfg.datasets.train.transforms.pipeline)
                 self.assertLess(
                     steps.index("LoadAnnotations2DFromBoxes3D"), steps.index("BBoxesRangeFilter")
+                )
+
+    def test_t4_stages_drop_the_low_point_boxes_after_the_2d_projection(self) -> None:
+        """Test that the boxes with too few lidar points stay 2D targets in the T4 stages.
+
+        Input: the training datasets of the T4 stages.
+        Expected: the evaluation drops the boxes recorded with too few lidar points, so the 3D
+        head does not train on them, while a camera can still see them; BBoxesMinPointsFilter
+        runs after LoadAnnotations2DFromBoxes3D and reads the recorded counts, as the pipeline
+        loads no point cloud.
+        Check: the position of BBoxesMinPointsFilter after LoadAnnotations2DFromBoxes3D, and
+        its use_bbox_num_lidar_points, in every T4 training dataset.
+        """
+        for stage, cfg in self.configs.items():
+            if "/t4dataset/" not in stage:
+                continue
+            training = [name for name in cfg.datasets if name.endswith("train")]
+            with self.subTest(stage=stage):
+                self.assertIn("train", training)
+            for name in training:
+                with self.subTest(stage=stage, dataset=name):
+                    pipeline = cfg.datasets[name].transforms.pipeline
+                    steps = self._step_names(pipeline)
+                    index = steps.index("BBoxesMinPointsFilter")
+                    self.assertLess(steps.index("LoadAnnotations2DFromBoxes3D"), index)
+                    self.assertIs(pipeline[index].use_bbox_num_lidar_points, True)
+
+    def test_only_the_t4_training_pipelines_shuffle_the_loaded_cameras(self) -> None:
+        """Test that only the T4 training pipelines shuffle the cameras, right after loading.
+
+        Input: the training and test pipelines of every stage.
+        Expected: the T4 reference recipe shuffles the camera order of every training frame,
+        and never at evaluation, while the nuScenes reference recipe does not shuffle at all.
+        Check: ShuffleCameraOrder directly follows LoadImagesFromFile in the T4 training
+        pipelines and appears in no other pipeline.
+        """
+        for stage, cfg in self.configs.items():
+            for split in ("train", "test"):
+                with self.subTest(stage=stage, split=split):
+                    steps = self._step_names(cfg.datasets[split].transforms.pipeline)
+                    shuffles = split == "train" and "/t4dataset/" in stage
+                    loading = steps.index("LoadImagesFromFile")
+                    self.assertEqual(steps[loading + 1] == "ShuffleCameraOrder", shuffles)
+                    self.assertEqual("ShuffleCameraOrder" in steps, shuffles)
+
+    def test_t4_stages_ignore_the_cones_and_barriers_of_the_scenes_without_them(self) -> None:
+        """Test that the T4 stages leave out the cones and barriers where they are unannotated.
+
+        Input: the partial annotations of the T4 stages, instantiated from their configs.
+        Expected: the T4 scenarios flag whether their traffic cones and barriers are annotated,
+        and where they are not, those two classes are not supervised; the pair resolves by
+        name, whichever order the taxonomy lists it in.
+        Check: the class ids the partial annotations ignore, and the class names at those ids.
+        """
+        for stage, cfg in self.configs.items():
+            if "/t4dataset/" not in stage:
+                continue
+            with self.subTest(stage=stage):
+                partial_annotations = hydra.utils.instantiate(cfg.model.partial_annotations)
+                ignored = list(partial_annotations.partial_ignore_class_ids)
+                self.assertEqual(ignored, [5, 6])
+                self.assertEqual(
+                    {T4_CLASSES[index] for index in ignored}, {"traffic_cone", "barrier"}
                 )
 
     def test_the_nuscenes_stage_supervises_every_class(self) -> None:

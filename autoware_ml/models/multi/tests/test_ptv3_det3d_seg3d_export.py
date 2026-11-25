@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +28,10 @@ from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DHeadOutputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.segmentation3d.head_outputs import Segmentation3DHeadOutputs
+from autoware_ml.deployment.graphs import GraphTensor, run_deployment_in_torch
+from autoware_ml.deployment.tests.deployment_assertions import (
+    assert_deployment_reproduces_forward,
+)
 from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.models.detection3d.tests.head_output_fixtures import build_transfusion_outputs
 from autoware_ml.models.tests.batch_inputs_fixtures import (
@@ -44,28 +49,19 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
     build_seg3d_model,
     build_trans_model,
     build_transfusion_head,
+    whole_level_patch_sizes,
 )
 from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
-from autoware_ml.models.segmentation3d.ptv3_base import seg3d_head_export_input_names
+from autoware_ml.models.segmentation3d.ptv3_base import (
+    DET3D_HEAD_GRAPH,
+    ENCODER_GRAPH,
+    SEG3D_HEAD_GRAPH,
+    seg3d_head_export_input_names,
+)
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.checkpoints import apply_matching_weights
-
-EXPECTED_PTV3_INPUT_NAMES = [
-    "voxels",
-    "num_points_per_voxel",
-    "grid_coord",
-    "patch_order",
-    "serialized_inverse",
-    "serialized_pooling_0_indices",
-    "serialized_pooling_0_indptr",
-    "serialized_pooling_0_cluster",
-    "serialized_pooling_0_head_indices",
-    "serialized_pooling_0_grid_coord",
-    "serialized_pooling_0_patch_order",
-    "serialized_pooling_0_serialized_inverse",
-]
 
 JOINT_EXPORT_OUTPUT_NAMES = [
     "pred_labels",
@@ -273,16 +269,23 @@ def _save_detection3d_checkpoint(
     return checkpoint_path
 
 
-def _build_det3d_seg3d_model() -> PTv3Det3DSeg3DModel:
+def _build_det3d_seg3d_model(patch_sizes: Sequence[int] = (4, 4)) -> PTv3Det3DSeg3DModel:
+    """Return a small joint PTv3 model over the test encoder.
+
+    Args:
+        patch_sizes: Attention window of every level, the input level first.
+
+    Returns:
+        The joint model on the CPU.
+    """
     return PTv3Det3DSeg3DModel(
         log_dict_configs=LogDictConfigs(prog_bar=False),
         data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
-        encoder=build_ptv3_encoder(),
+        encoder=build_ptv3_encoder(patch_sizes=patch_sizes),
         voxel_encoder=SweepSplitVoxelFeatureEncoder(),
-        seg3d_head=build_seg3d_head(),
+        seg3d_head=build_seg3d_head(patch_sizes=patch_sizes),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(),
-        export_output_names=JOINT_EXPORT_OUTPUT_NAMES,
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     )
@@ -292,13 +295,22 @@ def _build_det3d_seg3d_model() -> PTv3Det3DSeg3DModel:
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_ptv3_transhead_det3d_seg3d_export_uses_named_joint_outputs(tmp_path: Path) -> None:
+def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_encoder(
+    tmp_path: Path,
+) -> None:
+    """Test that the joint model's deployment is the seg3d and det3d graphs over one encoder.
+
+    Input: the joint model loaded with the single-task models' weights, and one batch.
+    Expected: three graphs named encoder, seg3d head, det3d head, the det head reading nothing
+        the seg head emits; each head's outputs match the single-task model's own deployment.
+    Check: the graph names and output names, the deployed outputs against the seg-only and
+        det-only deployments, and the derived spec names.
+    """
     segmentation3d_checkpoint = _save_segmentation3d_checkpoint(tmp_path)
     detection3d_model = build_trans_model(freeze_encoder=True)
     apply_matching_weights(detection3d_model, (segmentation3d_checkpoint,))
     detection3d_checkpoint = tmp_path / "ptv3_trans_detection3d.ckpt"
     _save_detection3d_checkpoint(detection3d_checkpoint, detection3d_model)
-
     model = _build_det3d_seg3d_model().cuda()
     apply_matching_weights(
         model,
@@ -307,23 +319,69 @@ def test_ptv3_transhead_det3d_seg3d_export_uses_named_joint_outputs(tmp_path: Pa
         device=torch.device("cuda"),
         set_eval=True,
     )
+    seg_model = build_seg3d_model().cuda().eval()
+    apply_matching_weights(
+        seg_model, (segmentation3d_checkpoint,), map_location=torch.device("cuda")
+    )
+    detection3d_model = detection3d_model.cuda().eval()
+
+    graphs = {graph.name: graph for graph in model.deployment_declaration().graphs}
+    assert set(graphs) == {ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH}
+    seg_graph, det_graph = graphs[SEG3D_HEAD_GRAPH], graphs[DET3D_HEAD_GRAPH]
+    assert seg_graph.output_names == ("pred_labels", "pred_probs")
+    assert det_graph.output_names == tuple(JOINT_EXPORT_OUTPUT_NAMES[2:])
+    assert not set(det_graph.input_names) & set(seg_graph.output_names)
 
     batch = build_inputs(device=torch.device("cuda"))
-    spec = model.build_export_spec(batch)
-    outputs = spec.module(*spec.args)
+    cuda = torch.device("cuda")
+    joint = run_deployment_in_torch(model.deployment_declaration(), batch, cuda)
+    assert list(joint) == JOINT_EXPORT_OUTPUT_NAMES
+    seg_only = run_deployment_in_torch(seg_model.deployment_declaration(), batch, cuda)
+    det_only = run_deployment_in_torch(detection3d_model.deployment_declaration(), batch, cuda)
+    assert torch.equal(joint["pred_labels"], seg_only["pred_labels"])
+    torch.testing.assert_close(joint["pred_probs"], seg_only["pred_probs"])
+    for name in JOINT_EXPORT_OUTPUT_NAMES[2:]:
+        torch.testing.assert_close(joint[name], det_only[name], msg=name)
 
-    assert spec.input_names == EXPECTED_PTV3_INPUT_NAMES
-    assert spec.dynamic_axes is not None
-    assert spec.dynamic_axes["pred_probs"] == {0: "num_voxels"}
-    assert spec.dynamic_axes["serialized_pooling_0_serialized_inverse"] == {
-        1: "serialized_pooling_0_out_voxels"
-    }
-    assert spec.output_names == JOINT_EXPORT_OUTPUT_NAMES
-    assert len(outputs) == 11
-    assert outputs[0].dtype == torch.long
-    assert outputs[1].shape[1] == 3
-    assert outputs[2].shape[:2] == (1, 2)
-    assert outputs[4].dtype == torch.long
+    specs = model.build_export_specs(batch)
+    assert set(specs) == set(graphs)
+    assert specs[DET3D_HEAD_GRAPH].output_names == JOINT_EXPORT_OUTPUT_NAMES[2:]
+
+
+def _joint_tensors(outputs: ModelOutputs) -> dict[str, GraphTensor]:
+    """Return forward()'s segmentation and detection outputs under the joint graphs' names.
+
+    Args:
+        outputs: The outputs of ``forward()``.
+
+    Returns:
+        The seg3d head graph's outputs, then the det3d head graph's, by name.
+    """
+    probs = torch.softmax(outputs.segmentation3d().logits, dim=1)
+    det3d_names = JOINT_EXPORT_OUTPUT_NAMES[2:]
+    head_outputs = outputs.detection3d().transfusion_head()
+    tensors = {"pred_labels": probs.argmax(dim=1), "pred_probs": probs}
+    tensors.update(zip(det3d_names, head_outputs.export_tensors(det3d_names)))
+    return tensors
+
+
+@pytest.mark.skipif(
+    not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
+    reason="PTv3 sparse-convolution export tests require CUDA spconv",
+)
+def test_ptv3_det3d_seg3d_deployment_reproduces_forward() -> None:
+    """Test that the joint deployment reproduces forward() for both heads.
+
+    Input: a joint model whose window at every level is that level's voxel count, and one
+        batch.
+    Expected: every segmentation and detection output of the deployment matches forward()'s
+        to 1e-5.
+    Check: assert_deployment_reproduces_forward().
+    """
+    cuda = torch.device("cuda")
+    batch = build_inputs(device=cuda)
+    model = _build_det3d_seg3d_model(whole_level_patch_sizes(batch)).cuda().eval()
+    assert_deployment_reproduces_forward(model, batch, cuda, _joint_tensors, rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.skipif(
