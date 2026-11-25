@@ -148,6 +148,61 @@ class RegionRasterTest(unittest.TestCase):
         np.testing.assert_array_equal(raster.contains_tensor(points).numpy(), first.numpy())
 
 
+class RegionRasterGridEdgeTest(unittest.TestCase):
+    """Edges in the first and last cells of the raster."""
+
+    def _assert_equals_shapely(self, region, raster: RegionRaster, points: np.ndarray) -> None:
+        expected = shapely.contains_xy(region, points[:, 0], points[:, 1])
+        np.testing.assert_array_equal(raster.contains(points), expected)
+        np.testing.assert_array_equal(
+            raster.contains_tensor(torch.from_numpy(points)).numpy(), expected
+        )
+
+    def test_edge_in_the_last_cell_builds_and_equals_shapely(self) -> None:
+        """Test that a region whose far edge lies in the raster's last cell builds and is exact.
+
+        Input: 14 x 3 m and 3 x 14 m boxes at the origin with 1 m cells. The raster starts one
+        cell before the region and is a whole number of 16-cell tiles wide, so the far side at
+        14 m falls in the last column (or row), whose right-hand neighbour lies past the grid.
+        Expected: the raster builds, and its answers equal shapely.contains.
+        Check: a 0.1 m grid of points over the boxes and their surroundings, NumPy and tensor.
+        """
+        steps = np.arange(-2.0, 17.0, 0.1)
+        points = np.stack(np.meshgrid(steps, steps), -1).reshape(-1, 2)
+        for width, height in ((14.0, 3.0), (3.0, 14.0)):
+            with self.subTest(width=width, height=height):
+                region = shapely.box(0.0, 0.0, width, height)
+                raster = RegionRaster(region, cell_size=1.0)
+                self._assert_equals_shapely(region, raster, points)
+
+    def test_edge_in_the_first_cell_equals_shapely(self) -> None:
+        """Test that a region whose near edge rounds into the raster's first cell is exact.
+
+        Input: a hexagon around (300 km, 300 km) with 0.1 m cells. The raster starts one cell
+        left of the region, but at this magnitude ``min_x - 0.1`` rounds, so the leftmost
+        vertex lands in the first column and its left-hand neighbour lies before the grid.
+        Expected: answers equal shapely.contains, also in the far right column of tiles that
+        a neighbour before the grid would index from the end.
+        Check: a 5 cm grid of points along the right side of the hexagon, NumPy and tensor.
+        """
+        region = Polygon(
+            [
+                (299975.230, 299983.076),
+                (300002.271, 299970.086),
+                (300027.042, 299987.010),
+                (300024.770, 300016.924),
+                (299997.729, 300029.914),
+                (299972.958, 300012.990),
+            ]
+        )
+        raster = RegionRaster(region, cell_size=0.1)
+        min_x, min_y, max_x, max_y = region.bounds
+        xs = np.arange(max_x - 3.0, max_x + 0.5, 0.05)
+        ys = np.arange(min_y - 0.5, max_y + 0.5, 0.05)
+        points = np.stack(np.meshgrid(xs, ys), -1).reshape(-1, 2)
+        self._assert_equals_shapely(region, raster, points)
+
+
 class LaneletMapRasterContainsTest(unittest.TestCase):
     """LaneletMap.contains keeps its margin semantics with the raster lookup."""
 

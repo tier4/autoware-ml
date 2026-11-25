@@ -129,11 +129,23 @@ class RegionRaster:
         samples = starts[edge_of_sample] + fraction[:, None] * (ends - starts)[edge_of_sample]
         column = np.floor((samples[:, 0] - self.origin[0]) / cell).astype(np.int64)
         row = np.floor((samples[:, 1] - self.origin[1]) / cell).astype(np.int64)
-        keys = [
-            ((column + dx) * self.cells_y + (row + dy)) * len(self.edges) + edge_of_sample
-            for dx in (-1, 0, 1)
-            for dy in (-1, 0, 1)
-        ]
+        keys = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                # Points outside the grid never reach the tables (they are OUTSIDE), so a
+                # neighbour outside it is not needed, and its flat id would alias another
+                # cell or tile (a negative column indexes the tiles from the end) or run past
+                # the tile table. The near edge can round into the first cell when
+                # ``min - cell`` is inexact, and the far edge can lie in the last cell.
+                neighbour_column, neighbour_row = column + dx, row + dy
+                in_grid = (
+                    (neighbour_column >= 0)
+                    & (neighbour_column < self.cells_x)
+                    & (neighbour_row >= 0)
+                    & (neighbour_row < self.cells_y)
+                )
+                cell_id = neighbour_column * self.cells_y + neighbour_row
+                keys.append((cell_id * len(self.edges) + edge_of_sample)[in_grid])
         pairs = np.unique(np.concatenate(keys))  # sorted by cell, then edge
         pair_cell, pair_edge = np.divmod(pairs, len(self.edges))
         border_cells, first = np.unique(pair_cell, return_index=True)
