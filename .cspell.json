@@ -324,6 +324,7 @@
     "truncnorm",
     "ulimits",
     "ulps",
+    "unact",
     "unbinned",
     "undistorting",
     "unioned",
