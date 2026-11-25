@@ -1408,7 +1408,7 @@ def test_export_folds_the_cpe_linear_layer_into_the_convolution(monkeypatch) -> 
     monkeypatch.setattr(Cpe, "fold_linear", lambda encoding: None)
     reference = model.build_export_specs(batch)
 
-    for name in ("ptv3_encoder", "ptv3_seg3d_head"):
+    for name in ("lidar_encoder", "seg3d_head"):
         with torch.no_grad():
             folded_outputs = folded[name].module(*folded[name].args)
             reference_outputs = reference[name].module(*reference[name].args)

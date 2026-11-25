@@ -161,7 +161,7 @@ class PTv3Segmentation3DModel(PTv3BaseModel):
         )
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
-        """Declare ``ptv3_encoder`` and ``ptv3_seg3d_head``, the runtime's split.
+        """Declare ``lidar_encoder`` and ``seg3d_head``, the runtime's split.
 
         Returns:
             The encoder graph, then the segmentation head graph.

@@ -41,7 +41,7 @@ def test_encoder_metainfo_serialization_orders_match_export_order(config_name: s
     # The encoder metainfo declares the orders the exported graph is built with;
     # config drift against the code constant must fail loud, never ship.
     cfg = compose_task(config_name)
-    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "lidar_encoder")
     assert list(module_cfg.metainfo.serialization_orders) == list(PTv3BaseModel.EXPORT_ORDER)
 
 
@@ -54,7 +54,7 @@ def test_metainfo_interpolations_resolve_for_every_module(config_name: str) -> N
         module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, module_name)
         metainfo = OmegaConf.to_container(module_cfg.metainfo, resolve=True)
         assert metainfo, f"{config_name}: {module_name} has an empty metainfo block"
-        if module_name in ("ptv3_seg3d_head", "ptv3_det3d_head"):
+        if module_name in ("seg3d_head", "det3d_head"):
             assert len(metainfo["class_names"]) > 0
 
 
@@ -63,7 +63,7 @@ def test_det3d_head_has_twist_follows_use_velocity(config_name: str) -> None:
     # The runtime learns from has_twist whether a velocity output exists, so it
     # is derived from the head configuration instead of being declared twice.
     cfg = compose_task(config_name)
-    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "det3d_head")
     assert isinstance(module_cfg.metainfo.has_twist, bool)
     assert module_cfg.metainfo.has_twist == cfg.model.bbox_head.use_velocity
 
@@ -73,7 +73,7 @@ def test_det3d_head_exports_fused_bf16_attention(config_name: str) -> None:
     # The fused TransHead path needs the head flag and the fp16 module precision
     # together; export refuses a mismatch, so every shipped config must pair them.
     cfg = compose_task(config_name)
-    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_det3d_head")
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "det3d_head")
     assert cfg.model.bbox_head.use_bf16_cross_attention is True
     assert module_cfg.precision == "fp16"
 
@@ -84,7 +84,7 @@ def test_encoder_metainfo_stamps_the_attention_windows(config_name: str) -> None
     # deployment boundary (exporter and runtime), so the artifact records the windows it
     # was exported with: one per level, straight from the encoder config, never retyped.
     cfg = compose_task(config_name)
-    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "ptv3_encoder")
+    module_cfg = merge_module_onnx_cfg(cfg.deploy.onnx, "lidar_encoder")
     patch_sizes = OmegaConf.to_container(module_cfg.metainfo.patch_sizes, resolve=True)
     assert patch_sizes == list(cfg.model.encoder.enc_patch_size)
     assert len(patch_sizes) == len(cfg.model.encoder.stride) + 1

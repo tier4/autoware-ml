@@ -54,7 +54,7 @@ deploy:
     dynamo: false
     do_constant_folding: false
     modules:
-      ptv3_encoder:
+      lidar_encoder:
         metainfo:
           point_cloud_range: ${point_cloud_range}
           voxel_size: ["${grid_size}", "${grid_size}", "${grid_size}"]
@@ -62,7 +62,7 @@ deploy:
           pooling_strides: ${model.encoder.stride}
           enc_channels: ${model.encoder.enc_channels}
           patch_sizes: ${model.encoder.enc_patch_size}
-      ptv3_det3d_head:
+      det3d_head:
         precision: fp16
         metainfo:
           head_grid_size: ${head_grid_size}

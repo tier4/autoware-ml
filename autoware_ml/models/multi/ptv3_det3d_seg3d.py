@@ -333,7 +333,7 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
         )
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
-        """Declare ``ptv3_encoder``, ``ptv3_seg3d_head`` and ``ptv3_det3d_head``.
+        """Declare ``lidar_encoder``, ``seg3d_head`` and ``det3d_head``.
 
         Returns:
             The three graphs; the model outputs are the seg head's, then the det head's.

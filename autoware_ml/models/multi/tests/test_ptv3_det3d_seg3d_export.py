@@ -55,7 +55,7 @@ from autoware_ml.models.multi.ptv3_det3d_seg3d import PTv3Det3DSeg3DModel
 from autoware_ml.models.segmentation3d.encoders.voxel import SweepSplitVoxelFeatureEncoder
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
-    ENCODER_GRAPH,
+    LIDAR_ENCODER_GRAPH,
     SEG3D_HEAD_GRAPH,
     seg3d_head_export_input_names,
 )
@@ -145,12 +145,12 @@ def test_ptv3_seg3d_split_export_supports_decoder_blocks() -> None:
 
     # The encoder-only encoder graph never consumes pooling clusters; the
     # tracer would prune them, so the declared interface must not list them.
-    assert not any("_cluster" in name for name in specs["ptv3_encoder"].input_names)
+    assert not any("_cluster" in name for name in specs["lidar_encoder"].input_names)
     with torch.no_grad():
-        encoder_outputs = specs["ptv3_encoder"].module(*specs["ptv3_encoder"].args)
+        encoder_outputs = specs["lidar_encoder"].module(*specs["lidar_encoder"].args)
     assert len(encoder_outputs) == 2
 
-    spec = specs["ptv3_seg3d_head"]
+    spec = specs["seg3d_head"]
     assert spec.input_names == [
         "point_feat_0",
         "point_feat_1",
@@ -326,7 +326,7 @@ def test_ptv3_det3d_seg3d_deployment_is_the_seg3d_and_det3d_graphs_over_one_enco
     detection3d_model = detection3d_model.cuda().eval()
 
     graphs = {graph.name: graph for graph in model.deployment_declaration().graphs}
-    assert set(graphs) == {ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH}
+    assert set(graphs) == {LIDAR_ENCODER_GRAPH, SEG3D_HEAD_GRAPH, DET3D_HEAD_GRAPH}
     seg_graph, det_graph = graphs[SEG3D_HEAD_GRAPH], graphs[DET3D_HEAD_GRAPH]
     assert seg_graph.output_names == ("pred_labels", "pred_probs")
     assert det_graph.output_names == tuple(JOINT_EXPORT_OUTPUT_NAMES[2:])

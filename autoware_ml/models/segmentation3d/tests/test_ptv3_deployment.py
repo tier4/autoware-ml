@@ -38,7 +38,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 from autoware_ml.models.segmentation3d.ptv3_base import (
     DET3D_HEAD_GRAPH,
     ENCODER_EXPORT_INPUT_NAMES,
-    ENCODER_GRAPH,
+    LIDAR_ENCODER_GRAPH,
     SEG3D_HEAD_GRAPH,
     SEG3D_HEAD_OUTPUT_NAMES,
     encoder_graph_input_names,
@@ -91,8 +91,8 @@ class TestSeg3dDeployment(unittest.TestCase):
             probabilities.
         """
         graphs = {graph.name: graph for graph in self.model.deployment_declaration().graphs}
-        self.assertEqual(set(graphs), {ENCODER_GRAPH, SEG3D_HEAD_GRAPH})
-        encoder, head = graphs[ENCODER_GRAPH], graphs[SEG3D_HEAD_GRAPH]
+        self.assertEqual(set(graphs), {LIDAR_ENCODER_GRAPH, SEG3D_HEAD_GRAPH})
+        encoder, head = graphs[LIDAR_ENCODER_GRAPH], graphs[SEG3D_HEAD_GRAPH]
         self.assertEqual(encoder.input_names[:5], ENCODER_EXPORT_INPUT_NAMES)
         self.assertFalse(any(name.endswith("_cluster") for name in encoder.input_names))
         self.assertEqual(head.output_names, ("pred_labels", "pred_probs"))
@@ -102,7 +102,7 @@ class TestSeg3dDeployment(unittest.TestCase):
 
         specs = self.model.build_export_specs(self.batch)
         self.assertEqual(set(specs), set(graphs))
-        encoder_spec, head_spec = specs[ENCODER_GRAPH], specs[SEG3D_HEAD_GRAPH]
+        encoder_spec, head_spec = specs[LIDAR_ENCODER_GRAPH], specs[SEG3D_HEAD_GRAPH]
         self.assertEqual(
             encoder_spec.input_names,
             list(encoder_graph_input_names(len(self.model.encoder.stride))),
@@ -152,7 +152,7 @@ class TestDet3dDeployment(unittest.TestCase):
             the ``query_labels`` dtype and the ``dense_heatmap`` leading dims of a run.
         """
         graphs = {graph.name: graph for graph in self.model.deployment_declaration().graphs}
-        self.assertEqual(set(graphs), {ENCODER_GRAPH, DET3D_HEAD_GRAPH})
+        self.assertEqual(set(graphs), {LIDAR_ENCODER_GRAPH, DET3D_HEAD_GRAPH})
         specs = self.model.build_export_specs(self.batch)
         self.assertEqual(set(specs), set(graphs))
         head_spec = specs[DET3D_HEAD_GRAPH]
