@@ -35,7 +35,11 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.deployment.graphs import DeploymentGraph, run_deployment_in_torch
+from autoware_ml.deployment.graphs import DeploymentGraph
+from autoware_ml.deployment.tests.deployment_assertions import (
+    assert_deployment_reproduces_forward,
+    assert_specs_export_onnx_with_the_declared_io,
+)
 from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
@@ -115,10 +119,13 @@ class _StubMiddleEncoder(BEVMiddleEncoder):
         batch_size: int,
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         height, width = self._bev_shape
-        canvas = voxel_features.new_zeros(batch_size, voxel_features.shape[1], height, width)
-        batch_indices, y, x = coords[:, 0].long(), coords[:, 2].long(), coords[:, 3].long()
-        canvas[batch_indices, :, y, x] = voxel_features
-        return canvas
+        channels = voxel_features.shape[1]
+        # One flat row per cell, filled with index_copy: an advanced-index assignment on the
+        # ``(B, C, H, W)`` canvas does not export to ONNX.
+        cells = (coords[:, 0].long() * height + coords[:, 2].long()) * width + coords[:, 3].long()
+        canvas = voxel_features.new_zeros(batch_size * height * width, channels)
+        canvas = canvas.index_copy(0, cells, voxel_features)
+        return canvas.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2).contiguous()
 
     def prepare_for_export(self) -> _StubMiddleEncoder:
         return _StubMiddleEncoder(self._bev_shape, exportable=True)
@@ -324,14 +331,33 @@ class _BEVFusionDetection3DModelTestCase(unittest.TestCase):
             num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
 
-    def _build_single_sample_batch_inputs(self) -> ModelBatchInputs:
-        """Build a one-sample voxelized batch: the deployed lidar graph is single-sample."""
+    def _build_single_sample_batch_inputs(self, with_voxels: bool = True) -> ModelBatchInputs:
+        """Build a one-sample batch, voxelized unless ``with_voxels`` is False.
+
+        The deployed lidar graph is single-sample, so the deployment tests start from this batch.
+        """
         batch_size = self.batch_size
         self.batch_size = 1
         try:
-            return self._build_batch_inputs(voxels_data=self._build_voxels_data())
+            voxels_data = self._build_voxels_data() if with_voxels else None
+            return self._build_batch_inputs(voxels_data=voxels_data)
         finally:
             self.batch_size = batch_size
+
+    def _runtime_tensors(self, outputs: ModelOutputs) -> dict[str, torch.Tensor]:
+        """Pack forward()'s head outputs as the runtime tensors the deployed function returns.
+
+        Args:
+            outputs: The outputs of ``forward()``.
+
+        Returns:
+            ``bbox_pred``, ``score`` and ``label_pred``, as ``export_detection3d_outputs`` packs
+            them.
+        """
+        bbox_pred, score, label_pred = export_detection3d_outputs(
+            self.model.bbox_head, outputs.detection3d().transfusion_head()
+        )
+        return {"bbox_pred": bbox_pred, "score": score, "label_pred": label_pred}
 
     def _build_detection3d_gt_batch(self) -> Detection3DGTBatch:
         """Build one ground-truth box per sample, all inside the scene, for ``batch_size`` samples."""
@@ -543,10 +569,15 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         torch.testing.assert_close(num_points_per_voxel, voxels_data.num_points[first_sample])
 
     def test_build_export_specs_requires_voxels_data(self) -> None:
-        """Test that export spec construction rejects a batch without voxel data."""
+        """Test that export spec construction rejects a batch without voxel data.
+
+        Input: a one-sample batch without voxels, so the single-sample check passes.
+        Expected: the deployed forward refuses it for the missing voxels, not the batch size.
+        Check: a ValueError whose message names ``voxels_data``.
+        """
         self.model.eval()
-        with self.assertRaises(ValueError):
-            self.model.build_export_specs(self._build_batch_inputs(voxels_data=None))
+        with self.assertRaisesRegex(ValueError, "voxels_data"):
+            self.model.build_export_specs(self._build_single_sample_batch_inputs(with_voxels=False))
 
     def test_build_export_specs_wraps_exportable_eval_copies(self) -> None:
         """
@@ -656,29 +687,40 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         )
         self.assertIsNone(model.deployment_graphs())
 
-    def test_deployment_reproduces_the_export_wrapper(self) -> None:
-        """Test that the deployment run in PyTorch reproduces the export wrapper's tensors.
+    def test_deployment_reproduces_forward(self) -> None:
+        """Test that the deployment reproduces forward() packed as the runtime tensors.
 
-        Input: a single-sample batch, the deployment declaration and the export specs.
-        Expected: the deployed outputs are the three runtime outputs, equal to what the export
-            wrapper computes on the spec's args.
-        Check: the output names in order and each tensor against the wrapper's.
+        Input: a single-sample batch, run through forward() and through the deployment in
+            PyTorch, which traces the export copy with the exportable middle encoder and
+            attention layers.
+        Expected: the deployed ``bbox_pred``, ``score`` and ``label_pred`` equal forward()'s head
+            outputs packed by ``export_detection3d_outputs``, so the export copy computes what
+            the training modules compute.
+        Check: assert_deployment_reproduces_forward() and the output names in order.
         """
         self.model.eval()
-        batch_inputs = self._build_single_sample_batch_inputs()
-        deployment = self.model.deployment_declaration()
-        self.assertIsNotNone(deployment)
+        check = assert_deployment_reproduces_forward(
+            self.model,
+            self._build_single_sample_batch_inputs(),
+            self.device,
+            self._runtime_tensors,
+            rtol=1e-4,
+            atol=1e-4,
+        )
+        self.assertEqual(list(check.deployment_outputs), ["bbox_pred", "score", "label_pred"])
 
-        outputs = run_deployment_in_torch(deployment, batch_inputs, self.device)
-        self.assertEqual(list(outputs), ["bbox_pred", "score", "label_pred"])
-        specs = self.model.build_export_specs(batch_inputs)
-        with torch.no_grad():
-            bbox_pred, score, label_pred = specs["bevfusion_lidar"].module(
-                *specs["bevfusion_lidar"].args
-            )
-        torch.testing.assert_close(outputs["bbox_pred"], bbox_pred)
-        torch.testing.assert_close(outputs["score"], score)
-        torch.testing.assert_close(outputs["label_pred"], label_pred)
+    def test_specs_export_onnx_with_the_declared_io(self) -> None:
+        """Test that the lidar graph's spec exports an ONNX with the declared inputs and outputs.
+
+        Input: the lidar-only model in eval mode and a single-sample batch.
+        Expected: the ``bevfusion_lidar`` ONNX carries the graph's input and output names and
+            the ``voxels_num`` axis on every input.
+        Check: assert_specs_export_onnx_with_the_declared_io().
+        """
+        self.model.eval()
+        assert_specs_export_onnx_with_the_declared_io(
+            self.model, self._build_single_sample_batch_inputs()
+        )
 
     def _build_partial_model(self) -> BEVFusionDetection3DModel:
         """Build a lidar-only detector that ignores cyclists in frames flagged as not annotated."""
