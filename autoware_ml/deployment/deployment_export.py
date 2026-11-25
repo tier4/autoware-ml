@@ -27,7 +27,6 @@ from autoware_ml.utils.deploy import (
     ExportSpec,
     merge_module_onnx_cfg,
     should_export_stage,
-    supports_export_stage,
     export_to_onnx,
     should_modify_graph,
     modify_onnx_graph,
@@ -109,66 +108,54 @@ class DeploymentExport:
             module_engine_path = self.output_dir / f"{module_name}.engine"
 
             if should_export_stage(self.deploy_cfg.onnx):
-                if not supports_export_stage(export_spec, "onnx"):
-                    raise RuntimeError(
-                        f"Module '{module_name}' does not support ONNX export but "
-                        "deploy.onnx.enabled=true. Disable the stage or use a supported model."
-                    )
-                else:
-                    validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
-                    export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
-                    modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
-                    if should_modify_graph(modify_graph_cfg):
-                        module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
+                validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
+                export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
+                modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
+                if should_modify_graph(modify_graph_cfg):
+                    module_onnx_path = modify_onnx_graph(module_onnx_path, modify_graph_cfg)
 
-                    # Precision conversion runs after the graph modifiers so they keep operating
-                    # on the fp32 export they were written against.
-                    if should_convert_precision(module_onnx_cfg):
-                        module_onnx_path = convert_onnx_precision(
-                            module_onnx_path, resolve_onnx_precision(module_onnx_cfg)
-                        )
+                # Precision conversion runs after the graph modifiers so they keep operating
+                # on the fp32 export they were written against.
+                if should_convert_precision(module_onnx_cfg):
+                    module_onnx_path = convert_onnx_precision(
+                        module_onnx_path, resolve_onnx_precision(module_onnx_cfg)
+                    )
 
-                    # Stamp the final ONNX so the shipped file carries its own provenance.
-                    metainfo_cfg = module_onnx_cfg.get("metainfo", None)
-                    stamp_onnx_meta(
-                        module_onnx_path,
-                        config_name=self.config_name,
-                        module=module_name,
-                        release=self.release,
-                        export_git_sha=export_git_sha,
-                        metainfo=(
-                            OmegaConf.to_container(metainfo_cfg, resolve=True)
-                            if metainfo_cfg is not None
-                            else None
-                        ),
-                        tracker=self.tracker,
-                        run_id=self.run_id,
-                    )
-                    # Recorded after the modifiers, which may write to a different path.
-                    onnx_exported_paths.append(module_onnx_path)
-                    logger.info(
-                        "Stamped %s metadata: release=%s, commit=%s",
-                        module_name,
-                        self.release or "unversioned",
-                        export_git_sha,
-                    )
+                # Stamp the final ONNX so the shipped file carries its own provenance.
+                metainfo_cfg = module_onnx_cfg.get("metainfo", None)
+                stamp_onnx_meta(
+                    module_onnx_path,
+                    config_name=self.config_name,
+                    module=module_name,
+                    release=self.release,
+                    export_git_sha=export_git_sha,
+                    metainfo=(
+                        OmegaConf.to_container(metainfo_cfg, resolve=True)
+                        if metainfo_cfg is not None
+                        else None
+                    ),
+                    tracker=self.tracker,
+                    run_id=self.run_id,
+                )
+                # Recorded after the modifiers, which may write to a different path.
+                onnx_exported_paths.append(module_onnx_path)
+                logger.info(
+                    "Stamped %s metadata: release=%s, commit=%s",
+                    module_name,
+                    self.release or "unversioned",
+                    export_git_sha,
+                )
 
             if should_export_stage(self.deploy_cfg.tensorrt):
-                if not supports_export_stage(export_spec, "tensorrt"):
-                    raise RuntimeError(
-                        f"Module '{module_name}' does not support TensorRT export but "
-                        "deploy.tensorrt.enabled=true. Disable the stage or use a supported model."
+                if not module_onnx_path.exists():
+                    raise FileNotFoundError(
+                        f"ONNX file not found: {module_onnx_path}. "
+                        "TensorRT export requires a valid ONNX model."
                     )
-                else:
-                    if not module_onnx_path.exists():
-                        raise FileNotFoundError(
-                            f"ONNX file not found: {module_onnx_path}. "
-                            "TensorRT export requires a valid ONNX model."
-                        )
-                    build_tensorrt_engine(
-                        module_onnx_path, self.deploy_cfg, module_engine_path, module_name
-                    )
-                    tensorrt_exported_paths.append(module_engine_path)
+                build_tensorrt_engine(
+                    module_onnx_path, self.deploy_cfg, module_engine_path, module_name
+                )
+                tensorrt_exported_paths.append(module_engine_path)
 
         # Implement the export logic here
         logger.info("Model export completed.")
