@@ -536,7 +536,7 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
         """
         model = deepcopy(self).eval()
         if model.lidar_network is not None:
-            model.lidar_network.prepare_for_export()
+            model.lidar_network = model.lidar_network.prepare_for_export()
         model.bbox_head = model.bbox_head.prepare_for_export()
         return model
 

@@ -285,19 +285,27 @@ class TestBEVFusionLidar(_BEVFusionLidarTestCase):
         with self.assertRaisesRegex(ValueError, "fuser"):
             self._forward(lidar, other_bev_features=[self.image_bev])
 
-    def test_prepare_for_export_swaps_middle_encoder_in_place(self) -> None:
-        """Test that the exportable middle encoder replaces the original and is returned."""
-        lidar = self._build_lidar()
+    def test_prepare_for_export_returns_a_copy_with_the_exportable_middle_encoder(self) -> None:
+        """Test that the export copy swaps the middle encoder and leaves the branch untouched.
+
+        Input: a branch in training mode with the native stub middle encoder.
+        Expected: a separate branch in eval mode with the exportable encoder; the original keeps
+            its encoder and its mode.
+        Check: identity, the ``exportable`` flag of both encoders and the training flags.
+        """
+        lidar = self._build_lidar().train()
         original = lidar.pts_middle_encoder
-        assert isinstance(original, _StubMiddleEncoder)
 
         exportable = lidar.prepare_for_export()
 
-        assert isinstance(exportable, _StubMiddleEncoder)
-        self.assertIs(exportable, lidar.pts_middle_encoder)
-        self.assertIsNot(exportable, original)
-        self.assertTrue(exportable.exportable)
+        self.assertIsNot(exportable, lidar)
+        self.assertIs(lidar.pts_middle_encoder, original)
+        self.assertIsInstance(original, _StubMiddleEncoder)
         self.assertFalse(original.exportable)
+        self.assertTrue(lidar.training)
+        self.assertIsInstance(exportable.pts_middle_encoder, _StubMiddleEncoder)
+        self.assertTrue(exportable.pts_middle_encoder.exportable)
+        self.assertFalse(exportable.training)
         self.assertEqual(lidar.expected_bev_shape, self.bev_shape)
 
 
@@ -400,17 +408,21 @@ class TestBEVFusionLidarWithSparseEncoder(_BEVFusionLidarTestCase):
         self.assertTrue(torch.isfinite(bev).all())
 
     def test_prepare_for_export_keeps_lidar_output(self) -> None:
-        """Test that the exportable sparse encoder reproduces the native encoder's BEV output."""
+        """Test that the export copy with the exportable sparse encoder reproduces the BEV output.
+
+        Input: a branch around the native sparse encoder and one voxelized batch.
+        Expected: the copy carries another encoder, the same BEV shape and the same BEV output.
+        Check: the encoder identity, ``expected_bev_shape`` and assert_close() on the output.
+        """
         lidar = self._build_lidar()
         reference = self._forward(lidar, other_bev_features=None)
 
         exportable = lidar.prepare_for_export()
 
-        self.assertIs(exportable, lidar.pts_middle_encoder)
-        self.assertIsNot(exportable, self.middle_encoder)
-        self.assertEqual(lidar.expected_bev_shape, self.bev_shape)
+        self.assertIsNot(exportable.pts_middle_encoder, self.middle_encoder)
+        self.assertEqual(exportable.expected_bev_shape, self.bev_shape)
         torch.testing.assert_close(
-            self._forward(lidar, other_bev_features=None), reference, atol=1e-4, rtol=1e-4
+            self._forward(exportable, other_bev_features=None), reference, atol=1e-4, rtol=1e-4
         )
 
 
