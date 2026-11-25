@@ -28,6 +28,7 @@ from __future__ import annotations
 from math import pi
 
 import numpy as np
+from jaxtyping import Float, Float64
 
 
 def wrap_angle(angle: float) -> float:
@@ -42,7 +43,9 @@ def wrap_angle(angle: float) -> float:
     return (float(angle) + pi) % (2.0 * pi) - pi
 
 
-def bev_corners_batch(boxes: np.ndarray) -> np.ndarray:
+def bev_corners_batch(
+    boxes: Float[np.ndarray, "num_boxes num_box_params"],
+) -> Float64[np.ndarray, "num_boxes 4 2"]:
     """The four BEV corners of every box, as an ``(N, 4, 2)`` array.
 
     Corners run clockwise from the ``(+dx/2, +dy/2)`` corner of the box frame,
@@ -65,7 +68,7 @@ def bev_corners_batch(boxes: np.ndarray) -> np.ndarray:
     return np.stack([corners_x, corners_y], axis=2)
 
 
-def bev_corners(box: np.ndarray) -> np.ndarray:
+def bev_corners(box: Float[np.ndarray, " num_box_params"]) -> Float64[np.ndarray, "4 2"]:
     """:func:`bev_corners_batch` for a single box row, as a ``(4, 2)`` array.
 
     Args:
@@ -77,7 +80,9 @@ def bev_corners(box: np.ndarray) -> np.ndarray:
     return bev_corners_batch(np.asarray(box, dtype=np.float64)[None, :])[0]
 
 
-def corner_displacement(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
+def corner_displacement(
+    pred_box: Float[np.ndarray, " num_box_params"], gt_box: Float[np.ndarray, " num_box_params"]
+) -> float:
     """Mean BEV corner distance under the best cyclic corner assignment.
 
     Couples position, size, and yaw into one distance in meters. The cyclic
@@ -101,7 +106,7 @@ def corner_displacement(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
     return best
 
 
-def nearest_surface_distance(box: np.ndarray) -> float:
+def nearest_surface_distance(box: Float[np.ndarray, " num_box_params"]) -> float:
     """Distance from the ego origin to the nearest point of the box's BEV outline.
 
     The ego origin is the frame origin ``(0, 0)``. Returns ``0.0`` when the origin
@@ -130,7 +135,9 @@ def nearest_surface_distance(box: np.ndarray) -> float:
     return float(np.linalg.norm(local - clamped))
 
 
-def signed_nearest_surface_error(pred_box: np.ndarray, gt_box: np.ndarray) -> float:
+def signed_nearest_surface_error(
+    pred_box: Float[np.ndarray, " num_box_params"], gt_box: Float[np.ndarray, " num_box_params"]
+) -> float:
     """Signed near-face error ``d_pred - d_gt`` in meters.
 
     Positive means the predicted near face sits farther than the truth (ego would
@@ -146,7 +153,10 @@ def signed_nearest_surface_error(pred_box: np.ndarray, gt_box: np.ndarray) -> fl
     return nearest_surface_distance(pred_box) - nearest_surface_distance(gt_box)
 
 
-def corner_displacements(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+def corner_displacements(
+    pred_boxes: Float[np.ndarray, "num_matches num_box_params"],
+    gt_boxes: Float[np.ndarray, "num_matches num_box_params"],
+) -> Float64[np.ndarray, " num_matches"]:
     """:func:`corner_displacement` for paired boxes, ``(N, 7+)`` x ``(N, 7+)`` to ``(N,)``.
 
     Args:
@@ -168,7 +178,10 @@ def corner_displacements(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.nda
     return best
 
 
-def corner_displacement_matrix(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> np.ndarray:
+def corner_displacement_matrix(
+    pred_boxes: Float[np.ndarray, "num_predictions num_box_params"],
+    gt_boxes: Float[np.ndarray, "num_gt_boxes num_box_params"],
+) -> Float64[np.ndarray, "num_predictions num_gt_boxes"]:
     """:func:`corner_displacement` for every pair, ``(P, 7+)`` x ``(G, 7+)`` to ``(P, G)``.
 
     Args:
@@ -190,7 +203,9 @@ def corner_displacement_matrix(pred_boxes: np.ndarray, gt_boxes: np.ndarray) -> 
     return best
 
 
-def nearest_surface_distances(boxes: np.ndarray) -> np.ndarray:
+def nearest_surface_distances(
+    boxes: Float[np.ndarray, "num_boxes num_box_params"],
+) -> Float64[np.ndarray, " num_boxes"]:
     """:func:`nearest_surface_distance` for ``(N, 7+)`` boxes at once, as ``(N,)``.
 
     Args:

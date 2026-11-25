@@ -133,6 +133,14 @@ def test_autoware_seg3d_metric_uses_class_names_when_provided() -> None:
     assert MetricKey(name="iou_class_0") not in test.metric_names()
 
 
+def test_autoware_seg3d_metric_rejects_class_names_of_the_wrong_length() -> None:
+    # One name for three classes used to emit iou_car, iou_class_1, iou_class_2.
+    with pytest.raises(ValueError, match="class_names"):
+        Segmentation3DConfusionMatrixMetricSuite(
+            components=[IoU()], num_classes=3, ignore_index=-1, class_names=("car",)
+        )
+
+
 def test_autoware_seg3d_metric_range_buckets_are_exact() -> None:
     ranges = (
         MetricRange("0-50m", 0.0, 50.0),

@@ -280,35 +280,50 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.min_num_points,
             )
 
-            self._note_frame()
             pred_boxes = prediction.bboxes_3d.detach().to(dtype=torch.float32)
+            pred_scores = prediction.scores_3d.detach().to(dtype=torch.float32)
             pred_labels = prediction.labels_3d.detach().to(dtype=torch.long)
-            self.pred_boxes.append(pred_boxes)
-            self.pred_scores.append(prediction.scores_3d.detach().to(dtype=torch.float32))
-            self.pred_labels.append(pred_labels)
-            self.gt_boxes.append(frame_boxes[keep])
-            self.gt_labels.append(frame_labels[keep])
-            self.padding.append(torch.tensor([frame.is_padding], device=frame_boxes.device))
-
+            gt_boxes = frame_boxes[keep]
+            gt_labels = frame_labels[keep]
+            gt_ttc = None
+            pred_ttc = None
+            covered = True
             if self.collision is not None:
                 frame_meta = self._collision_frame_meta(frame.frame_meta)
                 covered = self.collision.available(frame_meta.lanelet_map_path)
+                gt_ttc = self._frame_ttc(gt_boxes, gt_labels, frame_meta, covered)
+                pred_ttc = self._frame_ttc(
+                    pred_boxes, pred_labels, frame_meta, covered, scores=pred_scores
+                )
+
+            # The one validation of the frame, before anything is accumulated. state_for and
+            # the range clip only slice these tensors, so they build their samples unchecked.
+            Detection3DSample(
+                pred_boxes=pred_boxes,
+                pred_scores=pred_scores,
+                pred_labels=pred_labels,
+                gt_boxes=gt_boxes,
+                gt_labels=gt_labels,
+                gt_ttc=gt_ttc,
+                pred_ttc=pred_ttc,
+                ttc_covered=covered,
+            )
+
+            self._note_frame()
+            self.pred_boxes.append(pred_boxes)
+            self.pred_scores.append(pred_scores)
+            self.pred_labels.append(pred_labels)
+            self.gt_boxes.append(gt_boxes)
+            self.gt_labels.append(gt_labels)
+            self.padding.append(torch.tensor([frame.is_padding], device=frame_boxes.device))
+
+            if self.collision is not None:
                 self.ttc_covered.append(torch.tensor([covered], device=frame_boxes.device))
                 if not frame.is_padding:
                     self.ttc_frames_seen += 1
                     self.ttc_frames_covered += int(covered)
-                self.gt_ttc.append(
-                    self._frame_ttc(frame_boxes[keep], frame_labels[keep], frame_meta, covered)
-                )
-                self.pred_ttc.append(
-                    self._frame_ttc(
-                        pred_boxes,
-                        pred_labels,
-                        frame_meta,
-                        covered,
-                        scores=prediction.scores_3d.detach(),
-                    )
-                )
+                self.gt_ttc.append(gt_ttc)
+                self.pred_ttc.append(pred_ttc)
 
             if self._component_filters and self._stage_filter_keys():
                 available = self._frame_region_availability(frame.frame_meta)
@@ -471,13 +486,15 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 continue
             if column is not None and not bool(self.region_available[index][column]):
                 continue
-            pred_boxes = self.pred_boxes[index].cpu()
-            pred_scores = self.pred_scores[index].cpu()
-            pred_labels = self.pred_labels[index].cpu()
-            gt_boxes = self.gt_boxes[index].cpu()
-            gt_labels = self.gt_labels[index].cpu()
-            gt_ttc = self.gt_ttc[index].cpu() if self.collision is not None else None
-            pred_ttc = self.pred_ttc[index].cpu() if self.collision is not None else None
+            # .cpu() returns the cached tensor itself on a CPU state, so clone: an in-place edit
+            # of one bucket's sample must not leak into the buckets built after it.
+            pred_boxes = self.pred_boxes[index].cpu().clone()
+            pred_scores = self.pred_scores[index].cpu().clone()
+            pred_labels = self.pred_labels[index].cpu().clone()
+            gt_boxes = self.gt_boxes[index].cpu().clone()
+            gt_labels = self.gt_labels[index].cpu().clone()
+            gt_ttc = self.gt_ttc[index].cpu().clone() if self.collision is not None else None
+            pred_ttc = self.pred_ttc[index].cpu().clone() if self.collision is not None else None
             ttc_covered = (
                 bool(self.ttc_covered[index].item()) if self.collision is not None else True
             )
@@ -492,8 +509,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                     gt_ttc = gt_ttc[gt_mask]
                 if pred_ttc is not None:
                     pred_ttc = pred_ttc[pred_mask]
+            # Validated once at update, masking and folding keep every dtype and row count.
             samples.append(
-                Detection3DSample(
+                Detection3DSample.model_construct(
                     pred_boxes=pred_boxes,
                     pred_scores=pred_scores,
                     pred_labels=self._fold(pred_labels),

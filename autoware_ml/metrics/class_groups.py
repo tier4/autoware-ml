@@ -36,12 +36,13 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 import torch
+from jaxtyping import Int, Int64
 
 
 def resolve_class_groups(
     class_names: tuple[str, ...] | None,
     class_groups: Mapping[str, Sequence[str]],
-) -> tuple[np.ndarray, tuple[str, ...]]:
+) -> tuple[Int64[np.ndarray, " num_classes"], tuple[str, ...]]:
     """Return the trained-index to grouped-index LUT and the ordered grouped names.
 
     The groups must partition every trained class exactly once (singletons
@@ -93,7 +94,9 @@ def resolve_class_groups(
     return lut, tuple(grouped_names)
 
 
-def fold_labels(labels: np.ndarray, lut: np.ndarray) -> np.ndarray:
+def fold_labels(
+    labels: Int[np.ndarray, "..."], lut: Int64[np.ndarray, " num_classes"]
+) -> Int[np.ndarray, "..."]:
     """Relabel integer class indices through the LUT, out-of-range (ignore) untouched.
 
     Args:
@@ -109,7 +112,9 @@ def fold_labels(labels: np.ndarray, lut: np.ndarray) -> np.ndarray:
     return folded
 
 
-def fold_labels_tensor(labels: torch.Tensor, lut: np.ndarray) -> torch.Tensor:
+def fold_labels_tensor(
+    labels: Int[torch.Tensor, "..."], lut: Int64[np.ndarray, " num_classes"]
+) -> Int[torch.Tensor, "..."]:
     """:func:`fold_labels` for tensors, computed on the labels' device.
 
     Args:
@@ -126,7 +131,11 @@ def fold_labels_tensor(labels: torch.Tensor, lut: np.ndarray) -> torch.Tensor:
     return folded
 
 
-def fold_confusion(confusion: torch.Tensor, lut: np.ndarray, new_num_classes: int) -> torch.Tensor:
+def fold_confusion(
+    confusion: Int64[torch.Tensor, "num_classes num_classes"],
+    lut: Int64[np.ndarray, " num_classes"],
+    new_num_classes: int,
+) -> Int64[torch.Tensor, "new_num_classes new_num_classes"]:
     """Fold a confusion matrix's rows and columns through the grouped-class LUT.
 
     Args:
