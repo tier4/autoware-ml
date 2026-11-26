@@ -152,6 +152,29 @@ class TestRunDeploymentInTorch(unittest.TestCase):
         outputs = _run(graphs=_toy_graphs(encoder=nn.Linear(1, 1)))
         self.assertFalse(outputs["plus"].requires_grad)
 
+    def test_the_modules_run_as_they_are(self) -> None:
+        """Test that a run uses the graph modules themselves, in their current mode.
+
+        Input: the toy deployment with an ``nn.Linear`` encoder in training mode, weight 2 and
+            bias 0, run on ``x = [1]``; then the weight set to 3 and the same graphs run again.
+        Expected: ``plus = 2x + 1.5 = 3.5``, the encoder still in training mode, and
+            ``plus = 3x + 1.5 = 4.5`` after the change, so the run holds no copy of the module.
+        Check: ``plus`` of both runs and the encoder's ``training`` flag.
+        """
+        encoder = nn.Linear(1, 1)
+        with torch.no_grad():
+            encoder.weight.fill_(2.0)
+            encoder.bias.zero_()
+        encoder.train()
+        graphs = _toy_graphs(encoder=encoder)
+
+        torch.testing.assert_close(_run(graphs=graphs)["plus"], torch.tensor([3.5]))
+        self.assertTrue(encoder.training)
+
+        with torch.no_grad():
+            encoder.weight.fill_(3.0)
+        torch.testing.assert_close(_run(graphs=graphs)["plus"], torch.tensor([4.5]))
+
     def test_graph_output_arity_is_checked(self) -> None:
         """Test that a graph returning fewer tensors than it declares is rejected, by name.
 
