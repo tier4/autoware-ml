@@ -417,7 +417,7 @@ def curve_metrics(curve: MatchCurve) -> CurveMetrics:
     """
     cumulative_fp = curve.cumulative_fp  # cumsum once, both curves share it
     precision, recall = _precision_recall(curve.cumulative_tp, cumulative_fp, curve.total_gt)
-    ap = _interpolated_ap(precision, recall, curve.total_gt, curve.num_predictions)
+    ap = _interpolated_ap(precision, recall, curve.total_gt)
 
     heading_precision, heading_recall = _precision_recall(
         curve.cumulative_heading_tp, cumulative_fp, curve.total_gt
@@ -435,9 +435,7 @@ def curve_metrics(curve: MatchCurve) -> CurveMetrics:
 
     return CurveMetrics(
         ap=ap,
-        aph=_interpolated_ap(
-            heading_precision, heading_recall, curve.total_gt, curve.num_predictions
-        ),
+        aph=_interpolated_ap(heading_precision, heading_recall, curve.total_gt),
         max_f1=max_f1,
         optimal_conf=optimal_conf,
         optimal_index=optimal_index,
@@ -466,11 +464,11 @@ def _interpolated_ap(
     precision: np.ndarray,
     recall: np.ndarray,
     total_gt: int,
-    num_predictions: int,
     min_recall: float = 0.1,
     min_precision: float = 0.1,
 ) -> float:
-    if total_gt == 0 and num_predictions == 0:
+    # Without ground truth there is no recall, so the AP is undefined whatever was predicted.
+    if total_gt == 0:
         return np.nan
     if precision.shape[0] == 0:
         return 0.0

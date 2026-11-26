@@ -69,10 +69,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
-    build_ptv3_export_context,
     export_patch_sizes,
-    prepare_ptv3_export_inputs,
-    require_single_sample_export_batch,
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -1351,24 +1348,26 @@ def test_export_attention_matches_training_on_a_non_identity_second_order(
     torch.testing.assert_close(export_feat, training_feat, atol=1e-5, rtol=1e-5)
 
 
-def test_export_input_builders_reject_a_multi_sample_batch() -> None:
-    """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
-    model = build_seg3d_model().eval()
-    single = build_inputs().voxels_data
-    require_single_sample_export_batch(
-        model.build_encoder_inputs(single.voxels, single.num_points, single.batch_xyz_coords())
-    )
+def test_export_rejects_a_multi_sample_batch() -> None:
+    """Test that the export refuses a batch of more than one sample.
 
+    Input: a two-sample batch, and a two-sample batch whose second sample has no points.
+    Expected: both are refused before the graphs pad and offset them as one frame; the empty
+        sample adds no voxel, so the batch size tells it apart, not the voxels.
+    Check: a ValueError naming ``single-sample`` on each pair.
+    """
+    model = build_seg3d_model().eval()
     points = build_points()
-    double = DataPreprocessor(preprocessor_modules=[build_preprocessor()])(
-        build_batch_inputs(
-            point_cloud=build_point_cloud_batch([points, points], timestamp_difference_dim=4)
-        ).multi_task_gt_batch,
-        is_training=True,
-    )
-    for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
+    preprocessor = DataPreprocessor(preprocessor_modules=[build_preprocessor()])
+    for second in (points, points[:0]):
+        double = preprocessor(
+            build_batch_inputs(
+                point_cloud=build_point_cloud_batch([points, second], timestamp_difference_dim=4)
+            ).multi_task_gt_batch,
+            is_training=True,
+        )
         with pytest.raises(ValueError, match="single-sample"):
-            builder(model, double)
+            model.build_export_specs(double)
 
 
 def _jitter_affine_parameters(model: nn.Module) -> None:

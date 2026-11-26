@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -206,6 +207,30 @@ def test_center_distance_ap_ignores_classes_without_ground_truth() -> None:
     )
 
 
+def test_center_distance_map_skips_configured_class_without_ground_truth() -> None:
+    """
+    Input: classes car and pedestrian, one matched car, one pedestrian prediction, no pedestrian
+        ground truth.
+    Expected: the pedestrian AP is undefined and the mean covers the car alone, as it would
+        without the pedestrian prediction.
+    Check: mAP_pedestrian is NaN and mAP is 1.
+    """
+    metric = _suite(thresholds=(0.5,), class_names=("car", "pedestrian"))
+    _update(
+        metric,
+        predictions=[_prediction([(100.0, 100.0), (0.0, 0.0)], [0.99, 0.9], [1, 0])],
+        gt_boxes=[_boxes([(0.0, 0.0)])],
+        gt_labels=[torch.tensor([0], dtype=torch.long)],
+    )
+
+    metrics = metric.result(EvalStage.VAL)
+
+    assert math.isnan(metrics.metric_value(MetricKey(name="mAP_pedestrian")))
+    assert torch.isclose(
+        torch.tensor(metrics.metric_value(MetricKey(name="mAP"))), torch.tensor(1.0)
+    )
+
+
 def test_center_distance_map_reports_class_and_range_breakdowns() -> None:
     metric = _suite(thresholds=(0.5,), class_names=("car", "pedestrian"))
     _update(
@@ -255,12 +280,12 @@ def test_eval_class_range_filters_ground_truth_only_for_total_metric() -> None:
         gt_labels=[torch.tensor([0], dtype=torch.long)],
     )
 
-    # The GT at 100 m is filtered by max_distances (car capped at 50 m), the
-    # phantom prediction remains, so AP is 0, and the monitored key is always
-    # present, never dropped.
+    # The GT at 100 m is filtered by max_distances (car capped at 50 m) and the
+    # phantom prediction remains. Without ground truth the AP is undefined, and
+    # the monitored key is always present, never dropped.
     report = metric.result(EvalStage.VAL)
-    assert report.metric_value(MetricKey(name="mAP")) == 0.0
-    assert report.metric_value(MetricKey(name="mAP_car")) == 0.0
+    assert math.isnan(report.metric_value(MetricKey(name="mAP")))
+    assert math.isnan(report.metric_value(MetricKey(name="mAP_car")))
 
 
 def test_eval_class_range_requires_class_names() -> None:

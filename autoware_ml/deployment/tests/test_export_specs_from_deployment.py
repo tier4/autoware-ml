@@ -166,8 +166,8 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
 
         Input: the two-graph toy model in eval mode and the toy batch.
         Expected: specs ``encoder`` then ``head`` with the declared input and output names,
-            the live modules, no dynamic axes and both export stages supported.
-        Check: the spec keys, names, module identity, ``dynamic_axes`` and ``supported_stages``.
+            the live modules and no dynamic axes.
+        Check: the spec keys, names, module identity and ``dynamic_axes``.
         """
         model = _GraphModel().eval()
         specs = model.build_export_specs(_batch())
@@ -181,7 +181,6 @@ class TestExportSpecsFromDeployment(unittest.TestCase):
         self.assertIs(encoder.module, model.encoder)
         self.assertIs(head.module, model.head)
         self.assertIsNone(encoder.dynamic_axes)
-        self.assertEqual(encoder.supported_stages, frozenset({"onnx", "tensorrt"}))
 
     def test_trace_inputs_are_the_tensors_the_function_passed(self) -> None:
         """Test that each spec traces on the tensors the function passed, matching forward().

@@ -143,50 +143,50 @@ class PartialDetection3DScore(Metric[PointCloudSeg3DState]):
             )
         credits: dict[int, list[float]] = {label: [] for label in self.scored_labels}
         skipped = 0
+        scored_labels = np.array(list(credits), dtype=np.int64)
         for frame in state.frames:
-            boxes = [
-                (box, int(box_label))
-                for box, box_label in zip(frame.gt_boxes, frame.gt_box_labels, strict=True)
-                if int(box_label) in credits
-            ]
-            if not boxes:
+            box_labels = np.asarray(frame.gt_box_labels)
+            scored_boxes = np.isin(box_labels, scored_labels)
+            if not scored_boxes.any():
                 continue
             valid = valid_point_mask(frame, state.num_classes, state.ignore_index)
-            coord = frame.coord[valid][:, :3].astype(np.float64)
-            pred = frame.pred[valid]
-            target = frame.target[valid]
-            if coord.shape[0] == 0:
-                skipped += len(boxes)
+            if not valid.any():
+                skipped += int(scored_boxes.sum())
                 continue
-            for box, label in boxes:
-                # Rectangular prefilter at the footprint's circumradius, then the
-                # exact yaw-aware test on the candidates only. A vectorized bound
-                # check beats building a spatial index of the whole frame for a
-                # handful of small boxes. Tiny epsilon: box is float32, the
-                # coordinates float64, so a corner point can otherwise land about
-                # 1e-7 outside the circumradius (the exact test still gates).
-                radius = float(np.linalg.norm(box[3:5])) / 2.0 * (1.0 + 1e-9)
-                center = box[:2].astype(np.float64)
-                near = (np.abs(coord[:, 0] - center[0]) <= radius) & (
-                    np.abs(coord[:, 1] - center[1]) <= radius
-                )
-                candidates = np.flatnonzero(near)
-                if candidates.shape[0]:
-                    inside = candidates[points_in_rotated_box(coord[candidates], box)]
-                else:
-                    inside = candidates
+            for label in np.unique(box_labels[scored_boxes]).tolist():
                 # Only the object's own returns are scored. A box reaches the ground,
                 # so counting every interior point would let ground returns dilute the
                 # credit, and counting every interior point predicted as the box class
                 # would let ground returns mispredicted as the object inflate it.
-                # The detection class and its segmentation class share the index.
-                inside = inside[target[inside] == label]
-                n = int(inside.shape[0])
-                if n < self.min_points:
-                    skipped += 1
-                    continue
-                correct = int(np.sum(pred[inside] == label))
-                credits[label].append(self._credit(correct, n))
+                # The detection class and its segmentation class share the index, so
+                # the points carrying the class as target are picked once per frame and
+                # every box of the class is tested against those alone, a small part
+                # of the frame.
+                own = np.flatnonzero(valid & (frame.target == label))
+                coord = frame.coord[own][:, :3].astype(np.float64)
+                correct_point = frame.pred[own] == label
+                for box in frame.gt_boxes[box_labels == label]:
+                    # Rectangular prefilter at the footprint's circumradius, then the
+                    # exact yaw-aware test on the candidates only. Tiny epsilon: box is
+                    # float32, the coordinates float64, so a corner point can otherwise
+                    # land about 1e-7 outside the circumradius (the exact test still
+                    # gates).
+                    radius = float(np.linalg.norm(box[3:5])) / 2.0 * (1.0 + 1e-9)
+                    center = box[:2].astype(np.float64)
+                    in_bounding_square = (np.abs(coord[:, 0] - center[0]) <= radius) & (
+                        np.abs(coord[:, 1] - center[1]) <= radius
+                    )
+                    candidates = np.flatnonzero(in_bounding_square)
+                    if candidates.shape[0]:
+                        inside = candidates[points_in_rotated_box(coord[candidates], box)]
+                    else:
+                        inside = candidates
+                    n = int(inside.shape[0])
+                    if n < self.min_points:
+                        skipped += 1
+                        continue
+                    correct = int(np.sum(correct_point[inside]))
+                    credits[label].append(self._credit(correct, n))
 
         report = MetricReport()
         report.record("pd_skipped_low_point_boxes", float(skipped))
