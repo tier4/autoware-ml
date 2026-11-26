@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for the masking of the ego vehicle regions."""
+"""Unit tests for the masking of the ego vehicle regions and of the boxes it hides."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ import torch
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.transforms.camera.masking import (
+    BBoxesEgoVehicleFilter,
     MaskEgoVehicle,
     database_group,
     normalize_polygon,
@@ -257,6 +258,142 @@ class TestMaskEgoVehicle(MaskEgoVehicleTestCase):
             sample
         ).camera_image_data.images
         self.assertTrue(torch.all(images[0, :, :, :3] == 0.0))
+
+
+# The middle of the image: pixels 80 to 119 of a 200 pixel wide image, 30 to 69 of 100 rows.
+CENTER = [0.4, 0.3, 0.6, 0.3, 0.6, 0.7, 0.4, 0.7]
+# The bottom fifth of the image, down to its last row.
+BOTTOM_STRIP = [0.0, 0.8, 1.0, 0.8, 1.0, 1.0, 0.0, 1.0]
+# A U open at the top: two arms (pixels 0 to 60 and 139 to 199, rows 30 to 99) joined by a band
+# along the bottom (rows 69 to 99), around a notch at pixels 60 to 139, rows 30 to 69.
+U_SHAPE = [0.0, 0.3, 0.3, 0.3, 0.3, 0.7, 0.7, 0.7, 0.7, 0.3, 1.0, 0.3, 1.0, 1.0, 0.0, 1.0]
+
+
+class TestBBoxesEgoVehicleFilter(PinholeCameraTestCase):
+    """Dropping of the boxes the ego vehicle hides from every camera that sees them.
+
+    Every camera looks along the lidar x axis with fx = fy = 100 on a 200x100 image, so a point
+    (x, y, z) in front of it lands on pixel (100 - 100 y / x, 50 - 100 z / x).
+    """
+
+    WIDTH = 200
+    HEIGHT = 100
+
+    def build_frame(
+        self,
+        rows: list[list[float]],
+        num_cameras: int = 1,
+        scene_token: str = "db_j6gen2_v1/uuid/0",
+    ) -> ModelGTSample:
+        """A frame of forward cameras CAM_0, CAM_1... and gravity-center boxes."""
+        camera_image_data = self.build_pinhole_images(
+            [self.LIDAR2CAM_FORWARD] * num_cameras, width=self.WIDTH, height=self.HEIGHT
+        )
+        return self.build_sample(camera_image_data)._replace(
+            detection3d_gt_bboxes_3d=self.build_boxes(rows, list(range(len(rows)))),
+            frame_meta=FrameMetaSample(
+                ego2global=torch.eye(4), scene_token=scene_token, timestamp=0.0
+            ),
+        )
+
+    @staticmethod
+    def kept_labels(sample: ModelGTSample) -> list[int]:
+        """Labels of the boxes left in the sample, one label per input box index."""
+        return sample.detection3d_gt_bboxes_3d.bbox_labels.tolist()
+
+    def test_drops_a_box_hidden_where_it_is_seen(self) -> None:
+        """
+        Input: one camera with a region in the middle of the image (pixels 80 to 119), a 1 m
+        box 10 m ahead that lands inside it (about pixels 95 to 105), one 3 m to the left that
+        lands beside it (about 63 to 76), one 2 m to the left that straddles its edge (about 74
+        to 86) and one behind the camera.
+        Expected: only the box inside the region is dropped. The box behind the camera is seen
+        by no camera, so it is not the ego vehicle that hides it.
+        Check: the labels of the kept boxes.
+        """
+        rows = [
+            [10.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+            [10.0, 3.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+            [10.0, 2.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+            [-10.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0],
+        ]
+        transform = BBoxesEgoVehicleFilter(polygons={"db_j6gen2": {"CAM_0": CENTER}})
+
+        self.assertEqual(self.kept_labels(transform(self.build_frame(rows))), [1, 2, 3])
+
+    def test_keeps_a_box_another_camera_sees(self) -> None:
+        """
+        Input: the box inside the region of CAM_0, and a second camera CAM_1 without a region
+        that sees the same box.
+        Expected: CAM_1 still sees the box, so it is kept.
+        Check: the labels of the kept boxes.
+        """
+        rows = [[10.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0]]
+        transform = BBoxesEgoVehicleFilter(polygons={"db_j6gen2": {"CAM_0": CENTER}})
+
+        self.assertEqual(self.kept_labels(transform(self.build_frame(rows, num_cameras=2))), [0])
+
+    def test_drops_a_box_that_leaves_the_image_inside_the_region(self) -> None:
+        """
+        Input: a region over the bottom fifth of the image, down to its last row, and a box
+        2 m ahead, 1 m below the camera, whose projection runs past the bottom of the image.
+        Expected: the extent is clipped to the last pixel row, which the region covers, so the
+        box is dropped.
+        Check: no box is kept.
+        """
+        rows = [[2.0, 0.0, -1.0, 0.4, 0.4, 0.4, 0.0]]
+        transform = BBoxesEgoVehicleFilter(polygons={"db_j6gen2": {"CAM_0": BOTTOM_STRIP}})
+
+        self.assertEqual(self.kept_labels(transform(self.build_frame(rows))), [])
+
+    def test_keeps_a_box_that_spans_the_notch_of_a_concave_region(self) -> None:
+        """
+        Input: a U-shaped region, a box 2 m ahead whose extent (about pixels 20 to 180, rows 40
+        to 60) has its four corners in the two arms and its middle in the notch, and a box whose
+        extent (about pixels 150 to 190, rows 75 to 90) lies in the right arm.
+        Expected: the corners alone would call both hidden, but the edges of the notch cross the
+        first extent, which is therefore partly visible and kept, while the second is dropped.
+        Check: the labels of the kept boxes.
+        """
+        rows = [
+            [2.0, 0.0, 0.0, 0.02, 3.2, 0.4, 0.0],
+            [2.0, -1.4, -0.65, 0.02, 0.8, 0.3, 0.0],
+        ]
+        transform = BBoxesEgoVehicleFilter(polygons={"db_j6gen2": {"CAM_0": U_SHAPE}})
+
+        self.assertEqual(self.kept_labels(transform(self.build_frame(rows))), [0])
+
+    def test_leaves_the_boxes_of_other_groups(self) -> None:
+        """
+        Input: the box inside the region of CAM_0 of db_j6gen2, in a frame of db_largebus_v1.
+        Expected: the frame has no region, so its boxes are left as they are.
+        Check: the labels of the kept boxes.
+        """
+        rows = [[10.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0]]
+        transform = BBoxesEgoVehicleFilter(polygons={"db_j6gen2": {"CAM_0": CENTER}})
+
+        sample = self.build_frame(rows, scene_token="db_largebus_v1/uuid/0")
+        self.assertEqual(self.kept_labels(transform(sample)), [0])
+
+    def test_rejects_a_camera_that_was_already_augmented(self) -> None:
+        """
+        Input: a frame whose camera with a region already carries an image augmentation.
+        Expected: the region is drawn on the raw image, so the filter raises instead of testing
+        the boxes against the wrong pixels.
+        Check: ValueError.
+        """
+        sample = self.build_frame([[10.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.0]])
+        augmentation_matrices = sample.camera_image_data.image_augmentation_matrices.clone()
+        augmentation_matrices[0, 0, 0] = 0.5
+        sample = sample._replace(
+            camera_image_data=sample.camera_image_data.model_copy(
+                update={"image_augmentation_matrices": augmentation_matrices}
+            )
+        )
+        transform = BBoxesEgoVehicleFilter(polygons={"db_j6gen2": {"CAM_0": CENTER}})
+
+        with self.assertRaises(ValueError):
+            transform(sample)
 
 
 if __name__ == "__main__":

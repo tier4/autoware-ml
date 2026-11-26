@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Masking of the image regions the ego vehicle occludes."""
+"""Masking of the image regions the ego vehicle occludes and of the boxes it hides."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ import numpy as np
 import torch
 
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
+from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.cameras.base_images import BaseImages
 from autoware_ml.transforms.base import BaseTransform
 
@@ -286,3 +287,169 @@ class MaskEgoVehicle(BaseTransform):
             camera_image_data.model_copy(update={"images": images})
         )
         return model_gt_sample._replace(camera_image_data=masked_camera_image_data)
+
+
+def _edges_cross_rectangles(
+    polygon: Float32[torch.Tensor, "num_vertices 2"],
+    low: Float32[torch.Tensor, "num_rectangles 2"],
+    high: Float32[torch.Tensor, "num_rectangles 2"],
+) -> Bool[torch.Tensor, " num_rectangles"]:
+    """Whether an edge of a polygon passes through the interior of each rectangle.
+
+    Every edge is clipped to every rectangle (Liang-Barsky); an edge crosses the interior when
+    the midpoint of its clipped part lies strictly inside the rectangle. An edge running along the
+    border of a rectangle therefore does not cross it, and an edge of zero length crosses it when
+    the vertex lies strictly inside.
+
+    Args:
+        polygon: Pixel vertices of the polygon.
+        low: Top-left corner of every rectangle, in pixels.
+        high: Bottom-right corner of every rectangle, in pixels.
+
+    Returns:
+        For every rectangle, whether some edge of the polygon crosses its interior.
+    """
+    start = polygon
+    direction = polygon.roll(-1, dims=0) - polygon
+    # (num_rectangles, num_edges) entry and exit parameters of every edge in every rectangle.
+    enter = torch.zeros(low.shape[0], polygon.shape[0])
+    leave = torch.ones(low.shape[0], polygon.shape[0])
+    inside = torch.ones(low.shape[0], polygon.shape[0], dtype=torch.bool)
+    for axis in range(2):
+        for p, q in (
+            (-direction[:, axis], start[:, axis] - low[:, axis : axis + 1]),
+            (direction[:, axis], high[:, axis : axis + 1] - start[:, axis]),
+        ):
+            p = p.expand_as(q)
+            parallel = p == 0
+            inside &= ~(parallel & (q < 0))
+            ratio = q / torch.where(parallel, torch.ones_like(p), p)
+            enter = torch.where(~parallel & (p < 0), torch.maximum(enter, ratio), enter)
+            leave = torch.where(~parallel & (p > 0), torch.minimum(leave, ratio), leave)
+    inside &= enter <= leave
+    midpoint = start + ((enter + leave) / 2).unsqueeze(-1) * direction
+    eps = 1e-3
+    strictly_inside = (
+        (midpoint > low.unsqueeze(1) + eps) & (midpoint < high.unsqueeze(1) - eps)
+    ).all(dim=-1)
+    return (inside & strictly_inside).any(dim=1)
+
+
+class BBoxesEgoVehicleFilter(BaseTransform):
+    """Drop the 3D boxes the ego vehicle hides from every camera that sees them.
+
+    A box is projected onto every camera through its corners in front of the camera, and its
+    extent is clipped to the image. A camera sees the box when the clipped extent has a non-zero
+    area, and the box is hidden in that camera when the clipped extent lies entirely in the ego
+    vehicle region of the camera, see :class:`EgoVehicleRegions`: its four corners are in the
+    region and no edge of the region's polygon crosses it, which holds for concave polygons too.
+    A box that some camera
+    sees and that every camera which sees it hides is dropped: with :class:`MaskEgoVehicle`
+    painting those regions, no pixel of the box is left for the model. A box no camera sees is
+    kept, it is not the ego vehicle that hides it.
+
+    The regions are drawn on the raw images, so the transform must run before any image-space
+    transform, like :class:`MaskEgoVehicle`, and it raises when a camera with a region already
+    carries an image augmentation. Dropping the boxes before ``LoadAnnotations2DFromBoxes3D``
+    also keeps them out of the 2D targets.
+
+    Required keys:
+        - camera_image_data: the loaded images of every camera and their calibration.
+        - detection3d_gt_bboxes_3d: the 3D ground-truth boxes, in the lidar frame.
+    """
+
+    _required_keys = ["camera_image_data", "detection3d_gt_bboxes_3d"]
+
+    def __init__(self, polygons: Mapping[str, Mapping[str, Sequence[float]]]) -> None:
+        """Initialize the BBoxesEgoVehicleFilter transform.
+
+        Args:
+            polygons: For every database group, the polygon of every camera, a flat
+                ``[x0, y0, x1, y1, ...]`` list of normalized raw-image coordinates. Pass the
+                polygons :class:`MaskEgoVehicle` paints.
+
+        Raises:
+            ValueError: If a polygon is malformed, see :func:`normalize_polygon`.
+        """
+        super().__init__(probability=None)
+        self.regions = EgoVehicleRegions(polygons)
+
+    def transform(self, model_gt_sample: ModelGTSample) -> ModelGTSample:
+        """Drop the boxes hidden by the ego vehicle in every camera that sees them.
+
+        Args:
+            model_gt_sample: Sample holding the loaded images and the 3D boxes.
+
+        Returns:
+            The sample with the hidden boxes removed, in place.
+
+        Raises:
+            ValueError: If a camera with a region already carries an image augmentation.
+        """
+        # This is checked in the _validate_required_keys()
+        bboxes: BaseBBoxes3D = (
+            model_gt_sample.detection3d_gt_bboxes_3d  # type: ignore[reportOptionalMemberAccess]
+        )
+        if not len(bboxes):
+            return model_gt_sample
+        found = self.regions.cameras_of(model_gt_sample, type(self).__name__)
+        if found is None:
+            return model_gt_sample
+        group, cameras = found
+        masked_cameras = dict(cameras)
+
+        # This is checked in the _validate_required_keys()
+        camera_image_data: BaseImages = (
+            model_gt_sample.camera_image_data  # type: ignore[reportOptionalMemberAccess]
+        )
+        height, width = camera_image_data.images.shape[-2:]
+        # Pixel centers run from 0 to size - 1, the grid the regions are rasterized on.
+        last_pixel = torch.tensor([width - 1, height - 1], dtype=torch.float32)
+        corners = bboxes.corners.to(torch.float32)
+        num_bboxes = corners.shape[0]
+        homogeneous = torch.cat([corners.reshape(-1, 3), corners.new_ones(num_bboxes * 8, 1)], 1)
+
+        seen = torch.zeros(num_bboxes, dtype=torch.bool)
+        seen_unhidden = torch.zeros(num_bboxes, dtype=torch.bool)
+        for index, lidar2image in enumerate(camera_image_data.lidar2images):
+            projected = (homogeneous @ lidar2image.to(torch.float32).T).view(num_bboxes, 8, 4)
+            in_front = projected[..., 2:3] > 0
+            pixels = projected[..., :2] / projected[..., 2:3].clamp(min=1e-6)
+            low = torch.where(in_front, pixels, torch.inf).amin(dim=1)
+            high = torch.where(in_front, pixels, -torch.inf).amax(dim=1)
+            low = torch.minimum(low.clamp(min=0.0), last_pixel)
+            high = torch.minimum(high.clamp(min=0.0), last_pixel)
+            sees = in_front.any(dim=1).squeeze(1) & (low < high).all(dim=1)
+            seen |= sees
+
+            if index not in masked_cameras:
+                seen_unhidden |= sees
+                continue
+            mask = self.regions.mask(group, masked_cameras[index], height, width)
+            # The four corners of the clipped extent, as pixel indices of the region mask.
+            rectangle = torch.stack(
+                [
+                    torch.stack([low[:, 0], low[:, 1]], dim=1),
+                    torch.stack([high[:, 0], low[:, 1]], dim=1),
+                    torch.stack([high[:, 0], high[:, 1]], dim=1),
+                    torch.stack([low[:, 0], high[:, 1]], dim=1),
+                ],
+                dim=1,
+            )
+            rectangle = rectangle.round().long()
+            hidden = mask[rectangle[..., 1], rectangle[..., 0]].all(dim=1)
+            # The corners alone do not decide a concave region, whose boundary can pass between
+            # them: such a box is still partly visible.
+            if hidden.any():
+                polygon = torch.from_numpy(
+                    polygon_to_pixels(
+                        self.regions.polygons[group][masked_cameras[index]], height, width
+                    )
+                )
+                hidden[hidden.clone()] = ~_edges_cross_rectangles(
+                    polygon, low[hidden], high[hidden]
+                )
+            seen_unhidden |= sees & ~hidden
+
+        bboxes.remove_bboxes(~seen | seen_unhidden)
+        return model_gt_sample
