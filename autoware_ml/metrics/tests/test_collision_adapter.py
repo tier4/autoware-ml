@@ -16,19 +16,22 @@
 
 from __future__ import annotations
 
+import unittest
 from math import inf
+from unittest import mock
 
 import numpy as np
 from shapely.geometry import box
 
 from autoware_ml.metrics.detection3d.collision import CollisionTTC
-from autoware_ml.metrics.geometry.reachability import ReachabilityParams
+from autoware_ml.metrics.geometry.reachability import EgoReachability, ReachabilityParams
 from autoware_ml.metrics.tests.conftest import (
     CLASS_NAMES,
     EGO,
     STUB_MAP_PATH,
     collision_box,
     serve_fake_map,
+    stubbed_lanelet_map_loader,
 )
 from autoware_ml.types.metrics import MotionModel
 
@@ -84,6 +87,68 @@ def test_adapter_class_dispatch_and_key_cases() -> None:
     assert ttc[1] != inf and ttc[1] <= 4.0  # static barrier ahead
     assert ttc[2] != inf and ttc[2] <= 4.0  # oncoming
     assert ttc[3] == inf  # far
+
+
+class TestSharedEgoFrame(unittest.TestCase):
+    """Unit tests for the ego frame that providers describing the same ego share."""
+
+    def setUp(self) -> None:
+        """Serve stub maps and count the objects the engine actually propagates."""
+        self.enterContext(stubbed_lanelet_map_loader())
+        self.propagate = self.enterContext(
+            mock.patch.object(
+                EgoReachability,
+                "_propagate",
+                autospec=True,
+                side_effect=EgoReachability._propagate,
+            )
+        )
+
+    def test_two_suites_propagate_the_boxes_of_a_frame_once(self) -> None:
+        """
+        Input: two identically configured providers, as two suites that report the same boxes
+        under different prefixes hold them, asked for the same three boxes in the same ego frame.
+        Expected: the first provider propagates each box once, the second reads the times of the
+        shared ego frame and propagates nothing.
+        Check: three propagations after both calls, and equal time arrays.
+        """
+        first, second = _adapter(), _adapter()
+        boxes = np.array(
+            [collision_box(25.0, 0.0), collision_box(30.0, 0.0), collision_box(40.0, 3.0)]
+        )
+        labels = np.array([0, 8, 5])  # car, barrier, bicycle
+
+        ttc = first.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)
+        self.assertEqual(self.propagate.call_count, 3)
+        again = second.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)
+
+        self.assertEqual(self.propagate.call_count, 3)
+        np.testing.assert_array_equal(again, ttc)
+
+    def test_a_provider_with_another_ego_shares_nothing(self) -> None:
+        """
+        Input: a barrier 30 m ahead, asked of a provider with the default ego and of one whose
+        ego is capped at 2 m/s.
+        Expected: the shared frame is keyed by everything that shapes the ego side, so the slow
+        provider propagates the box itself instead of reusing the fast provider's time.
+        Check: a time within the 4 s horizon for the fast ego, inf for the slow one, and two
+        propagations.
+        """
+        fast = _adapter()
+        slow = CollisionTTC(
+            CLASS_NAMES,
+            vehicle=EGO,
+            motion_models=MOTION_MODELS,
+            max_speeds=MAX_SPEEDS,
+            params=ReachabilityParams(horizon_s=4.0, dt_s=0.1),
+            max_speed_mps=2.0,
+        )
+        boxes = np.array([collision_box(30.0, 0.0)])
+        labels = np.array([8])  # barrier
+
+        self.assertLessEqual(fast.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)[0], 4.0)
+        self.assertEqual(slow.per_box_ttc(boxes, labels, IDENTITY, STUB_MAP_PATH)[0], inf)
+        self.assertEqual(self.propagate.call_count, 2)
 
 
 def test_adapter_empty_frame() -> None:

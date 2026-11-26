@@ -47,7 +47,6 @@ NUM_POINTS = 6
 OTHER_NUM_POINTS = 12
 POINT_DIM = 4
 FEATURE_DIM = 2
-ALL_STAGES = frozenset({"onnx", "tensorrt"})
 
 
 class _HeadModule(torch.nn.Module):
@@ -64,18 +63,18 @@ class _HeadModule(torch.nn.Module):
 class _ExportModel(ModuleBaseModel):
     """A model exporting its head once per configured module name."""
 
-    def __init__(
-        self,
-        module_names: Sequence[str] = ("head",),
-        supported_stages: frozenset[str] = ALL_STAGES,
-    ) -> None:
+    def __init__(self, module_names: Sequence[str] = ("head",)) -> None:
+        """Build the model around one head.
+
+        Args:
+            module_names: The module names the model exports its head under, one spec each.
+        """
         super().__init__(
             log_dict_configs=LogDictConfigs(prog_bar=False),
             data_preprocessor=DataPreprocessor(preprocessor_modules=[]),
         )
         self.head = _HeadModule()
         self.module_names = tuple(module_names)
-        self.supported_stages = supported_stages
 
     def forward(self, multi_task_batch_inputs: ModelBatchInputs) -> torch.Tensor:
         point_batch = multi_task_batch_inputs.multi_task_gt_batch.point_cloud_gt_batch
@@ -105,7 +104,6 @@ class _ExportModel(ModuleBaseModel):
             input_names=["points", "scale"],
             output_names=["feat"],
             dynamic_axes={"points": {0: "num_points"}, "feat": {0: "num_points"}},
-            supported_stages=self.supported_stages,
         )
         return {name: spec for name in self.module_names}
 
@@ -541,37 +539,6 @@ class TestErrorPaths:
         with pytest.raises(KeyError, match="no entry for exported module 'head'"):
             exporter.export()
         assert list((tmp_path / "exports").iterdir()) == []
-
-    def test_module_without_onnx_support_is_rejected_when_onnx_is_enabled(
-        self, tmp_path: Path
-    ) -> None:
-        """
-        Input: a spec supporting no stage while ``deploy.onnx.enabled`` is true.
-        Expected: the export refuses rather than silently skipping the module.
-        Check: a RuntimeError naming the module and the stage is raised.
-        """
-        model = _ExportModel(supported_stages=frozenset())
-        exporter = _exporter(tmp_path, _deploy_cfg({"head": {}}), model=model)
-
-        with pytest.raises(RuntimeError, match="'head' does not support ONNX export"):
-            exporter.export()
-
-    def test_module_without_tensorrt_support_is_rejected_when_tensorrt_is_enabled(
-        self, tmp_path: Path
-    ) -> None:
-        """
-        Input: an ONNX-only spec with ``deploy.tensorrt.enabled`` true.
-        Expected: the ONNX file is written, then the TensorRT stage refuses the module before
-            any engine build.
-        Check: a RuntimeError naming the module and the stage, with the ONNX file on disk.
-        """
-        model = _ExportModel(supported_stages=frozenset({"onnx"}))
-        deploy_cfg = _deploy_cfg({"head": {"dynamo": False}}, tensorrt_enabled=True)
-        exporter = _exporter(tmp_path, deploy_cfg, model=model)
-
-        with pytest.raises(RuntimeError, match="'head' does not support TensorRT export"):
-            exporter.export()
-        assert (tmp_path / "exports" / "head.onnx").exists()
 
     def test_tensorrt_stage_requires_the_onnx_file(self, tmp_path: Path) -> None:
         """

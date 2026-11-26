@@ -93,8 +93,6 @@ model:
     sync_dist: true
   segmentation3d_loss_weight: 1.0
   detection3d_loss_weight: 1.0
-  export_output_names:
-    [pred_labels, pred_probs, dense_heatmap, query_heatmap_score, query_labels, heatmap, center, height, dim, rot]
   grid_size: ${grid_size}
   point_cloud_range: ${point_cloud_range}
 

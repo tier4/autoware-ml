@@ -46,6 +46,7 @@ from autoware_ml.models.detection3d.tests.ptv3_detection3d_fixtures import (
 )
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
+    Cpe,
     Point,
     PointSequential,
     PointTransformerV3Encoder,
@@ -68,10 +69,7 @@ from autoware_ml.models.segmentation3d.heads.ptv3 import (
 from autoware_ml.models.segmentation3d.ptv3 import PTv3Segmentation3DModel
 from autoware_ml.models.segmentation3d.ptv3_base import (
     build_ptv3_encoder_dynamic_axes,
-    build_ptv3_export_context,
     export_patch_sizes,
-    prepare_ptv3_export_inputs,
-    require_single_sample_export_batch,
     validate_serialization_geometry,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
@@ -1350,24 +1348,26 @@ def test_export_attention_matches_training_on_a_non_identity_second_order(
     torch.testing.assert_close(export_feat, training_feat, atol=1e-5, rtol=1e-5)
 
 
-def test_export_input_builders_reject_a_multi_sample_batch() -> None:
-    """The graphs pad and offset one frame; a second sample fails here, not by attending across."""
-    model = build_seg3d_model().eval()
-    single = build_inputs().voxels_data
-    require_single_sample_export_batch(
-        model.build_encoder_inputs(single.voxels, single.num_points, single.batch_xyz_coords())
-    )
+def test_export_rejects_a_multi_sample_batch() -> None:
+    """Test that the export refuses a batch of more than one sample.
 
+    Input: a two-sample batch, and a two-sample batch whose second sample has no points.
+    Expected: both are refused before the graphs pad and offset them as one frame; the empty
+        sample adds no voxel, so the batch size tells it apart, not the voxels.
+    Check: a ValueError naming ``single-sample`` on each pair.
+    """
+    model = build_seg3d_model().eval()
     points = build_points()
-    double = DataPreprocessor(preprocessor_modules=[build_preprocessor()])(
-        build_batch_inputs(
-            point_cloud=build_point_cloud_batch([points, points], timestamp_difference_dim=4)
-        ).multi_task_gt_batch,
-        is_training=True,
-    )
-    for builder in (prepare_ptv3_export_inputs, build_ptv3_export_context):
+    preprocessor = DataPreprocessor(preprocessor_modules=[build_preprocessor()])
+    for second in (points, points[:0]):
+        double = preprocessor(
+            build_batch_inputs(
+                point_cloud=build_point_cloud_batch([points, second], timestamp_difference_dim=4)
+            ).multi_task_gt_batch,
+            is_training=True,
+        )
         with pytest.raises(ValueError, match="single-sample"):
-            builder(model, double)
+            model.build_export_specs(double)
 
 
 def _jitter_affine_parameters(model: nn.Module) -> None:
@@ -1386,14 +1386,14 @@ def _jitter_affine_parameters(model: nn.Module) -> None:
     not IS_SPCONV_AVAILABLE or not torch.cuda.is_available(),
     reason="PTv3 sparse-convolution export tests require CUDA spconv",
 )
-def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
+def test_export_folds_the_cpe_linear_layer_into_the_convolution(monkeypatch) -> None:
     """
     Input: a small PTv3 segmentation model with every bias and normalization set to a
-    non-trivial value, exported with and without the CPE bias fold.
+    non-trivial value, exported with and without the CPE linear fold.
     Expected: the fold changes no export output and no model parameter, and it removes the
-    bias of every CPE convolution in the encoder and the seg3d head.
+    linear layer of every CPE in the encoder and the seg3d head.
     Check: the float outputs of the encoder and seg3d head export modules match within 1e-5,
-    both export modules hold CPE blocks and none of their convolutions keeps a bias, and the
+    both export modules hold CPE blocks and none of their CPEs keeps a linear layer, and the
     model's state_dict is unchanged.
     """
     torch.manual_seed(0)
@@ -1405,7 +1405,7 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
     state = {key: value.clone() for key, value in model.state_dict().items()}
 
     folded = model.build_export_specs(batch)
-    monkeypatch.setattr(Block, "fold_cpe_bias", lambda block: None)
+    monkeypatch.setattr(Cpe, "fold_linear", lambda encoding: None)
     reference = model.build_export_specs(batch)
 
     for name in ("ptv3_encoder", "ptv3_seg3d_head"):
@@ -1421,6 +1421,7 @@ def test_export_folds_the_cpe_bias_into_the_linear_layer(monkeypatch) -> None:
             if isinstance(block, Block) and block.cpe is not None
         ]
         assert blocks, name
-        assert all(next(block.cpe.children()).bias is None for block in blocks), name
+        for block in blocks:
+            assert not any(isinstance(module, nn.Linear) for module in block.cpe.modules()), name
     for key, value in model.state_dict().items():
         assert torch.equal(value, state[key]), key

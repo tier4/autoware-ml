@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import unittest
 from math import cos, hypot, inf, isclose, pi, sin, tan
 
 import numpy as np
@@ -24,13 +25,15 @@ import shapely
 from shapely.geometry import Point, Polygon, box
 
 from autoware_ml.metrics.geometry.reachability import (
+    SURFACE_TOLERANCE_M,
     Agent,
     EgoReachability,
     ReachabilityParams,
     VehicleGeometry,
+    WheeledReach,
     collision_weights,
+    localized_surface,
     reachable_set,
-    time_to_collision,
     wheeled_reachable_region,
     wheeled_reachable_set,
 )
@@ -41,6 +44,16 @@ PARAMS = ReachabilityParams(horizon_s=4.0, dt_s=0.1)
 ROAD = box(-80.0, -50.0, 500.0, 50.0)
 # A single 6 m lane, so most arcs leave the surface and are truncated.
 LANE = box(-80.0, -3.0, 500.0, 3.0)
+# Two lanes split by a median, a side street and a separate block, so arcs are cut at edges,
+# bodies overhang gaps and parts of a sweep land on a surface the agent cannot drive to.
+STREETS = shapely.union_all(
+    [
+        box(-80.0, -4.0, 200.0, 0.0),
+        box(-80.0, 0.5, 200.0, 4.5),
+        box(30.0, -40.0, 37.0, 40.0),
+        box(60.0, 8.0, 90.0, 30.0),
+    ]
+)
 # A bus measured at its rear axle, and a centred passenger car box.
 BUS = {"front": 5.71, "rear": 1.53, "width": 2.29, "min_turn_radius": 6.4}
 CAR = {"front": 2.4, "rear": 2.4, "width": 2.0, "min_turn_radius": 3.0}
@@ -79,7 +92,7 @@ def test_same_speed_lead_still_collides_in_the_worst_case() -> None:
     lead = Agent.wheeled(
         25.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2.4, min_turn_radius=3.0
     )
-    ttc = time_to_collision(ego, lead, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(lead)
     # The 20.2 m between the two bodies close at 20 m/s in 1.01 s, and the corners
     # of the slightly turning bodies swing out enough to take the last 0.2 m.
     assert 1.0 <= ttc <= 1.1
@@ -90,7 +103,7 @@ def test_a_stationary_object_ahead_collides_at_about_distance_over_speed() -> No
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     obj = Agent.static(30.0, 0.0, footprint=_footprint(30.0, 0.0))
-    ttc = time_to_collision(ego, obj, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj)
     assert ttc != inf
     assert 2.4 <= ttc <= 3.1  # ~ (30 - body - half-footprint) / 10
 
@@ -102,7 +115,7 @@ def test_oncoming_closes_at_combined_speed() -> None:
     obj = Agent.wheeled(
         40.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    ttc = time_to_collision(ego, obj, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj)
     assert ttc != inf
     assert 1.7 <= ttc <= 2.1  # ~ 40 / (10 + 10)
 
@@ -116,7 +129,7 @@ def test_oncoming_beyond_ego_reach_still_collides() -> None:
     obj = Agent.wheeled(
         50.0, 0.0, heading=pi, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    ttc = time_to_collision(ego, obj, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj)
     assert 2.1 <= ttc <= 2.4  # ~ (50 - 2 * 3.4 body reach) / 20
 
 
@@ -125,7 +138,7 @@ def test_crossing_omnidirectional_agent_is_finite_within_horizon() -> None:
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     ped = Agent.omnidirectional(18.0, 6.0, speed=4.0, radius=0.4)
-    ttc = time_to_collision(ego, ped, ROAD, PARAMS)
+    ttc = EgoReachability(ego, ROAD, PARAMS).time_to_collision(ped)
     assert ttc != inf and ttc <= PARAMS.horizon_s
 
 
@@ -134,7 +147,7 @@ def test_a_far_object_is_unreachable_within_the_horizon() -> None:
         0.0, 0.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
     obj = Agent.static(200.0, 0.0, footprint=_footprint(200.0, 0.0))
-    assert time_to_collision(ego, obj, ROAD, PARAMS) == inf
+    assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(obj) == inf
 
 
 def test_a_wheeled_set_needs_a_drivable_surface() -> None:
@@ -143,7 +156,7 @@ def test_a_wheeled_set_needs_a_drivable_surface() -> None:
     )
     obj = Agent.static(20.0, 0.0, footprint=_footprint(20.0, 0.0))
     with pytest.raises(ValueError, match="drivable"):
-        time_to_collision(ego, obj, None, PARAMS)
+        EgoReachability(ego, None, PARAMS).time_to_collision(obj)
 
 
 def test_disconnected_road_is_unreachable() -> None:
@@ -157,11 +170,11 @@ def test_disconnected_road_is_unreachable() -> None:
     oncoming_across = Agent.wheeled(
         5.0, 30.0, heading=-pi / 2, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    assert time_to_collision(ego, oncoming_across, split_road, PARAMS) == inf
+    assert EgoReachability(ego, split_road, PARAMS).time_to_collision(oncoming_across) == inf
     off_road = Agent.wheeled(
         0.0, 60.0, heading=0.0, speed=10.0, front=2.4, rear=2.4, width=2, min_turn_radius=3.0
     )
-    assert time_to_collision(ego, off_road, ROAD, PARAMS) == inf
+    assert EgoReachability(ego, ROAD, PARAMS).time_to_collision(off_road) == inf
     # The filled reachable region keeps only the strip the agent is on.
     region = wheeled_reachable_region(ego, PARAMS, split_road)
     assert region.intersection(box(-80.0, 20.0, 200.0, 40.0)).is_empty
@@ -182,7 +195,12 @@ def test_steps_stay_within_horizon() -> None:
     assert EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=3.0, dt_s=0.1)).steps == 30
     # A meeting first reachable at 1.1 s lies beyond the 1.0 s horizon, so it stays inf.
     walker = Agent.omnidirectional(7.6, 0.0, speed=5.0, radius=0.5)
-    assert time_to_collision(ego, walker, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)) == inf
+    assert (
+        EgoReachability(ego, ROAD, ReachabilityParams(horizon_s=1.0, dt_s=0.6)).time_to_collision(
+            walker
+        )
+        == inf
+    )
 
 
 def test_collision_weights_monotone_and_bounds() -> None:
@@ -205,45 +223,126 @@ def test_low_speed_region_stays_valid_past_pi_sweep() -> None:
 
 
 @pytest.mark.parametrize(
-    ("speed", "body", "objects"),
-    [(13.9, CAR, 60), (10.0, BUS, 24), (3.0, BUS, 24)],
-    ids=["car", "bus", "bus-at-the-radius-floor"],
+    ("speed", "body", "objects", "surface", "pose"),
+    [
+        (13.9, CAR, 60, ROAD, (0.0, 0.0, 0.0)),
+        (10.0, BUS, 24, ROAD, (0.0, 0.0, 0.0)),
+        (3.0, BUS, 24, ROAD, (0.0, 0.0, 0.0)),
+        (13.9, CAR, 24, STREETS, (10.0, -2.0, 0.0)),
+        (8.0, BUS, 24, STREETS, (33.5, -20.0, pi / 2)),
+    ],
+    ids=["car", "bus", "bus-at-the-radius-floor", "car-by-a-median", "bus-on-a-side-street"],
 )
 def test_ego_reachability_matches_brute_force_stepping(
-    speed: float, body: dict, objects: int
+    speed: float, body: dict, objects: int, surface, pose: tuple[float, float, float]
 ) -> None:
     # The prescreen bounds are supersets of the true sets, so the optimized
     # engine must return exactly what naive stepping over every t returns. The
     # bus and the low speed are the cases where the shorter arcs used to poke out
-    # of the horizon region.
+    # of the horizon region; the cut streets are where arcs end at a median, a
+    # side street or a gap. The reference steps on the surface the engine uses,
+    # localized to each agent and sealed against hairline seams.
     steps = int(PARAMS.horizon_s / PARAMS.dt_s + 1e-9)
-    ego = Agent.wheeled(0.0, 0.0, heading=0.0, speed=speed, **body)
+    ego = Agent.wheeled(pose[0], pose[1], heading=pose[2], speed=speed, **body)
+
+    def sealed(agent: Agent):
+        return localized_surface(agent, PARAMS, surface).buffer(SURFACE_TOLERANCE_M)
+
+    ego_surface = sealed(ego)
     ego_sets = [
-        reachable_set(ego, index * PARAMS.dt_s, PARAMS, ROAD) for index in range(1, steps + 1)
+        reachable_set(ego, index * PARAMS.dt_s, PARAMS, ego_surface)
+        for index in range(1, steps + 1)
     ]
 
     def brute_force(obj: Agent) -> float:
+        obj_surface = sealed(obj) if obj.motion_model == MotionModel.WHEELED else None
         for index, ego_set in enumerate(ego_sets, 1):
             t = index * PARAMS.dt_s
-            obj_set = reachable_set(obj, t, PARAMS, ROAD)
+            obj_set = reachable_set(obj, t, PARAMS, obj_surface)
             if not ego_set.is_empty and not obj_set.is_empty and ego_set.intersects(obj_set):
                 return t
         return inf
 
     rng = np.random.default_rng(7)
-    frame = EgoReachability(ego, ROAD, PARAMS)
+    frame = EgoReachability(ego, surface, PARAMS)
+    finite = 0
     for index in range(objects):
         if index % 3 == 0:
             # Objects within a body radius of ego are the ones the prescreen
             # must never discard, so a third of the samples sit right there.
-            x, y = float(rng.uniform(-2.0, 2.0)), float(rng.uniform(-2.0, 2.0))
+            x = pose[0] + float(rng.uniform(-2.0, 2.0))
+            y = pose[1] + float(rng.uniform(-2.0, 2.0))
         else:
             x, y = float(rng.uniform(-30, 130)), float(rng.uniform(-45, 45))
         motion_model = (MotionModel.WHEELED, MotionModel.OMNIDIRECTIONAL, MotionModel.STATIC)[
             index % 3
         ]
         obj = _sampled_agent(motion_model, x, y, rng)
-        assert frame.time_to_collision(obj) == brute_force(obj), f"agent {index}: {obj}"
+        ttc = frame.time_to_collision(obj)
+        assert ttc == brute_force(obj), f"agent {index}: {obj}"
+        finite += ttc != inf
+    # A sample where nothing collides would pass without testing the stepping at all.
+    assert finite > 0
+
+
+_STEPS = int(PARAMS.horizon_s / PARAMS.dt_s + 1e-9)
+
+
+class TestWheeledReach(unittest.TestCase):
+    """Unit tests for the wheeled arcs traced once to the horizon."""
+
+    # (name, speed, body, surface, x, y, heading)
+    CASES = (
+        ("narrow-lane", 10.0, BUS, LANE, 0.0, 0.0, 0.3),
+        ("bus-by-median", 3.0, BUS, STREETS, 10.0, -2.0, 0.0),
+        ("oncoming", 13.9, CAR, STREETS, 20.0, 2.5, pi),
+        ("side-street", 8.0, CAR, STREETS, 33.5, 20.0, -pi / 2),
+        ("crawling", 0.005, CAR, STREETS, 10.0, -2.0, 0.0),
+        ("off", 10.0, CAR, STREETS, 10.0, 60.0, 0.0),
+    )
+
+    def test_arcs_traced_once_give_the_set_of_every_step(self) -> None:
+        """
+        Input: wheeled agents in a narrow lane, by a median, oncoming, on a side street, crawling
+        and off the surface, with their arcs traced once to the horizon.
+        Expected: the set read for each step is the set traced for that step alone, vertex for
+        vertex; a set that differed could move a collision time by a step.
+        Check: exact equality with zero tolerance at every step of every case.
+        """
+        for name, speed, body, surface, x, y, heading in self.CASES:
+            with self.subTest(case=name):
+                agent = Agent.wheeled(x, y, heading=heading, speed=speed, **body)
+                reach = WheeledReach(agent, PARAMS, surface)
+
+                for step in range(_STEPS + 1):
+                    expected = wheeled_reachable_set(agent, step * PARAMS.dt_s, PARAMS, surface)
+                    self.assertTrue(
+                        reach.reachable_set(step).equals_exact(expected, 0.0),
+                        f"step {step} differs",
+                    )
+
+    def test_meeting_a_geometry_is_decided_as_on_the_built_set(self) -> None:
+        """
+        Input: a car on the cut surface and 61 square probes, 60 scattered over the surface and
+        one on the start pose.
+        Expected: at every step ``meets`` answers as an overlap test against the built set
+        would, also for arcs that touch a probe with one body only and arcs cut at an edge.
+        Check: ``meets`` against ``intersects`` on the built set, for every step and probe.
+        """
+        agent = Agent.wheeled(10.0, -2.0, heading=0.2, speed=9.0, **CAR)
+        reach = WheeledReach(agent, PARAMS, STREETS)
+        rng = np.random.default_rng(3)
+        probes = [
+            _footprint(float(rng.uniform(-30.0, 60.0)), float(rng.uniform(-12.0, 12.0)), size=1.5)
+            for _ in range(60)
+        ] + [_footprint(10.0, -2.0, size=0.5)]
+
+        for step in range(_STEPS + 1):
+            built = reach.reachable_set(step)
+            for probe in probes:
+                self.assertEqual(
+                    reach.meets(step, probe), probe.intersects(built), f"step {step}: {probe}"
+                )
 
 
 @pytest.mark.parametrize(
@@ -366,7 +465,7 @@ def test_a_one_lane_bend_is_not_overly_pessimistic() -> None:
         0.0, -30.0, heading=pi / 2, speed=10.0, front=2.4, rear=2.4, width=2.0, min_turn_radius=3.0
     )
 
-    ttc = time_to_collision(ego, crossing, junction, PARAMS)
+    ttc = EgoReachability(ego, junction, PARAMS).time_to_collision(crossing)
 
     # Both need about (30 - 3.4 body reach) / 10 seconds to reach the corner.
     assert 2.4 <= ttc <= 3.0

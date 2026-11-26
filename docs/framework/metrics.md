@@ -436,7 +436,8 @@ region construction (one shared ego agent, the same clipped area) with a time ru
 top. Configured on the suite as the `CollisionTTC` provider, it computes a time to collision
 (TTC) per detection box once per frame at update time, from the ego pose, the class-specific
 collision sets, and the scene's lanelet map. The metrics that declare `needs_ttc` read the
-stored TTC at compute time.
+stored TTC at compute time. Providers that describe the same ego share the propagation of a
+frame, so a suite that reports the same boxes under another prefix does not propagate them again.
 
 The model answers one question: if ego never sees this object, what is the worst that can
 follow? Every agent moves at its class maximum speed under its tightest turn, forward or in
