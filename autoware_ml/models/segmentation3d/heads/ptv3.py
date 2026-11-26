@@ -48,6 +48,11 @@ from autoware_ml.models.segmentation3d.encoders.ptv3 import (
 from autoware_ml.utils.point_cloud.structures import Point
 
 
+def decoder_cpe_indice_key(stage_index: int) -> str:
+    """Return the indice key of a decoder stage's positional-encoding convolutions."""
+    return f"dec_stage{stage_index}"
+
+
 class PTv3Seg3DDecoderHead(nn.Module):
     """Decode PTv3 encoder stages into point-wise segmentation logits.
 
@@ -169,7 +174,7 @@ class PTv3Seg3DDecoderHead(nn.Module):
                         # The decoder must not share indice caches with the
                         # encoder: a frozen (eval) encoder caches pairs without
                         # backward metadata, and spconv reuses them by key.
-                        cpe_indice_key=f"dec_stage{stage_index}",
+                        cpe_indice_key=decoder_cpe_indice_key(stage_index),
                         enable_rpe=enable_rpe,
                         enable_flash=enable_flash,
                         upcast_attention=upcast_attention,
@@ -237,6 +242,18 @@ class PTv3Seg3DDecoderHead(nn.Module):
         """
         self.order = list(order)
         set_block_serialization_order(self.dec, len(self.order))
+
+    def subm_pair_keys(self) -> dict[int, str]:
+        """Return the indice key of each stage's 3x3x3 submanifold convolutions.
+
+        Returns:
+            The key of every stage whose decoder blocks convolve.
+        """
+        return {
+            stage: decoder_cpe_indice_key(stage)
+            for stage, depth in enumerate(self.dec_depths)
+            if depth > 0 and self.dec_conv[stage]
+        }
 
     def prepare_for_export(self, order: Sequence[str]) -> PTv3Seg3DDecoderHead:
         """Return an isolated head copy configured for ONNX export.

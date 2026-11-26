@@ -239,6 +239,13 @@ The split export produces one graph per `deploy.onnx.modules` entry:
   `patch_order`, `serialized_inverse` and `grid_coord`). The rule is implemented once in
   `seg3d_head_export_input_names` and must be mirrored by deployment consumers
   from the artifact's `dec_depths`.
+- With the model option `export_subm_pairs`, the encoder also outputs the 3x3x3
+  submanifold index pairs of every stage whose decoder blocks convolve, as
+  `subm_pairs_i`, `subm_pair_mask_i` and `subm_mask_argsort_i`, and
+  `seg3d_head` takes them as its last inputs instead of building them. Their
+  layout belongs to the sparse-conv backend, so the encoder and the head must
+  run on the same one. Such a head no longer reads the grid coordinates of
+  those stages unless its attention encodes positions, so the ONNX drops them.
 - `det3d_head` - consumes `point_feat_{S-2}`, `point_feat_{S-1}`,
   `pooling_cluster_{S-2}`, and `point_grid_coord_{S-2}` and outputs the
   detection head tensors.

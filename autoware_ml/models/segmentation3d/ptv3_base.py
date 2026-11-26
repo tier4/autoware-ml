@@ -16,13 +16,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import fields
 from typing import Any
 
 import torch
 import torch.nn as nn
 from jaxtyping import Float32, Int32, Int64
+from spconv.core import ConvAlgo
+from spconv.pytorch.core import ImplicitGemmIndiceData
 from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
@@ -73,6 +75,9 @@ SEG3D_HEAD_GRAPH = "ptv3_seg3d_head"
 DET3D_HEAD_GRAPH = "ptv3_det3d_head"
 #: Per-voxel argmax labels and softmax scores.
 SEG3D_HEAD_OUTPUT_NAMES = ("pred_labels", "pred_probs")
+#: Index pairs of a 3x3x3 submanifold convolution: the pair table, the neighbour mask of every
+#: voxel and the order that sorts the masks. Their layout belongs to the sparse-conv backend.
+SUBM_PAIR_FIELDS = ("subm_pairs", "subm_pair_mask", "subm_mask_argsort")
 
 
 def validate_serialization_geometry(
@@ -139,6 +144,7 @@ class PTv3BaseModel(ModuleBaseModel):
         point_cloud_range: Sequence[float] | None,
         log_dict_configs: LogDictConfigs,
         freeze_encoder: bool = False,
+        export_subm_pairs: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the PTv3 base model.
@@ -153,6 +159,9 @@ class PTv3BaseModel(ModuleBaseModel):
             log_dict_configs: Logging configuration for training and validation.
             freeze_encoder: When ``True``, the encoder is permanently kept
                 in eval mode with its parameters frozen.
+            export_subm_pairs: When ``True``, the encoder graph outputs the 3x3x3
+                submanifold index pairs the segmentation head graph convolves with,
+                so the head does not build them again.
             **kwargs: Keyword arguments forwarded to :class:`ModuleBaseModel` (and
                 further up the MRO chain).
         """
@@ -170,6 +179,7 @@ class PTv3BaseModel(ModuleBaseModel):
         )
         if self.grid_size is not None and self.point_cloud_range is not None:
             validate_serialization_geometry(encoder, self.grid_size, self.point_cloud_range)
+        self.export_subm_pairs = bool(export_subm_pairs)
         self.freeze_encoder = bool(freeze_encoder)
         if self.freeze_encoder:
             self.encoder.requires_grad_(False)
@@ -521,6 +531,83 @@ def build_pooling_cluster_dynamic_axes(stage_count: int) -> dict[str, dict[int, 
     }
 
 
+def subm_pair_names(stages: Iterable[int]) -> list[str]:
+    """Return the names of the submanifold index pairs of the given stages, stage by stage."""
+    return [f"{field}_{stage}" for stage in stages for field in SUBM_PAIR_FIELDS]
+
+
+def build_subm_pair_dynamic_axes(stages: Iterable[int]) -> dict[str, dict[int, str]]:
+    """Build dynamic axes for the submanifold index pairs of the given stages.
+
+    Both axes of the pair table are dynamic, since the backends pad it differently.
+    """
+    dynamic_axes: dict[str, dict[int, str]] = {}
+    for stage in stages:
+        pairs, mask, mask_argsort = subm_pair_names([stage])
+        dynamic_axes[pairs] = {0: f"{pairs}_rows", 1: f"{pairs}_cols"}
+        dynamic_axes[mask] = {0: stage_voxel_axis_name(stage)}
+        dynamic_axes[mask_argsort] = {0: stage_voxel_axis_name(stage)}
+    return dynamic_axes
+
+
+def encoder_subm_pairs(stage_point: Point, stage_index: int) -> tuple[torch.Tensor, ...]:
+    """Return the index pairs the encoder's 3x3x3 submanifold convolutions built on one stage.
+
+    Args:
+        stage_point: The encoder's output point of the stage.
+        stage_index: Index of the stage.
+
+    Returns:
+        The pair table, the neighbour masks and their sort order.
+
+    Raises:
+        ValueError: If the encoder builds no 3x3x3 submanifold pairs on the stage.
+    """
+    data = None
+    if "sparse_conv_feat" in stage_point:
+        data = stage_point.sparse_conv_feat.find_indice_pair(f"stage{stage_index}")
+    if data is None or not data.is_subm or list(data.ksize) != [3, 3, 3]:
+        raise ValueError(f"The encoder builds no 3x3x3 submanifold pairs on stage {stage_index}.")
+    return data.pair_fwd, data.pair_mask_fwd_splits, data.mask_argsort_fwd_splits
+
+
+def seed_subm_pairs(
+    deepest: Point,
+    indice_keys: Mapping[int, str],
+    pairs: Mapping[int, Sequence[torch.Tensor]],
+) -> None:
+    """Cache index pairs under the head's indice keys, so its convolutions reuse them.
+
+    Args:
+        deepest: Deepest point of the linked stage chain.
+        indice_keys: Indice key of the 3x3x3 submanifold convolutions of each stage.
+        pairs: The pair table, the neighbour masks and their sort order of each stage.
+    """
+    stages = collect_encoder_stage_points(deepest)
+    for stage, (pair_fwd, pair_mask, mask_argsort) in pairs.items():
+        sparse = stages[stage].sparse_conv_feat
+        sparse.indice_dict[indice_keys[stage]] = ImplicitGemmIndiceData(
+            sparse.indices,
+            sparse.indices,
+            pair_fwd,
+            None,
+            pair_mask,
+            None,
+            mask_argsort,
+            mask_argsort_bwd_splits=None,
+            masks=[None],
+            is_subm=True,
+            spatial_shape=sparse.spatial_shape,
+            out_spatial_shape=sparse.spatial_shape,
+            algo=ConvAlgo.MaskImplicitGemm,
+            ksize=[3, 3, 3],
+            stride=[1, 1, 1],
+            padding=[1, 1, 1],
+            dilation=[1, 1, 1],
+            out_voxel_num=sparse.indices.shape[0],
+        )
+
+
 def build_point_feature_dynamic_axes(tensor_names: Sequence[str]) -> dict[str, dict[int, str]]:
     """Build dynamic axes for tensors indexed by the decoded point/voxel count."""
     return {tensor_name: {0: "num_voxels"} for tensor_name in tensor_names}
@@ -591,6 +678,7 @@ class PTv3EncoderExportModule(nn.Module):
         serialization_orders: Sequence[str],
         sparse_shape: Int64[torch.Tensor, " 3"],
         serialized_depth: Int64[torch.Tensor, ""],
+        subm_pair_stages: Sequence[int] = (),
     ) -> None:
         """Initialize the encoder export module.
 
@@ -600,9 +688,12 @@ class PTv3EncoderExportModule(nn.Module):
             serialization_orders: Space-filling curves the export serializes the voxels along.
             sparse_shape: Static sparse shape baked at export time.
             serialized_depth: Serialization depth baked at export time.
+            subm_pair_stages: Stages whose 3x3x3 submanifold index pairs the graph also outputs,
+                for a head to reuse.
         """
         super().__init__()
         self.encoder = encoder.prepare_for_export(serialization_orders)
+        self.subm_pair_stages = tuple(subm_pair_stages)
         self.voxel_encoder = voxel_encoder
         self.register_buffer("_sparse_shape", sparse_shape.to(dtype=torch.long), persistent=False)
         self.register_buffer("_serialized_depth", serialized_depth, persistent=False)
@@ -615,7 +706,7 @@ class PTv3EncoderExportModule(nn.Module):
         patch_order: Int64[torch.Tensor, "num_orders padded_voxels"],
         serialized_inverse: Int64[torch.Tensor, "num_orders num_voxels"],
         *serialized_pooling_inputs: GraphTensor,
-    ) -> tuple[Float32[torch.Tensor, "stage_voxels stage_channels"], ...]:
+    ) -> tuple[torch.Tensor, ...]:
         """Run the encoder on serialized voxels and return the per-stage features.
 
         Args:
@@ -628,7 +719,8 @@ class PTv3EncoderExportModule(nn.Module):
                 stage by stage.
 
         Returns:
-            The point features of every stage, finest to deepest.
+            The point features of every stage, finest to deepest, then the index pairs of every
+            stage in ``subm_pair_stages``.
         """
         feat = self.voxel_encoder(voxels, num_points_per_voxel)
         point = self.encoder.export_forward(
@@ -646,7 +738,13 @@ class PTv3EncoderExportModule(nn.Module):
                 "sparse_shape": self._sparse_shape,
             }
         )
-        return tuple(stage.feat for stage in collect_encoder_stage_points(point))
+        stages = collect_encoder_stage_points(point)
+        pairs = [
+            tensor
+            for stage in self.subm_pair_stages
+            for tensor in encoder_subm_pairs(stages[stage], stage)
+        ]
+        return (*(stage.feat for stage in stages), *pairs)
 
     def build_deployment_graph(self) -> DeploymentGraph:
         """Declare this module as the ``ptv3_encoder`` graph.
@@ -657,12 +755,17 @@ class PTv3EncoderExportModule(nn.Module):
         num_pooling_stages = len(self.encoder.stride)
         stage_count = num_pooling_stages + 1
         input_names = encoder_graph_input_names(num_pooling_stages)
+        dynamic_axes = build_ptv3_encoder_dynamic_axes(input_names, stage_count)
+        dynamic_axes.update(build_subm_pair_dynamic_axes(self.subm_pair_stages))
         return DeploymentGraph(
             ENCODER_GRAPH,
             module=self,
             input_names=input_names,
-            output_names=tuple(stage_feature_names(stage_count)),
-            onnx_dynamic_axes=build_ptv3_encoder_dynamic_axes(input_names, stage_count),
+            output_names=(
+                *stage_feature_names(stage_count),
+                *subm_pair_names(self.subm_pair_stages),
+            ),
+            onnx_dynamic_axes=dynamic_axes,
         )
 
 
@@ -763,6 +866,7 @@ class PTv3Seg3DHeadExportModule(nn.Module):
         serialization_orders: Sequence[str],
         sparse_shape: torch.Tensor,
         strides: Sequence[int],
+        reuse_subm_pairs: bool = False,
     ) -> None:
         """Initialize the segmentation head export module.
 
@@ -773,9 +877,12 @@ class PTv3Seg3DHeadExportModule(nn.Module):
                 block stages use it pooled by their cumulative pooling depth
                 (rounded up, see :func:`pooled_sparse_shape`).
             strides: Encoder pooling strides (one per pooling stage).
+            reuse_subm_pairs: Whether the graph takes the 3x3x3 submanifold index pairs of its
+                convolutions as inputs instead of building them.
         """
         super().__init__()
         self.seg3d_head = seg3d_head.prepare_for_export(serialization_orders)
+        self.subm_pair_keys = self.seg3d_head.subm_pair_keys() if reuse_subm_pairs else {}
         self.stage_count = len(strides) + 1
         self.dec_depths = list(self.seg3d_head.dec_depths)
         cumulative_depth = 0
@@ -797,7 +904,8 @@ class PTv3Seg3DHeadExportModule(nn.Module):
             tensors: ``stage_count`` per-stage feature tensors, then
                 ``stage_count - 1`` pooling cluster tensors, then the
                 per-block-stage serialization tensors in the order defined by
-                :func:`seg3d_head_export_input_names`.
+                :func:`seg3d_head_export_input_names`, then the index pairs of
+                every stage in ``subm_pair_keys``.
         """
         stage_feats = tensors[: self.stage_count]
         clusters = tensors[self.stage_count : 2 * self.stage_count - 1]
@@ -815,8 +923,11 @@ class PTv3Seg3DHeadExportModule(nn.Module):
                 grid_coord,
                 getattr(self, f"_sparse_shape_{stage}"),
             )
+        pairs = {stage: [extras.pop(0) for _ in SUBM_PAIR_FIELDS] for stage in self.subm_pair_keys}
 
-        logits = self.seg3d_head(link_stage_points(stage_feats, clusters, block_stage_metadata))
+        point = link_stage_points(stage_feats, clusters, block_stage_metadata)
+        seed_subm_pairs(point, self.subm_pair_keys, pairs)
+        logits = self.seg3d_head(point)
         probs = torch.softmax(logits, dim=1)
         return probs.argmax(dim=1), probs
 
@@ -827,11 +938,15 @@ class PTv3Seg3DHeadExportModule(nn.Module):
             The graph from the per-stage features to ``pred_labels`` and ``pred_probs``.
         """
         dynamic_axes = build_seg3d_head_input_dynamic_axes(self.stage_count, self.dec_depths)
+        dynamic_axes.update(build_subm_pair_dynamic_axes(self.subm_pair_keys))
         dynamic_axes.update(build_point_feature_dynamic_axes(SEG3D_HEAD_OUTPUT_NAMES))
         return DeploymentGraph(
             SEG3D_HEAD_GRAPH,
             module=self,
-            input_names=tuple(seg3d_head_export_input_names(self.stage_count, self.dec_depths)),
+            input_names=(
+                *seg3d_head_export_input_names(self.stage_count, self.dec_depths),
+                *subm_pair_names(self.subm_pair_keys),
+            ),
             output_names=SEG3D_HEAD_OUTPUT_NAMES,
             onnx_dynamic_axes=dynamic_axes,
         )

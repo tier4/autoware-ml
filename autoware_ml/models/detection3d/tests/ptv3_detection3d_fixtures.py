@@ -139,6 +139,7 @@ def build_seg3d_model(
     point_cloud_range: Sequence[float] = POINT_CLOUD_RANGE,
     voxel_encoder_type: type[VoxelFeatureEncoder] = SweepSplitVoxelFeatureEncoder,
     patch_sizes: Sequence[int] = (4, 4),
+    export_subm_pairs: bool = False,
 ) -> PTv3Segmentation3DModel:
     """Return a small PTv3 segmentation model for tests.
 
@@ -146,6 +147,7 @@ def build_seg3d_model(
         point_cloud_range: Range the export geometry is derived from.
         voxel_encoder_type: Voxel feature encoder feeding the embedding stem.
         patch_sizes: Attention window of every level, the input level first.
+        export_subm_pairs: Whether the export hands the encoder's index pairs to the head.
 
     Returns:
         The segmentation model on the CPU.
@@ -159,6 +161,7 @@ def build_seg3d_model(
         optimizer=lambda params: torch.optim.AdamW(params, lr=1e-3),
         grid_size=1.0,
         point_cloud_range=list(point_cloud_range),
+        export_subm_pairs=export_subm_pairs,
     )
 
 
