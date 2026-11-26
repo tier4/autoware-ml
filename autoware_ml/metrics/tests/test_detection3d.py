@@ -644,7 +644,16 @@ class TestGtKeepMask(unittest.TestCase):
         return keep
 
     def test_distance_caps_match_the_box_by_box_rule(self) -> None:
-        """Test that the caps drop exactly the boxes a box-by-box check drops."""
+        """Test that the caps drop exactly the boxes a box-by-box check drops.
+
+        Input: 0, 1, 7 and 400 boxes with x and y drawn from -120 to 120 m, labels from -1
+        to 5 over four classes, caps for car and truck, a ``None`` cap for pedestrian, and a
+        cap for bicycle, which is not in the class list.
+        Expected: the mask equals ``_box_by_box``, which skips labels outside the class list
+        and classes without a cap.
+        Check: the mask's dtype and values for every box count, and that the boxes drawn
+        include both kept and dropped ones.
+        """
         generator = torch.Generator().manual_seed(0)
         # A cap per class but one, one class with an explicit ``None``, and labels on
         # both sides of the class list, which no cap applies to.
@@ -665,8 +674,11 @@ class TestGtKeepMask(unittest.TestCase):
     def test_distance_cap_is_not_rounded_to_float32(self) -> None:
         """Test that a box is compared with the cap itself, not its float32 rounding.
 
-        float32 rounds 50.2 up, so a box at that rounded distance lies beyond the cap
-        and is dropped, while the next float32 below it is kept.
+        Input: two car boxes with a 50.2 m cap, one at 50.2 stored as float32, which rounds
+        it up to just beyond the cap, and one at the next float32 below that.
+        Expected: the first box is dropped and the second kept, as a float64 comparison
+        decides. A float32 comparison would keep both.
+        Check: the rounding goes the stated way, and the mask is [False, True].
         """
         beyond = torch.tensor(50.2, dtype=torch.float32)
         within = torch.nextafter(beyond, torch.tensor(0.0))
@@ -684,7 +696,13 @@ class TestGtKeepMask(unittest.TestCase):
         self.assertEqual(keep.tolist(), [False, True])
 
     def test_distance_caps_combine_with_the_point_count(self) -> None:
-        """Test that a box has to pass both its class's cap and the point count."""
+        """Test that a box has to pass both its class's cap and the point count.
+
+        Input: four car boxes, at 10 m and 60 m with 5 and with 1 point each, a 50 m cap
+        and a minimum of 2 points.
+        Expected: only the box within the cap and with enough points is kept.
+        Check: the mask is [True, False, False, False].
+        """
         gt_boxes = torch.zeros((4, 7), dtype=torch.float32)
         gt_boxes[:, 0] = torch.tensor([10.0, 10.0, 60.0, 60.0])
         gt_labels = torch.zeros(4, dtype=torch.long)

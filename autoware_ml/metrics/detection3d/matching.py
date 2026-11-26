@@ -137,7 +137,8 @@ def gt_keep_mask(
         distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
         # One cap per class, read for all boxes at once. A class without a cap, and a
         # label outside the class list, gets an infinite one. The comparison runs in
-        # float64 so a cap that float32 cannot hold exactly (50.1) is not rounded.
+        # float64, so a cap that float32 rounds up (50.2 to 50.2000008) does not keep a
+        # box just beyond it.
         caps = [max_distances.get(name) for name in class_names]
         class_caps = torch.tensor(
             [inf if cap is None else float(cap) for cap in caps] + [inf],
