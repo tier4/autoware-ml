@@ -35,6 +35,13 @@ filter_attributes:
   - [motorcycle, cycle_state.without_rider]
   - [motorcycle, motorcycle_state.without_rider]
 
+# Regions of the raw images where the ego vehicle occludes a camera, for every database (named
+# without its version, e.g. db_j6gen2, or with it, e.g. db_jpntaxigen2_v2, which wins) and camera:
+# flat [x0, y0, x1, y1, ...] polygons in normalized raw-image coordinates. Training paints them black and drops the boxes
+# they hide from every camera that sees them; the experiment sets the polygons of its platforms,
+# and empty, the default, masks nothing.
+ego_vehicle_polygons: {}
+
 model:
   # T4 scenarios flag whether their traffic cones and barriers are annotated. In a frame
   # flagged False those classes are not supervised, so the heads are not taught they are absent.
@@ -77,6 +84,19 @@ datasets:
         # The reference T4 recipe shuffles the camera order of every training frame.
         - _target_: autoware_ml.transforms.camera.permutation.ShuffleCameraOrder
           _convert_: all
+
+        # The polygons are drawn on the raw images, so both run before the image augmentation;
+        # they match the cameras by name, so the shuffle above does not matter. The boxes are
+        # dropped before the 2D projection, so the 2D head does not learn them either.
+        - _target_: autoware_ml.transforms.camera.masking.MaskEgoVehicle
+          _convert_: all
+
+          polygons: ${ego_vehicle_polygons}
+
+        - _target_: autoware_ml.transforms.camera.masking.BBoxesEgoVehicleFilter
+          _convert_: all
+
+          polygons: ${ego_vehicle_polygons}
 
         # +-0.02 around the scale at which a camera covers 480x640, whatever its resolution.
         - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
@@ -130,6 +150,8 @@ datasets:
 
           max_absolute_speed: 150.0 # m/s, 540 km/h
 
+        # No ego vehicle masking: the deployed node feeds the raw images, and the metrics score
+        # every box.
         - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
           _convert_: all
 

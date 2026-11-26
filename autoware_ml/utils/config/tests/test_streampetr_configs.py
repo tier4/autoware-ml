@@ -203,6 +203,37 @@ class TestStreamPETRConfigs(unittest.TestCase):
                     self.assertEqual(steps[loading + 1] == "ShuffleCameraOrder", shuffles)
                     self.assertEqual("ShuffleCameraOrder" in steps, shuffles)
 
+    def test_t4_training_masks_the_ego_vehicle_on_the_raw_images(self) -> None:
+        """Test that the T4 training pipelines mask the ego vehicle before any augmentation.
+
+        Input: the training and test pipelines of every stage.
+        Expected: the ego vehicle polygons are drawn on the raw images, so in the T4 training
+        pipelines MaskEgoVehicle and BBoxesEgoVehicleFilter run after the images are loaded and
+        before the image augmentation, and the filter runs before the 2D projection so the 2D
+        head does not learn the hidden boxes either; both read the same polygons, empty in the
+        base. Evaluation sees the raw images the deployed node feeds, and the nuScenes stage has
+        no ego vehicle in view.
+        Check: the order of the steps, the polygons of both, and their absence everywhere else.
+        """
+        for stage, cfg in self.configs.items():
+            for split in ("train", "test"):
+                with self.subTest(stage=stage, split=split):
+                    pipeline = cfg.datasets[split].transforms.pipeline
+                    steps = self._step_names(pipeline)
+                    masks = split == "train" and "/t4dataset/" in stage
+                    self.assertEqual("MaskEgoVehicle" in steps, masks)
+                    self.assertEqual("BBoxesEgoVehicleFilter" in steps, masks)
+                    if not masks:
+                        continue
+                    paint = steps.index("MaskEgoVehicle")
+                    drop = steps.index("BBoxesEgoVehicleFilter")
+                    self.assertLess(steps.index("LoadImagesFromFile"), paint)
+                    self.assertLess(paint, drop)
+                    self.assertLess(drop, steps.index("ResizeCropFlipRotImage"))
+                    self.assertLess(drop, steps.index("LoadAnnotations2DFromBoxes3D"))
+                    self.assertEqual(pipeline[paint].polygons, cfg.ego_vehicle_polygons)
+                    self.assertEqual(pipeline[drop].polygons, cfg.ego_vehicle_polygons)
+
     def test_t4_stages_ignore_the_cones_and_barriers_of_the_scenes_without_them(self) -> None:
         """Test that the T4 stages leave out the cones and barriers where they are unannotated.
 
