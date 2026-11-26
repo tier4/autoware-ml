@@ -75,6 +75,7 @@ deploy:
           k: ${num_proposals}
           topk_node_name_substring: /bbox_head/TopK
           attention_node_name_substring: /bbox_head/decoder
+          topk_per_class: true
   tensorrt:
     enabled: false
 
