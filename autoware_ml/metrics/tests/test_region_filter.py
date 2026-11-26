@@ -733,9 +733,14 @@ class TestCollisionFilterPoints(unittest.TestCase):
     def test_point_mask_equals_the_containment_of_every_point(self) -> None:
         """Test that a point is kept exactly when the collision area contains it.
 
-        The ego sits at map (40, 0) heading along map +y, so a mask taken in base_link,
-        or with the two map axes swapped, keeps other points. The grid covers the area
-        and its surroundings on every side.
+        Input: a road covering map x 0 to 50 m and y -10 to 10 m, the ego at map (40, 0)
+        heading along map +y, and a 0.25 m grid of 57,600 base_link points from -30 to 30 m
+        forward and left, which covers the collision area and its surroundings on every side.
+        Expected: a point is kept exactly when the area contains its map position, which is
+        (40 - left, forward) under this pose. A mask taken in base_link, or with the two map
+        axes swapped, keeps other points.
+        Check: the mask is boolean, equals shapely.contains on the hand-transformed points,
+        and keeps some points but not all.
         """
         ego2global = torch.tensor(
             [
