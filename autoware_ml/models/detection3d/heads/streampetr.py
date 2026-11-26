@@ -37,6 +37,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
+from autoware_ml.models.common.functional import inverse_sigmoid
 from autoware_ml.models.detection3d.task_modules.bbox_coders import (
     NMSFreeBBoxCoder3D,
     denormalize_boxes3d,
@@ -47,7 +48,6 @@ from autoware_ml.models.detection3d.task_modules.streaming import (
     SELayerLinear,
     StreamContinuity,
     compose_poses,
-    inverse_sigmoid,
     memory_refresh,
     nerf_positional_encoding,
     pos2posemb1d,
