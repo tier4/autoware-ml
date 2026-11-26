@@ -23,7 +23,7 @@ math.
 from __future__ import annotations
 
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
@@ -89,11 +89,63 @@ def cluster_sizes(coord: np.ndarray, radius: float) -> np.ndarray:
     n = coord.shape[0]
     if n == 0:
         return np.zeros((0,), dtype=np.int64)
-    tree = cKDTree(coord)
-    pairs = tree.query_pairs(r=radius, output_type="ndarray")
-    if pairs.shape[0] == 0:
-        return np.ones((n,), dtype=np.int64)  # every point is its own cluster
-    data = np.ones(pairs.shape[0], dtype=np.int8)
-    graph = csr_matrix((data, (pairs[:, 0], pairs[:, 1])), shape=(n, n))
-    _, labels = connected_components(graph, directed=False)
-    return np.bincount(labels).astype(np.int64)
+    pairs = cKDTree(coord).query_pairs(r=radius, output_type="ndarray")
+    return np.bincount(_component_labels(n, pairs)).astype(np.int64)
+
+
+def cluster_counts(
+    coord: np.ndarray, labels: np.ndarray, num_classes: int, radius: float, min_points: int = 1
+) -> tuple[int, np.ndarray]:
+    """Clusters among all the points, and per class among that class's own points.
+
+    The per-class count links only points of the same label, as clustering each
+    class's points on their own would. Both counts read one neighbour search: the
+    pairs of a class are the pairs of the whole set whose two points carry that
+    label.
+
+    Args:
+        coord: Point coordinates ``(N, 3)``.
+        labels: Class index per point ``(N,)``, in ``[0, num_classes)``.
+        num_classes: Number of classes the per-class count covers.
+        radius: Linking radius in meters.
+        min_points: Smallest cluster that counts.
+
+    Returns:
+        The number of clusters over all points, and ``(num_classes,)`` clusters per
+        class.
+    """
+    n = coord.shape[0]
+    if n == 0:
+        return 0, np.zeros((num_classes,), dtype=np.int64)
+    pairs = cKDTree(coord).query_pairs(r=radius, output_type="ndarray")
+    whole_sizes = np.bincount(_component_labels(n, pairs))
+    same_class = labels[pairs[:, 0]] == labels[pairs[:, 1]]
+    component = _component_labels(n, pairs[same_class])
+    sizes = np.bincount(component)
+    # every point of a component carries the same label, so any member names its class
+    component_class = np.zeros(sizes.shape[0], dtype=np.int64)
+    component_class[component] = labels
+    per_class = np.bincount(component_class[sizes >= min_points], minlength=num_classes)
+    return int(np.sum(whole_sizes >= min_points)), per_class.astype(np.int64)
+
+
+def _component_labels(num_points: int, pairs: np.ndarray) -> np.ndarray:
+    """Connected-component label of every point, given the linked index pairs.
+
+    Args:
+        num_points: Number of points, the nodes of the graph.
+        pairs: Linked pairs ``(P, 2)``, every pair once.
+
+    Returns:
+        Component label per point ``(num_points,)``.
+    """
+    # float64 is the dtype csgraph works on, so it takes the graph as it is.
+    graph = coo_matrix(
+        (np.ones(pairs.shape[0], dtype=np.float64), (pairs[:, 0], pairs[:, 1])),
+        shape=(num_points, num_points),
+    )
+    # The pairs hold no duplicate, and the traversal does not need them ordered, so
+    # the conversion can skip sorting every row, which costs more than the search.
+    graph.has_canonical_format = True
+    _, labels = connected_components(graph.tocsr(), directed=False)
+    return labels

@@ -286,7 +286,6 @@ def _build_det3d_seg3d_model(patch_sizes: Sequence[int] = (4, 4)) -> PTv3Det3DSe
         seg3d_head=build_seg3d_head(patch_sizes=patch_sizes),
         bev_neck=build_bev_neck(),
         bbox_head=build_transfusion_head(),
-        export_output_names=JOINT_EXPORT_OUTPUT_NAMES,
         grid_size=1.0,
         point_cloud_range=[0.0, 0.0, -2.0, 8.0, 8.0, 2.0],
     )

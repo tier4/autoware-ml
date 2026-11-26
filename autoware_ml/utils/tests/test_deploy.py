@@ -39,7 +39,6 @@ from autoware_ml.utils.deploy import (
     should_modify_graph,
     validate_onnx_modules_exported,
     validate_onnx_names_not_configured,
-    supports_export_stage,
 )
 
 
@@ -150,19 +149,6 @@ def test_export_spec_names_every_input_and_some_output() -> None:
                 input_names=input_names,
                 output_names=output_names,
             )
-
-
-def test_supports_export_stage_uses_export_spec_capabilities() -> None:
-    spec = ExportSpec(
-        module=_DummyModel(),
-        args=(torch.ones(1, 1), torch.ones(1)),
-        input_names=["voxels", "num_points"],
-        output_names=["out"],
-        supported_stages=frozenset({"onnx"}),
-    )
-
-    assert supports_export_stage(spec, "onnx") is True
-    assert supports_export_stage(spec, "tensorrt") is False
 
 
 def test_dynamic_shapes_from_spec_follow_the_input_order_and_share_a_dim_per_name() -> None:

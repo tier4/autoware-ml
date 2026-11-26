@@ -21,11 +21,14 @@ pinned without a model or GPU.
 
 from __future__ import annotations
 
+import unittest
+
 import numpy as np
 import pytest
 from scipy.stats import rankdata
 import torch
 
+from autoware_ml.geometry.utils import points_in_rotated_box
 from autoware_ml.metrics.base import EvalStage
 from autoware_ml.metrics.segmentation3d.calibration import CalibrationError
 from autoware_ml.metrics.segmentation3d.confident_error import ConfidentErrorRate
@@ -41,7 +44,11 @@ from autoware_ml.metrics.segmentation3d.point_cloud import (
     confidence,
     normalized_entropy,
 )
-from autoware_ml.metrics.segmentation3d.spatial import tolerant_error_mask
+from autoware_ml.metrics.segmentation3d.spatial import (
+    cluster_counts,
+    cluster_sizes,
+    tolerant_error_mask,
+)
 from autoware_ml.metrics.report import MetricKey
 from autoware_ml.metrics.tests.eval_output_fixtures import (
     segmentation_eval_output,
@@ -432,6 +439,107 @@ def test_partial_detection3d_requires_the_shared_taxonomy_prefix() -> None:
         )
 
 
+class TestPartialDetection3DScoreOnManyBoxes(unittest.TestCase):
+    """Tests the partial detection score on frames with many boxes of several classes."""
+
+    DET3D_NAMES = ("ped", "cone", "car")
+    SEG3D_NAMES = ("ped", "cone", "car", "road")
+
+    def _random_frame(self, seed: int) -> FramePoints:
+        rng = np.random.default_rng(seed)
+        num_points, num_boxes = 4000, 40
+        coord = np.column_stack(
+            [rng.uniform(-10.0, 10.0, (num_points, 2)), rng.uniform(-1.0, 1.0, num_points)]
+        )
+        boxes = np.column_stack(
+            [
+                rng.uniform(-9.0, 9.0, (num_boxes, 2)),
+                rng.uniform(-0.5, 0.5, num_boxes),
+                rng.uniform(0.5, 4.0, (num_boxes, 2)),
+                rng.uniform(0.5, 2.0, num_boxes),
+                rng.uniform(-np.pi, np.pi, num_boxes),
+            ]
+        ).astype(np.float32)
+        return FramePoints(
+            coord=coord,
+            pred=rng.integers(0, 4, num_points),
+            # -1 is the ignore index, so some points inside a box are not scored at all
+            target=rng.integers(-1, 4, num_points),
+            confidence=np.zeros(0, dtype=np.float32),
+            entropy=np.zeros(0, dtype=np.float32),
+            gt_boxes=boxes,
+            gt_box_labels=rng.integers(0, 3, num_boxes),
+        )
+
+    def _state(self, frames: list[FramePoints]) -> PointCloudSeg3DState:
+        return PointCloudSeg3DState(
+            frames, num_classes=4, ignore_index=-1, class_names=self.SEG3D_NAMES, num_frames=1
+        )
+
+    def test_scores_equal_testing_every_box_against_every_point(self) -> None:
+        """Test that the scores equal those of testing each box against the whole frame."""
+        for seed in range(3):
+            for min_points in (1, 4):
+                with self.subTest(seed=seed, min_points=min_points):
+                    frame = self._random_frame(seed)
+                    out = PartialDetection3DScore(
+                        det3d_class_names=self.DET3D_NAMES,
+                        seg3d_class_names=self.SEG3D_NAMES,
+                        class_names=("ped", "cone"),
+                        min_points=min_points,
+                    ).evaluate(self._state([frame]), EvalStage.TEST)
+
+                    valid = frame.target >= 0
+                    credits: dict[int, list[float]] = {0: [], 1: []}
+                    skipped = 0
+                    for box, label in zip(frame.gt_boxes, frame.gt_box_labels, strict=True):
+                        if int(label) not in credits:
+                            continue
+                        own = valid & points_in_rotated_box(frame.coord, box)
+                        own &= frame.target == label
+                        n = int(own.sum())
+                        if n < min_points:
+                            skipped += 1
+                            continue
+                        k = int((frame.pred[own] == label).sum())
+                        credits[int(label)].append((k / (k + 1.0)) / (n / (n + 1.0)))
+
+                    self.assertGreater(min(len(values) for values in credits.values()), 3)
+                    self.assertEqual(
+                        out.metric_value(MetricKey(name="pd_skipped_low_point_boxes")),
+                        float(skipped),
+                    )
+                    for label, name in ((0, "ped"), (1, "cone")):
+                        self.assertAlmostEqual(
+                            out.metric_value(MetricKey(name=f"pd_score_{name}")),
+                            float(np.mean(credits[label])),
+                            places=12,
+                        )
+
+    def test_skips_every_scored_box_of_a_frame_without_a_valid_point(self) -> None:
+        """Test that a frame whose points are all ignored skips its scored boxes only."""
+        frame = self._random_frame(0)
+        ignored = FramePoints(
+            coord=frame.coord,
+            pred=frame.pred,
+            target=np.full_like(frame.target, -1),
+            confidence=frame.confidence,
+            entropy=frame.entropy,
+            gt_boxes=frame.gt_boxes,
+            gt_box_labels=frame.gt_box_labels,
+        )
+        out = PartialDetection3DScore(
+            det3d_class_names=self.DET3D_NAMES,
+            seg3d_class_names=self.SEG3D_NAMES,
+            class_names=("ped", "cone"),
+        ).evaluate(self._state([ignored]), EvalStage.TEST)
+        self.assertEqual(
+            out.metric_value(MetricKey(name="pd_skipped_low_point_boxes")),
+            float(np.sum(frame.gt_box_labels < 2)),
+        )
+        self.assertTrue(np.isnan(out.metric_value(MetricKey(name="mpd_score"))))
+
+
 def test_tolerant_error_mask_equals_brute_force_reference() -> None:
     # The per-class nearest-neighbour formulation must reproduce the direct
     # definition: wrong, and no point predicted the true class within radius.
@@ -455,6 +563,56 @@ def test_tolerant_error_mask_equals_brute_force_reference() -> None:
         np.testing.assert_array_equal(
             tolerant_error_mask(coord, pred, target, radius), _reference(radius)
         )
+
+
+class TestClusterCounts(unittest.TestCase):
+    """Tests the cluster counts that share one neighbour search."""
+
+    def test_equal_clustering_each_class_on_its_own(self) -> None:
+        """
+        Input: 1,500 points scattered around 40 random centres with five labels, for three
+        seeds and a smallest cluster of 1 and 3 points, counted over six classes.
+        Expected: one shared search gives the count of clustering all points and the count
+        of clustering each class's points on their own; the sixth class, which has no
+        points, has no cluster.
+        Check: the whole count and every per-class count against ``cluster_sizes``.
+        """
+        for seed in range(3):
+            for min_points in (1, 3):
+                with self.subTest(seed=seed, min_points=min_points):
+                    rng = np.random.default_rng(seed)
+                    centres = rng.uniform(-15, 15, (40, 3))
+                    coord = centres[rng.integers(0, 40, 1500)] + rng.normal(0, 0.4, (1500, 3))
+                    coord = coord.astype(np.float32)
+                    labels = rng.integers(0, 5, 1500)
+
+                    whole, per_class = cluster_counts(
+                        coord, labels, 6, radius=0.5, min_points=min_points
+                    )
+
+                    self.assertEqual(whole, int(np.sum(cluster_sizes(coord, 0.5) >= min_points)))
+                    expected = [
+                        int(np.sum(cluster_sizes(coord[labels == c], 0.5) >= min_points))
+                        for c in range(6)
+                    ]
+                    self.assertEqual(per_class.tolist(), expected)
+                    self.assertEqual(expected[5], 0)
+
+    def test_without_points_or_links(self) -> None:
+        """
+        Input: no points, then three points 5 m apart with labels 0, 0 and 2, radius 0.5 m.
+        Expected: no points give no cluster; unlinked points are one cluster each, whole
+        and per class.
+        Check: (0, [0, 0, 0]) for no points, (3, [2, 0, 1]) and sizes [1, 1, 1] for the
+        three.
+        """
+        whole, per_class = cluster_counts(np.zeros((0, 3)), np.zeros((0,), dtype=np.int64), 3, 0.5)
+        self.assertEqual((whole, per_class.tolist()), (0, [0, 0, 0]))
+
+        apart = np.array([[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [10.0, 0.0, 0.0]])
+        whole, per_class = cluster_counts(apart, np.array([0, 0, 2]), 3, 0.5)
+        self.assertEqual((whole, per_class.tolist()), (3, [2, 0, 1]))
+        self.assertEqual(cluster_sizes(apart, 0.5).tolist(), [1, 1, 1])
 
 
 def test_entropy_auroc_binned_matches_rankdata_reference() -> None:
