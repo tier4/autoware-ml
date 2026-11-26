@@ -73,12 +73,28 @@ class RegionRasterTest(unittest.TestCase):
         self.expected = shapely.contains_xy(self.region, self.points[:, 0], self.points[:, 1])
 
     def test_numpy_lookup_equals_shapely(self) -> None:
+        """Test that the NumPy lookup equals shapely at every cell size.
+
+        Input: the multipolygon from ``_region`` (a hole, concave stars, a 3 cm sliver and a
+        far-away part) and the points from ``_probe_points`` (uniform, scattered about 1 mm
+        around every vertex and 0.1 mm around every edge, and a 0.5 m lattice).
+        Expected: ``contains`` equals shapely.contains point for point.
+        Check: cell sizes 0.25, 0.5, 1 and 3 m with 8-cell tiles.
+        """
         for cell_size in (0.25, 0.5, 1.0, 3.0):
             with self.subTest(cell_size=cell_size):
                 raster = RegionRaster(self.region, cell_size=cell_size, tile_cells=8)
                 np.testing.assert_array_equal(raster.contains(self.points), self.expected)
 
     def test_tensor_lookup_equals_shapely(self) -> None:
+        """Test that the tensor lookup equals shapely and answers on the input's device.
+
+        Input: the same region and points as float64 tensors on the CPU and, when available, on
+        CUDA, with 0.5 m cells and 16-cell tiles.
+        Expected: ``contains_tensor`` returns a mask on the input's device equal to
+        shapely.contains.
+        Check: the mask's device type and values on every available device.
+        """
         devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
         raster = RegionRaster(self.region, cell_size=0.5, tile_cells=16)
         for device in devices:
@@ -88,6 +104,13 @@ class RegionRasterTest(unittest.TestCase):
                 np.testing.assert_array_equal(mask.cpu().numpy(), self.expected)
 
     def test_empty_region_and_empty_input(self) -> None:
+        """Test that an empty region contains nothing and no points give an empty mask.
+
+        Input: a raster of an empty polygon probed with the usual points, and a raster of the
+        test region probed with zero points.
+        Expected: the empty region answers False everywhere, and zero points give shape (0,).
+        Check: the NumPy and tensor lookups in both cases.
+        """
         empty = RegionRaster(Polygon(), cell_size=0.5)
         self.assertFalse(empty.contains(self.points).any())
         self.assertFalse(empty.contains_tensor(torch.from_numpy(self.points)).any())
@@ -98,6 +121,13 @@ class RegionRasterTest(unittest.TestCase):
         )
 
     def test_points_far_outside_the_raster_are_outside(self) -> None:
+        """Test that points far outside the raster, and one just outside the region, are outside.
+
+        Input: points 1000 km and 100 km away from the region, and a point at the next float
+        below x = 0, just left of the region's edge there.
+        Expected: the answers equal shapely.contains, which puts all four outside.
+        Check: the NumPy and tensor masks.
+        """
         raster = RegionRaster(self.region, cell_size=0.5)
         far = np.array([[-1e6, 0.0], [1e6, 1e6], [30.0, -1e5], [np.nextafter(0.0, -1.0), 4.0]])
         expected = shapely.contains_xy(self.region, far[:, 0], far[:, 1])
@@ -107,7 +137,8 @@ class RegionRasterTest(unittest.TestCase):
         )
 
     def test_cells_whose_centre_lies_on_an_edge_are_exact(self) -> None:
-        """
+        """Test that cells whose centre lies on an edge give shapely's answer in both orientations.
+
         Input: an L-shaped region whose inner vertical edge, x = 1.25, runs through the
         centres of a column of 0.5 m cells (the raster starts one cell left of x = 0),
         with its ring counter-clockwise and clockwise, probed on a fine grid, on that
@@ -141,6 +172,13 @@ class RegionRasterTest(unittest.TestCase):
                 )
 
     def test_released_device_copies_are_rebuilt(self) -> None:
+        """Test that the tensor lookup rebuilds its tables after they are released.
+
+        Input: the test region at 0.5 m and the points as a CPU tensor, looked up once, then
+        again after ``release_device_copies``.
+        Expected: the second lookup rebuilds the tables and gives the same mask as the first.
+        Check: the two masks are equal.
+        """
         raster = RegionRaster(self.region, cell_size=0.5)
         points = torch.from_numpy(self.points)
         first = raster.contains_tensor(points)
@@ -233,6 +271,15 @@ class LaneletMapRasterContainsTest(unittest.TestCase):
         return mask
 
     def test_contains_equals_the_shapely_definition(self) -> None:
+        """Test that LaneletMap.contains equals its shapely definition for every margin sign.
+
+        Input: a road with a notch and a walkway sharing the edge y = 0, 30,000 random points
+        around them, the tokens road, walkway and both, and margins 0, -0.2, -1 and 0.5 m.
+        Expected: the mask equals ``_shapely_reference``: the region alone at margin 0, the
+        region inside the map surface eroded by the margin when it is negative, and the region
+        plus its expansion beyond the map surface when it is positive.
+        Check: every token set and margin, NumPy input.
+        """
         for tokens in (("road",), ("walkway",), ("road", "walkway")):
             for margin in (0.0, -0.2, -1.0, 0.5):
                 with self.subTest(tokens=tokens, margin=margin):
@@ -242,6 +289,13 @@ class LaneletMapRasterContainsTest(unittest.TestCase):
                     )
 
     def test_contains_answers_tensors_on_their_device(self) -> None:
+        """Test that LaneletMap.contains answers a tensor with a tensor on the same device.
+
+        Input: the road token with margins 0, -0.2 and 0.5 m, and the points as float64 tensors
+        on the CPU and, when available, on CUDA.
+        Expected: a torch.Tensor on the input's device, equal to the shapely definition.
+        Check: the mask's type, device and values.
+        """
         devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
         for device in devices:
             for margin in (0.0, -0.2, 0.5):
@@ -256,6 +310,12 @@ class LaneletMapRasterContainsTest(unittest.TestCase):
                     )
 
     def test_region_absent_from_the_map_is_empty(self) -> None:
+        """Test that a region type the map has no polygon for contains no point.
+
+        Input: the crosswalk token, absent from this map, with a -0.2 m margin.
+        Expected: every point is outside.
+        Check: the mask has no True value.
+        """
         self.assertFalse(self.lanelet_map.contains(("crosswalk",), self.xy, -0.2).any())
 
 
