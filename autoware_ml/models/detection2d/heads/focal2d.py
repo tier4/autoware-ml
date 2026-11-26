@@ -36,9 +36,9 @@ from autoware_ml.dataclasses.models.detection2d.head_outputs import FocalHead2DO
 from autoware_ml.geometry.bbox_2d.base_bbox2d import BaseBBoxes2D
 from autoware_ml.losses.detection2d.quality_focal import QualityFocalLoss
 from autoware_ml.losses.detection3d.gaussian_focal import GaussianFocalLoss
+from autoware_ml.models.common.functional import inverse_sigmoid
 from autoware_ml.models.detection2d.task_modules.assigners import HungarianAssigner2D
 from autoware_ml.models.detection3d.task_modules.heatmap import create_gaussian_heatmaps
-from autoware_ml.models.detection3d.task_modules.streaming import inverse_sigmoid
 from autoware_ml.types.geometry import Box2DFieldIndex
 from autoware_ml.utils.distributed import reduce_mean_count
 

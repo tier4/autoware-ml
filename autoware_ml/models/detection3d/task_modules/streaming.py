@@ -86,17 +86,6 @@ class StreamContinuity:
         return prev_exists
 
 
-def inverse_sigmoid(
-    x: Float[torch.Tensor, "*shape"], eps: float = 1e-4
-) -> Float[torch.Tensor, "*shape"]:
-    """Apply the inverse sigmoid transform with clamping for stability."""
-    dtype = x.dtype
-    x = x.float().clamp(min=0.0, max=1.0)
-    x1 = x.clamp(min=eps)
-    x2 = (1.0 - x).clamp(min=eps)
-    return torch.log(x1 / x2).to(dtype=dtype)
-
-
 def memory_refresh(
     memory: Float[torch.Tensor, "batch_size num_slots *dims"],
     prev_exists: Float[torch.Tensor, " batch_size"],

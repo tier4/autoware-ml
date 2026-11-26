@@ -23,7 +23,6 @@ import torch
 
 from autoware_ml.models.detection3d.task_modules.streaming import (
     compose_poses,
-    inverse_sigmoid,
     memory_refresh,
     pos2posemb1d,
     pos2posemb3d,
@@ -117,20 +116,6 @@ class TestTemporalMemoryHelpers(unittest.TestCase):
 
         self.assertEqual(composed.shape, (2, 5, 4, 4))
         torch.testing.assert_close(composed, (lhs.double() @ rhs.double()).float())
-
-
-class TestInverseSigmoid(unittest.TestCase):
-    """Check the clamped logit used to re-encode reference points."""
-
-    def test_inverse_sigmoid_inverts_sigmoid(self) -> None:
-        """Applying sigmoid after inverse_sigmoid recovers values inside (0, 1)."""
-        values = torch.tensor([0.2, 0.5, 0.9])
-
-        torch.testing.assert_close(inverse_sigmoid(values).sigmoid(), values, rtol=1e-5, atol=1e-6)
-
-    def test_inverse_sigmoid_clamps_extremes_to_finite_values(self) -> None:
-        """Values at or beyond the (0, 1) boundaries stay finite."""
-        self.assertTrue(torch.isfinite(inverse_sigmoid(torch.tensor([0.0, 1.0, -1.0, 2.0]))).all())
 
 
 if __name__ == "__main__":
