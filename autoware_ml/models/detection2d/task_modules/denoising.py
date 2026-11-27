@@ -40,7 +40,7 @@ INVERSE_SIGMOID_EPS = 1e-5
 
 
 @dataclass(frozen=True)
-class DenoisingQueries:
+class ContrastiveDenoisingQueries:
     """Denoising queries, placed before the matching queries in the decoder.
 
     The queries are split into ``num_groups`` groups. Each group is one noised copy of all the
@@ -80,7 +80,7 @@ def build_contrastive_denoising_queries(
     num_denoising: int = 100,
     label_noise_ratio: float = 0.5,
     box_noise_scale: float = 1.0,
-) -> DenoisingQueries:
+) -> ContrastiveDenoisingQueries:
     """Build the denoising queries from the ground truth.
 
     The number of groups is ``num_denoising`` divided by the largest box count of the batch,
@@ -174,7 +174,7 @@ def build_contrastive_denoising_queries(
         attn_mask[rows, group_size * (i + 1) : num_queries] = True
         attn_mask[rows, : group_size * i] = True
 
-    return DenoisingQueries(
+    return ContrastiveDenoisingQueries(
         content=class_embed(query_class),
         boxes_unact=inverse_sigmoid(query_box, eps=INVERSE_SIGMOID_EPS),
         attn_mask=attn_mask,

@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 
 from autoware_ml.models.detection2d.task_modules.denoising import (
-    DenoisingQueries,
+    ContrastiveDenoisingQueries,
     build_contrastive_denoising_queries,
 )
 
@@ -40,7 +40,7 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
 
     def _build(
         self, box_counts: tuple[int, ...], pad_width: int | None = None, **kwargs: float | int
-    ) -> tuple[DenoisingQueries, list[torch.Tensor], list[torch.Tensor]]:
+    ) -> tuple[ContrastiveDenoisingQueries, list[torch.Tensor], list[torch.Tensor]]:
         """Build the queries of images holding the given box counts.
 
         The ground truth is padded as it is collated: labels -1 and zero boxes past the valid
