@@ -21,7 +21,7 @@ geometry contract between the branches, and the input validation run on any devi
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 import unittest
 from unittest import mock
@@ -35,6 +35,11 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.deployment.graphs import GraphTensor
+from autoware_ml.deployment.tests.deployment_assertions import (
+    assert_deployment_reproduces_forward,
+    assert_specs_export_onnx_with_the_declared_io,
+)
 from autoware_ml.models.detection3d.encoders.bev_middle_encoder import BEVMiddleEncoder
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
@@ -44,8 +49,8 @@ from autoware_ml.models.detection3d.task_modules.partial_annotations import Part
 from autoware_ml.models.detection3d.heads.transfusions.transfusion_head import TransFusionHead
 from autoware_ml.models.detection3d.main_modules.bevfusion import (
     BEVFusionDetection3DModel,
+    BEVFusionLidarExportModule,
     _BEVFusionExportWrapper,
-    _BEVFusionLidarExportWrapper,
 )
 from autoware_ml.models.detection3d.main_modules.bevfusions.bevfusion_camera import (
     BEVFusionCamera,
@@ -114,10 +119,13 @@ class _StubMiddleEncoder(BEVMiddleEncoder):
         batch_size: int,
     ) -> Float32[torch.Tensor, "batch_size channels height width"]:
         height, width = self._bev_shape
-        canvas = voxel_features.new_zeros(batch_size, voxel_features.shape[1], height, width)
-        batch_indices, y, x = coords[:, 0].long(), coords[:, 2].long(), coords[:, 3].long()
-        canvas[batch_indices, :, y, x] = voxel_features
-        return canvas
+        channels = voxel_features.shape[1]
+        # One flat row per cell, filled with index_copy: an advanced-index assignment on the
+        # ``(B, C, H, W)`` canvas does not export to ONNX.
+        cells = (coords[:, 0].long() * height + coords[:, 2].long()) * width + coords[:, 3].long()
+        canvas = voxel_features.new_zeros(batch_size * height * width, channels)
+        canvas = canvas.index_copy(0, cells, voxel_features)
+        return canvas.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2).contiguous()
 
     def prepare_for_export(self) -> _StubMiddleEncoder:
         return _StubMiddleEncoder(self._bev_shape, exportable=True)
@@ -323,6 +331,30 @@ class _BEVFusionDetection3DModelTestCase(unittest.TestCase):
             num_dropped_voxels=torch.zeros((), dtype=torch.int64),
         )
 
+    def _build_single_sample_batch_inputs(self, with_voxels: bool = True) -> ModelBatchInputs:
+        """Build a one-sample batch, voxelized unless ``with_voxels`` is False.
+
+        The deployed lidar graph is single-sample, so the deployment tests start from this batch.
+        """
+        self.batch_size = 1
+        voxels_data = self._build_voxels_data() if with_voxels else None
+        return self._build_batch_inputs(voxels_data=voxels_data)
+
+    def _runtime_tensors(self, outputs: ModelOutputs) -> Mapping[str, GraphTensor]:
+        """Pack forward()'s head outputs as the runtime tensors the deployed function returns.
+
+        Args:
+            outputs: The outputs of ``forward()``.
+
+        Returns:
+            ``bbox_pred``, ``score`` and ``label_pred``, as ``export_detection3d_outputs`` packs
+            them.
+        """
+        bbox_pred, score, label_pred = export_detection3d_outputs(
+            self.model.bbox_head, outputs.detection3d().transfusion_head()
+        )
+        return {"bbox_pred": bbox_pred, "score": score, "label_pred": label_pred}
+
     def _build_detection3d_gt_batch(self) -> Detection3DGTBatch:
         """Build one ground-truth box per sample, all inside the scene, for ``batch_size`` samples."""
         gt_bboxes_3d = torch.tensor(
@@ -515,12 +547,20 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
             self.model.build_eval_output(self.batch_inputs, empty_outputs)
 
     def test_build_export_specs_keeps_first_sample_voxels_in_runtime_dtypes(self) -> None:
-        """Test that only the voxels of batch sample 0 are exported, as ``float32`` and ``int32``."""
-        voxels_data = self.batch_inputs.voxels_data
+        """Test that the one-sample batch's voxels are exported as ``float32`` and ``int32``.
+
+        Input: a one-sample voxelized batch.
+        Expected: the spec's args are its voxels, its coordinates reordered to ``(z, y, x)`` as
+            contiguous ``int32`` and its point counts as ``int32``.
+        Check: assert_close() against the batch's voxel data, the dtypes and the contiguity.
+        """
+        self.model.eval()
+        batch_inputs = self._build_single_sample_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
         assert voxels_data is not None
         first_sample = voxels_data.batch_indices == 0
 
-        export_specs = self.model.build_export_specs(self.batch_inputs)
+        export_specs = self.model.build_export_specs(batch_inputs)
         voxels, coors, num_points_per_voxel = export_specs["bevfusion_lidar"].args
 
         torch.testing.assert_close(voxels, voxels_data.voxels[first_sample])
@@ -531,52 +571,68 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         torch.testing.assert_close(num_points_per_voxel, voxels_data.num_points[first_sample])
 
     def test_build_export_specs_requires_voxels_data(self) -> None:
-        """Test that export spec construction rejects a batch without voxel data."""
-        with self.assertRaises(ValueError):
-            self.model.build_export_specs(self._build_batch_inputs(voxels_data=None))
+        """Test that export spec construction rejects a batch without voxel data.
 
-    def test_build_export_specs_wraps_an_exportable_eval_copy(self) -> None:
+        Input: a one-sample batch without voxels, so the single-sample check passes.
+        Expected: the deployed forward refuses it for the missing voxels, not the batch size.
+        Check: a ValueError whose message names ``voxels_data``.
         """
-        Test that the exported wrapper holds a separate eval-mode copy of the model with the
-        exportable middle encoder and attention layers, leaving the training model untouched.
+        self.model.eval()
+        with self.assertRaisesRegex(ValueError, "voxels_data"):
+            self.model.build_export_specs(self._build_single_sample_batch_inputs(with_voxels=False))
+
+    def test_build_export_specs_wraps_exportable_copies(self) -> None:
+        """Test that the export module holds exportable copies of the lidar branch and the head.
+
+        Input: the lidar-only model in eval mode and a one-sample batch.
+        Expected: the module's branch and head are other objects than the model's, with the
+            exportable middle encoder and attention layers; the model keeps the native ones.
+        Check: identity and the types of both encoders and attention layers.
         """
-        self.model.train()
+        self.model.eval()
 
-        export_specs = self.model.build_export_specs(self.batch_inputs)
-        export_model = export_specs["bevfusion_lidar"].module.model
-
-        self.assertIsNot(export_model, self.model)
-        self.assertFalse(export_model.training)
-        self.assertTrue(self.model.training)
-        assert export_model.lidar_network is not None
+        export_specs = self.model.build_export_specs(self._build_single_sample_batch_inputs())
+        export_module = export_specs["bevfusion_lidar"].module
+        self.assertIsInstance(export_module, BEVFusionLidarExportModule)
         assert self.model.lidar_network is not None
-        export_middle_encoder = export_model.lidar_network.pts_middle_encoder
+
+        self.assertIsNot(export_module.lidar_network, self.model.lidar_network)
+        self.assertIsNot(export_module.bbox_head, self.model.bbox_head)
+        export_middle_encoder = export_module.lidar_network.pts_middle_encoder
         assert isinstance(export_middle_encoder, _StubMiddleEncoder)
         self.assertTrue(export_middle_encoder.exportable)
         original_middle_encoder = self.model.lidar_network.pts_middle_encoder
         assert isinstance(original_middle_encoder, _StubMiddleEncoder)
         self.assertFalse(original_middle_encoder.exportable)
-        for decoder_layer in export_model.bbox_head.decoder:
+        for decoder_layer in export_module.bbox_head.decoder:
             self.assertIsInstance(decoder_layer.self_attn, ExportableMultiheadAttention)
             self.assertIsInstance(decoder_layer.cross_attn, ExportableMultiheadAttention)
         for decoder_layer in self.model.bbox_head.decoder:
             self.assertIsInstance(decoder_layer.self_attn, nn.MultiheadAttention)
 
     def test_build_export_specs_exports_single_lidar_main_body(self) -> None:
+        """Test that a lidar-only model exports one main body with the runtime's name and I/O.
+
+        Input: the lidar-only model in eval mode and a one-sample batch.
+        Expected: one spec, ``bevfusion_lidar``, from the export module, with the runtime's
+            input and output names, the voxel count dynamic on every input and the batch's
+            voxel tensors as args; the module returns the runtime's detection tensors.
+        Check: the spec's module, names, axes and args, and the shapes, dtype and ranges of
+            the module's outputs.
         """
-        Test that a lidar-only model exports one main body whose inputs are the first-sample voxel
-        tensors, and that the wrapper produces the runtime detection tensors.
-        """
-        voxels_data = self.batch_inputs.voxels_data
+        self.model.eval()
+        batch_inputs = self._build_single_sample_batch_inputs()
+        voxels_data = batch_inputs.voxels_data
         assert voxels_data is not None
         num_first_sample_voxels = int((voxels_data.batch_indices == 0).sum())
 
-        export_specs = self.model.build_export_specs(self.batch_inputs)
+        export_specs = self.model.build_export_specs(batch_inputs)
 
         self.assertEqual(list(export_specs), ["bevfusion_lidar"])
         spec = export_specs["bevfusion_lidar"]
-        self.assertIsInstance(spec.module, _BEVFusionLidarExportWrapper)
+        self.assertIsInstance(spec.module, BEVFusionLidarExportModule)
         self.assertEqual(spec.input_names, ["voxels", "coors", "num_points_per_voxel"])
+        self.assertEqual(spec.output_names, ["bbox_pred", "score", "label_pred"])
         self.assertEqual(
             spec.dynamic_axes,
             {name: {0: "voxels_num"} for name in ["voxels", "coors", "num_points_per_voxel"]},
@@ -595,6 +651,66 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         self.assertEqual(label_pred.dtype, torch.int64)
         self.assertTrue(torch.isfinite(bbox_pred).all())
         self.assertTrue(torch.all((score >= 0.0) & (score <= 1.0)))
+
+    def test_deployment_refuses_a_multi_sample_batch(self) -> None:
+        """Test that a multi-sample batch is refused instead of exporting only its first sample.
+
+        Input: the two-sample batch of the fixture.
+        Expected: build_export_specs() refuses it and names the batch size to deploy with.
+        Check: a ValueError whose message holds ``batch_size=1``.
+        """
+        self.model.eval()
+
+        with self.assertRaisesRegex(ValueError, "batch_size=1"):
+            self.model.build_export_specs(self.batch_inputs)
+
+    def test_camera_lidar_models_keep_their_hand_written_export_specs(self) -> None:
+        """Test that a model with a camera branch declares no deployment graphs.
+
+        Input: a camera-lidar model with a fuser.
+        Expected: it keeps the hand-written export specs, so it declares no graphs.
+        Check: deployment_graphs() returns ``None``.
+        """
+        model = self._build_model(
+            lidar_network=self._build_lidar_network(with_fuser=True),
+            camera_network=self._build_camera_network(),
+        )
+        self.assertIsNone(model.deployment_graphs())
+
+    def test_deployment_reproduces_forward(self) -> None:
+        """Test that the deployment reproduces forward() packed as the runtime tensors.
+
+        Input: a single-sample batch, run through forward() and through the deployment in
+            PyTorch, which traces the export copy with the exportable middle encoder and
+            attention layers.
+        Expected: the deployed ``bbox_pred``, ``score`` and ``label_pred`` equal forward()'s head
+            outputs packed by ``export_detection3d_outputs``, so the export copy computes what
+            the training modules compute.
+        Check: assert_deployment_reproduces_forward() and the output names in order.
+        """
+        self.model.eval()
+        check = assert_deployment_reproduces_forward(
+            self.model,
+            self._build_single_sample_batch_inputs(),
+            self.device,
+            self._runtime_tensors,
+            rtol=1e-4,
+            atol=1e-4,
+        )
+        self.assertEqual(list(check.deployment_outputs), ["bbox_pred", "score", "label_pred"])
+
+    def test_specs_export_onnx_with_the_declared_io(self) -> None:
+        """Test that the lidar graph's spec exports an ONNX with the declared inputs and outputs.
+
+        Input: the lidar-only model in eval mode and a single-sample batch.
+        Expected: the ``bevfusion_lidar`` ONNX carries the graph's input and output names and
+            the ``voxels_num`` axis on every input.
+        Check: assert_specs_export_onnx_with_the_declared_io().
+        """
+        self.model.eval()
+        assert_specs_export_onnx_with_the_declared_io(
+            self.model, self._build_single_sample_batch_inputs()
+        )
 
     def _build_partial_model(self) -> BEVFusionDetection3DModel:
         """Build a lidar-only detector that ignores cyclists in frames flagged as not annotated."""
