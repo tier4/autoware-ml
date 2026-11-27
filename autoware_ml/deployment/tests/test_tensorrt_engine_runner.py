@@ -96,8 +96,7 @@ class TestTensorRTEngineRunner(unittest.TestCase):
         """Test that a view that is not contiguous runs as the values it shows.
 
         Input: the add engine with ``a = base[:, 1:]`` of a ``[4, 3]`` tensor, a view with a
-            storage offset and a row stride of 3, as PTv3 feeds its grid coordinates, and
-            ``b`` of ones.
+            storage offset and a row stride of 3, and ``b`` of ones.
         Expected: ``a + 1``.
         Check: the output against the sum computed in PyTorch.
         """
