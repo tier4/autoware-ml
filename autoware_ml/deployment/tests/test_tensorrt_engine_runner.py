@@ -31,7 +31,7 @@ from autoware_ml.deployment.tests.tensorrt_fixtures import (
     N_PROFILE,
     add_graph,
     build_engine,
-    identity_gemm_graph,
+    doubling_gemm_graph,
     nonzero_graph,
 )
 
@@ -51,14 +51,14 @@ class TestTensorRTEngineRunner(unittest.TestCase):
     def test_engine_matches_pytorch_and_the_caller_keeps_its_outputs(self) -> None:
         """Test that the engine matches PyTorch and a later call leaves earlier outputs alone.
 
-        Input: the identity Gemm engine loaded on ``"cuda"`` and run on ``arange(8)``, then on
+        Input: the doubling Gemm engine loaded on ``"cuda"`` and run on ``arange(8)``, then on
             ``arange(8) + 1``.
         Expected: the runner on the current CUDA device, the I/O names of the graph, each
-            output equal to its input, and the first output unchanged by the second call.
+            output twice its input, and the first output unchanged by the second call.
         Check: the device, the names and both outputs after the second call.
         """
         runner = TensorRTEngineRunner(
-            build_engine(identity_gemm_graph(self.tmp_path), {}), torch.device("cuda")
+            build_engine(doubling_gemm_graph(self.tmp_path), {}), torch.device("cuda")
         )
         x = torch.arange(8, dtype=torch.float32).reshape(2, 4).cuda()
 
@@ -67,8 +67,8 @@ class TestTensorRTEngineRunner(unittest.TestCase):
         self.assertEqual(runner.device, torch.device("cuda", torch.cuda.current_device()))
         self.assertEqual(runner.input_names, ["x"])
         self.assertEqual(runner.output_names, ["y"])
-        torch.testing.assert_close(first["y"], x)
-        torch.testing.assert_close(second["y"], x + 1)
+        torch.testing.assert_close(first["y"], 2 * x)
+        torch.testing.assert_close(second["y"], 2 * (x + 1))
 
     @REQUIRES_CUDA
     def test_dynamic_shapes_rebind_per_call(self) -> None:
@@ -140,11 +140,11 @@ class TestTensorRTEngineRunner(unittest.TestCase):
     def test_engine_survives_a_reload(self) -> None:
         """Test that a second load of an engine runs after the first one was collected.
 
-        Input: the identity Gemm engine loaded, run, deleted and collected, then loaded again.
+        Input: the doubling Gemm engine loaded, run, deleted and collected, then loaded again.
         Expected: the second engine produces the first one's outputs.
         Check: the outputs.
         """
-        path = build_engine(identity_gemm_graph(self.tmp_path), {})
+        path = build_engine(doubling_gemm_graph(self.tmp_path), {})
         x = torch.arange(8, dtype=torch.float32).reshape(2, 4).cuda()
 
         first = TensorRTEngineRunner(path, torch.device("cuda"))
@@ -166,7 +166,7 @@ class TestTensorRTEngineRunner(unittest.TestCase):
         Check: the error messages and the last call's output.
         """
         runner = TensorRTEngineRunner(
-            build_engine(identity_gemm_graph(self.tmp_path), {}), torch.device("cuda")
+            build_engine(doubling_gemm_graph(self.tmp_path), {}), torch.device("cuda")
         )
         x = torch.ones(2, 4, device="cuda")
 
@@ -176,7 +176,7 @@ class TestTensorRTEngineRunner(unittest.TestCase):
             runner.run({"x": x, "z": x})
         with self.assertRaisesRegex(RuntimeError, r"rejected shape \(3, 4\) for input 'x'"):
             runner.run({"x": torch.ones(3, 4, device="cuda")})
-        torch.testing.assert_close(runner.run({"x": x})["y"], x)
+        torch.testing.assert_close(runner.run({"x": x})["y"], 2 * x)
 
     @REQUIRES_CUDA
     def test_runner_rejects_inputs_that_disagree_on_a_shared_axis(self) -> None:
@@ -232,11 +232,11 @@ class TestTensorRTEngineRunner(unittest.TestCase):
     def test_runner_refuses_a_missing_plugin_library(self) -> None:
         """Test that a plugin library that does not exist is refused before the engine loads.
 
-        Input: the identity Gemm engine and the path of a plugin library that was never built.
+        Input: the doubling Gemm engine and the path of a plugin library that was never built.
         Expected: a FileNotFoundError naming the library.
         Check: the error message.
         """
-        path = build_engine(identity_gemm_graph(self.tmp_path), {})
+        path = build_engine(doubling_gemm_graph(self.tmp_path), {})
         missing = self.tmp_path / "libmissing_plugins.so"
 
         with self.assertRaisesRegex(FileNotFoundError, "plugin library not found.*libmissing"):

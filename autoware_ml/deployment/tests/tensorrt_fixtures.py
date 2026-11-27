@@ -57,8 +57,8 @@ def _save_graph(
     return path
 
 
-def identity_gemm_graph(directory: Path) -> Path:
-    """Save ``y = x @ I`` over a static ``[2, 4]`` input.
+def doubling_gemm_graph(directory: Path) -> Path:
+    """Save ``y = x @ 2I``, twice its static ``[2, 4]`` input.
 
     Args:
         directory: Where ``gemm.onnx`` goes.
@@ -67,7 +67,7 @@ def identity_gemm_graph(directory: Path) -> Path:
         The model's path.
     """
     weight = helper.make_tensor(
-        "w", TensorProto.FLOAT, [4, 4], np.eye(4, dtype=np.float32).flatten()
+        "w", TensorProto.FLOAT, [4, 4], 2 * np.eye(4, dtype=np.float32).flatten()
     )
     return _save_graph(
         directory / "gemm.onnx",
