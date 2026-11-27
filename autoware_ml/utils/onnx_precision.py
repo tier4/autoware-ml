@@ -27,9 +27,10 @@ from __future__ import annotations
 import logging
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import onnx
+import torch.nn as nn
 
 # cspell:ignore onnxconverter
 from onnxconverter_common import float16
@@ -63,14 +64,47 @@ def resolve_onnx_precision(onnx_cfg: Any) -> OnnxPrecision:
         ) from None
 
 
+class DeclaredPrecision(NamedTuple):
+    """
+    Precision a submodule of an export module declares through ``required_onnx_precision``.
+
+    Attributes:
+      module_type: Class name of the declaring submodule.
+      precision: The declared precision.
+    """
+
+    module_type: str
+    precision: OnnxPrecision
+
+
+def declared_onnx_precisions(module: nn.Module) -> list[DeclaredPrecision]:
+    """
+    Read the precision every submodule of an export module declares.
+
+    Args:
+      module: The export module.
+
+    Returns:
+      One entry per declaring submodule, in module order.
+
+    Raises:
+      ValueError: If a submodule declares a precision outside :class:`OnnxPrecision`.
+    """
+    declared = []
+    for submodule in module.modules():
+        required = getattr(submodule, "required_onnx_precision", None)
+        if required is not None:
+            declared.append(DeclaredPrecision(type(submodule).__name__, OnnxPrecision(required)))
+    return declared
+
+
 def validate_module_onnx_precision(module: Any, onnx_cfg: Any) -> None:
     """Reject export modules whose declared precision requirement is not configured."""
     actual = resolve_onnx_precision(onnx_cfg)
-    for submodule in module.modules():
-        required = getattr(submodule, "required_onnx_precision", None)
-        if required is not None and str(required) != actual:
+    for declared in declared_onnx_precisions(module):
+        if declared.precision != actual:
             raise ValueError(
-                f"{type(submodule).__name__} requires deploy.onnx.precision='{required}', "
+                f"{declared.module_type} requires deploy.onnx.precision='{declared.precision}', "
                 f"but the effective module config uses '{actual}'. Align the model's export "
                 "options with deploy.onnx.precision."
             )

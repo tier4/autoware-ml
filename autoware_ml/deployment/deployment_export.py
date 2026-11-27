@@ -32,10 +32,13 @@ from autoware_ml.utils.deploy import (
     modify_onnx_graph,
     build_tensorrt_engine,
 )
+from autoware_ml.utils.fp16_range import validate_fp16_range
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import stamp_onnx_meta
 from autoware_ml.utils.onnx_precision import (
+    OnnxPrecision,
     convert_onnx_precision,
+    declared_onnx_precisions,
     resolve_onnx_precision,
     should_convert_precision,
     validate_module_onnx_precision,
@@ -109,6 +112,15 @@ class DeploymentExport:
 
             if should_export_stage(self.deploy_cfg.onnx):
                 validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
+                # A module whose engines run in fp32 declares it or sets no share
+                fp16_engines = all(
+                    declared.precision is not OnnxPrecision.FP32
+                    for declared in declared_onnx_precisions(export_spec.module)
+                )
+                if fp16_engines and module_onnx_cfg.fp16_range_share is not None:
+                    validate_fp16_range(
+                        export_spec, module_name, float(module_onnx_cfg.fp16_range_share)
+                    )
                 export_to_onnx(export_spec, module_onnx_cfg, module_onnx_path)
                 modify_graph_cfg = module_onnx_cfg.get("modify_graph", None)
                 if should_modify_graph(modify_graph_cfg):
