@@ -27,7 +27,12 @@ from torch.onnx.operators import shape_as_tensor
 
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
-from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor, GraphTensor
+from autoware_ml.deployment.graphs import (
+    DeploymentGraph,
+    ExportModule,
+    GraphExecutor,
+    GraphTensor,
+)
 from autoware_ml.models.module_base_model import LogDictConfigs, ModuleBaseModel
 from autoware_ml.models.segmentation3d.encoders.ptv3 import (
     Block,
@@ -581,7 +586,7 @@ def make_serialized_pooling_from_flat_inputs(
     return metadata
 
 
-class PTv3EncoderExportModule(nn.Module):
+class PTv3EncoderExportModule(ExportModule):
     """The ``ptv3_encoder`` graph: voxels and serialization in, per-stage point features out."""
 
     def __init__(
@@ -754,7 +759,7 @@ def build_seg3d_head_input_dynamic_axes(
     return dynamic_axes
 
 
-class PTv3Seg3DHeadExportModule(nn.Module):
+class PTv3Seg3DHeadExportModule(ExportModule):
     """Export-only segmentation head decoding per-stage encoder features."""
 
     def __init__(
