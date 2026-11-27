@@ -165,6 +165,8 @@ class TestTpErrorsMetric(unittest.TestCase):
             pred_labels=torch.zeros(10, dtype=torch.long),
             gt_boxes=boxes.clone(),
             gt_labels=torch.zeros(10, dtype=torch.long),
+            ignored_gt_boxes=torch.zeros((0, 9)),
+            ignored_gt_labels=torch.zeros(0, dtype=torch.long),
         )
         self.perfect_state = Detection3DState(samples=[sample], class_names=("car",))
 

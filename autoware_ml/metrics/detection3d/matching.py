@@ -25,10 +25,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from math import pi
+from math import inf, pi
 
 import numpy as np
 import torch
+from jaxtyping import Bool, Float
 
 from autoware_ml.metrics.base import MetricRange
 from autoware_ml.metrics.detection3d.geometry import (
@@ -128,19 +129,17 @@ def gt_keep_mask(
     Returns:
         Boolean keep mask ``(G,)``.
     """
-    n = gt_boxes.shape[0]
-    keep = torch.ones(n, dtype=torch.bool, device=gt_boxes.device)
-    if n == 0:
-        return keep
-
+    keep = torch.ones(gt_boxes.shape[0], dtype=torch.bool, device=gt_boxes.device)
     if max_distances:
         distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
-        for box_idx in range(n):
-            label = int(gt_labels[box_idx].item())
-            if 0 <= label < len(class_names):
-                max_dist = max_distances.get(class_names[label])
-                if max_dist is not None and float(distances[box_idx].item()) > max_dist:
-                    keep[box_idx] = False
+        # A label outside the classes or a class without a cap keeps its boxes at any distance
+        limits = torch.tensor(
+            [max_distances.get(name, inf) for name in class_names] + [inf],
+            dtype=torch.float64,
+            device=gt_boxes.device,
+        )
+        known = (gt_labels >= 0) & (gt_labels < len(class_names))
+        keep &= distances <= limits[torch.where(known, gt_labels, len(class_names)).long()]
 
     if min_num_points > 0 and gt_num_points is not None:
         keep &= gt_num_points >= min_num_points
@@ -150,16 +149,19 @@ def gt_keep_mask(
 
 def _slice_sample(
     sample: Detection3DSample,
-    gt_keep: torch.Tensor,
-    pred_keep: torch.Tensor,
+    gt_keep: Bool[torch.Tensor, " num_gts"],
+    ignored_keep: Bool[torch.Tensor, " num_ignored"],
+    pred_keep: Bool[torch.Tensor, " num_preds"],
 ) -> Detection3DSample:
-    """Return a new sample with GT and predictions sliced by boolean masks."""
+    """Return a new sample with GT, ignored GT and predictions sliced by boolean masks."""
     return Detection3DSample(
         pred_boxes=sample.pred_boxes[pred_keep],
         pred_scores=sample.pred_scores[pred_keep],
         pred_labels=sample.pred_labels[pred_keep],
         gt_boxes=sample.gt_boxes[gt_keep],
         gt_labels=sample.gt_labels[gt_keep],
+        ignored_gt_boxes=sample.ignored_gt_boxes[ignored_keep],
+        ignored_gt_labels=sample.ignored_gt_labels[ignored_keep],
         gt_ttc=None if sample.gt_ttc is None else sample.gt_ttc[gt_keep],
         pred_ttc=None if sample.pred_ttc is None else sample.pred_ttc[pred_keep],
         ttc_covered=sample.ttc_covered,
@@ -170,7 +172,7 @@ def clip_to_range(
     samples: list[Detection3DSample],
     metric_range: MetricRange,
 ) -> list[Detection3DSample]:
-    """Clip both GT and predictions to a radial distance window.
+    """Clip the GT, the ignored GT and the predictions to a radial distance window.
 
     Args:
         samples: Accumulated per-frame samples.
@@ -184,6 +186,9 @@ def clip_to_range(
             sample,
             gt_keep=_distance_mask(
                 sample.gt_boxes, metric_range.min_distance, metric_range.max_distance
+            ),
+            ignored_keep=_distance_mask(
+                sample.ignored_gt_boxes, metric_range.min_distance, metric_range.max_distance
             ),
             pred_keep=_distance_mask(
                 sample.pred_boxes, metric_range.min_distance, metric_range.max_distance
@@ -222,7 +227,8 @@ class PreparedLabel:
     so :class:`Detection3DState` builds this once per label and matches every
     threshold against it. Per-frame boxes are concatenated in frame order and
     stably sorted by descending score. Greedy claims never cross frames, so
-    the flat order matches per-frame greedy matching exactly.
+    the flat order matches per-frame greedy matching exactly. The ignored ground truth
+    boxes of every frame are costed alongside, see :meth:`match`.
     """
 
     __slots__ = (
@@ -233,9 +239,18 @@ class PreparedLabel:
         "candidate_rows",
         "gt_flat",
         "gt_flat_index",
+        "ignored_cost_rows",
+        "ignored_candidate_rows",
+        "ignored_flat_index",
+        "num_ignored",
     )
 
-    def __init__(self, samples: list[Detection3DSample], label: int, cost_fn) -> None:
+    def __init__(
+        self,
+        samples: list[Detection3DSample],
+        label: int,
+        cost_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    ) -> None:
         """Mask, convert and cost the label's boxes across all frames, in score order.
 
         Args:
@@ -245,91 +260,122 @@ class PreparedLabel:
         """
         pred_chunks: list[np.ndarray] = []
         score_chunks: list[np.ndarray] = []
-        cost_row_chunks: list[list[np.ndarray]] = []
-        candidate_row_chunks: list[list[np.ndarray]] = []
+        cost_rows: list[np.ndarray] = []
+        candidate_rows: list[list[int]] = []
+        ignored_cost_rows: list[np.ndarray] = []
+        ignored_candidate_rows: list[list[int]] = []
         gt_index_chunks: list[np.ndarray] = []
+        ignored_index_chunks: list[np.ndarray] = []
         gt_frames: list[np.ndarray] = []
         self.total_gt = 0
         gt_offset = 0
+        ignored_offset = 0
         for sample in samples:
             _validate_box_tensor(sample.gt_boxes, "gt_boxes")
+            _validate_box_tensor(sample.ignored_gt_boxes, "ignored_gt_boxes")
             _validate_box_tensor(sample.pred_boxes, "pred_boxes")
             gt_boxes = sample.gt_boxes[sample.gt_labels == label].numpy().astype(np.float64)
+            ignored_boxes = (
+                sample.ignored_gt_boxes[sample.ignored_gt_labels == label]
+                .numpy()
+                .astype(np.float64)
+            )
             self.total_gt += int(gt_boxes.shape[0])
             pred_mask = sample.pred_labels == label
             if not bool(pred_mask.any()):
                 continue
             pred_boxes = sample.pred_boxes[pred_mask].numpy().astype(np.float64)
             cost = cost_fn(pred_boxes, gt_boxes)  # (P, G)
+            ignored_cost = cost_fn(pred_boxes, ignored_boxes)  # (P, I)
             pred_chunks.append(pred_boxes)
             score_chunks.append(sample.pred_scores[pred_mask].numpy().astype(np.float64))
-            cost_row_chunks.append(list(cost))
+            cost_rows.extend(cost)
+            ignored_cost_rows.extend(ignored_cost)
             # Candidates in ascending cost order, once per row: matching at any
             # threshold then only walks each row past its claimed entries. The
             # stable sort keeps the lowest index first among equal costs, the
             # argmin tie rule.
-            candidate_row_chunks.append(np.argsort(cost, axis=1, kind="stable").tolist())
+            candidate_rows.extend(np.argsort(cost, axis=1, kind="stable").tolist())
+            ignored_candidate_rows.extend(np.argsort(ignored_cost, axis=1, kind="stable").tolist())
             gt_frames.append(gt_boxes)
             gt_index_chunks.append(np.full(pred_boxes.shape[0], gt_offset, dtype=np.int64))
+            ignored_index_chunks.append(
+                np.full(pred_boxes.shape[0], ignored_offset, dtype=np.int64)
+            )
             gt_offset += gt_boxes.shape[0]
+            ignored_offset += ignored_boxes.shape[0]
 
+        self.num_ignored = ignored_offset
         if not pred_chunks:
             self.pred_boxes = np.zeros((0, 7), dtype=np.float64)
             self.scores = np.zeros(0, dtype=np.float64)
             self.cost_rows: list[np.ndarray] = []
             self.candidate_rows: list[list[int]] = []
+            self.ignored_cost_rows: list[np.ndarray] = []
+            self.ignored_candidate_rows: list[list[int]] = []
             self.gt_flat = np.zeros((0, 7), dtype=np.float64)
             self.gt_flat_index = np.zeros(0, dtype=np.int64)
+            self.ignored_flat_index = np.zeros(0, dtype=np.int64)
             return
 
         scores = np.concatenate(score_chunks)
         order = np.argsort(-scores, kind="stable")
         self.pred_boxes = np.concatenate(pred_chunks)[order]
         self.scores = scores[order]
-        # Per prediction: its frame's cost row and the flat offset of GT slot 0
-        # in that frame, so a claim index maps straight into gt_flat.
-        cost_rows = [row for chunk in cost_row_chunks for row in chunk]
+        # Per prediction: its frame's cost rows and the flat offsets of the frame's first GT and
+        # ignored GT slot, so a claim index maps straight into the flat arrays.
         self.cost_rows = [cost_rows[index] for index in order]
-        candidate_rows = [row for chunk in candidate_row_chunks for row in chunk]
         self.candidate_rows = [candidate_rows[index] for index in order]
-        self.gt_flat = (
-            np.concatenate(gt_frames) if gt_frames else np.zeros((0, 7), dtype=np.float64)
-        )
+        self.ignored_cost_rows = [ignored_cost_rows[index] for index in order]
+        self.ignored_candidate_rows = [ignored_candidate_rows[index] for index in order]
+        self.gt_flat = np.concatenate(gt_frames)
         self.gt_flat_index = np.concatenate(gt_index_chunks)[order]
+        self.ignored_flat_index = np.concatenate(ignored_index_chunks)[order]
 
     def match(self, threshold: float) -> MatchCurve:
         """Greedy matching at one threshold over the prepared, score-ordered boxes.
 
-        The Python loop does only the inherently sequential part, claiming,
-        against precomputed cost rows. Every error channel is then computed
-        vectorized over all matched pairs at once.
+        In score order every prediction claims its nearest unclaimed counted box within the
+        threshold, a prediction left without one claims its nearest unclaimed ignored box
+        within the threshold instead and leaves the curve. The Python loop does only the
+        inherently sequential part, claiming, against precomputed cost rows. Every error
+        channel is then computed vectorized over all matched pairs at once.
 
         Args:
             threshold: Maximum match cost in meters.
 
         Returns:
-            The score-ordered match curve at ``threshold``.
+            The score-ordered match curve at ``threshold``, without the predictions on ignored
+            boxes.
         """
         num_pred = self.scores.shape[0]
         true_positive = np.zeros(num_pred, dtype=bool)
+        ignored = np.zeros(num_pred, dtype=bool)
         matched_flat_gt = np.full(num_pred, -1, dtype=np.int64)
         claimed = np.zeros(self.gt_flat.shape[0], dtype=bool)
+        claimed_ignored = np.zeros(self.num_ignored, dtype=bool)
         for index in range(num_pred):
-            costs = self.cost_rows[index]
-            offset = int(self.gt_flat_index[index])
-            # The first unclaimed candidate in ascending cost order is the
-            # nearest unclaimed ground truth, past the threshold nothing later
-            # can match either.
-            for candidate_gt in self.candidate_rows[index]:
-                if costs[candidate_gt] > threshold:
-                    break
-                flat = offset + candidate_gt
-                if claimed[flat]:
-                    continue
+            flat = _claim(
+                self.cost_rows[index],
+                self.candidate_rows[index],
+                int(self.gt_flat_index[index]),
+                claimed,
+                threshold,
+            )
+            if flat >= 0:
                 true_positive[index] = True
                 matched_flat_gt[index] = flat
-                claimed[flat] = True
-                break
+                continue
+            ignored[index] = (
+                _claim(
+                    self.ignored_cost_rows[index],
+                    self.ignored_candidate_rows[index],
+                    int(self.ignored_flat_index[index]),
+                    claimed_ignored,
+                    threshold,
+                )
+                >= 0
+            )
 
         heading_score = np.zeros(num_pred, dtype=np.float64)
         translation_error = np.full(num_pred, np.nan, dtype=np.float64)
@@ -355,20 +401,51 @@ class PreparedLabel:
                 pred_boxes
             ) - nearest_surface_distances(gt_boxes)
 
+        counted = ~ignored
         return MatchCurve(
             total_gt=self.total_gt,
-            scores=self.scores,
-            true_positive=true_positive,
-            false_positive=~true_positive,
-            heading_score=heading_score,
-            translation_error=translation_error,
-            orientation_error=orientation_error,
-            scale_error=scale_error,
-            velocity_error=velocity_error,
-            attribute_error=attribute_error,
-            corner_error=corner_error,
-            nearest_surface_error=nearest_surface,
+            scores=self.scores[counted],
+            true_positive=true_positive[counted],
+            false_positive=~true_positive[counted],
+            heading_score=heading_score[counted],
+            translation_error=translation_error[counted],
+            orientation_error=orientation_error[counted],
+            scale_error=scale_error[counted],
+            velocity_error=velocity_error[counted],
+            attribute_error=attribute_error[counted],
+            corner_error=corner_error[counted],
+            nearest_surface_error=nearest_surface[counted],
         )
+
+
+def _claim(
+    costs: Float[np.ndarray, " num_gts"],
+    candidates: list[int],
+    offset: int,
+    claimed: Bool[np.ndarray, " num_flat"],
+    threshold: float,
+) -> int:
+    """Claim the nearest unclaimed box of a frame within the threshold.
+
+    Args:
+        costs: Match cost of the prediction to every box of its frame.
+        candidates: Box indices of the frame in ascending cost order.
+        offset: Flat index of the first box of the frame.
+        claimed: Claimed flags of every flat box, updated in place.
+        threshold: Largest match cost.
+
+    Returns:
+        Flat index of the claimed box, -1 when no unclaimed box lies within the threshold.
+    """
+    # Past the threshold nothing later in the ascending order can match either
+    for candidate in candidates:
+        if costs[candidate] > threshold:
+            return -1
+        flat = offset + candidate
+        if not claimed[flat]:
+            claimed[flat] = True
+            return flat
+    return -1
 
 
 def match_by_cost(

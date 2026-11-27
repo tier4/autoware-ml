@@ -75,6 +75,8 @@ def _yaw_state(yaw_err: float, match_cost: MatchCost = MatchCost.CENTER) -> Dete
         pred_labels=torch.tensor([0]),
         gt_boxes=gt,
         gt_labels=torch.tensor([0]),
+        ignored_gt_boxes=torch.zeros((0, 9)),
+        ignored_gt_labels=torch.zeros(0, dtype=torch.long),
     )
     return Detection3DState(samples=[sample], class_names=("car",), match_cost=match_cost)
 

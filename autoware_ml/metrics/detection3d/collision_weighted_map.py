@@ -109,6 +109,8 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
             gt_labels = sample.gt_labels.numpy()
             gt_centers = sample.gt_boxes.numpy().astype(np.float64)[:, :2]
             gt_weight_all = collision_weights(sample.gt_ttc.numpy(), self.decay)
+            ignored_labels = sample.ignored_gt_labels.numpy()
+            ignored_centers = sample.ignored_gt_boxes.numpy().astype(np.float64)[:, :2]
             pred_labels = sample.pred_labels.numpy()
             pred_centers = sample.pred_boxes.numpy().astype(np.float64)[:, :2]
             pred_scores_all = sample.pred_scores.numpy().astype(np.float64)
@@ -123,16 +125,20 @@ class CollisionWeightedMeanAP(Metric[Detection3DState]):
                 if pred_scores.shape[0] == 0:
                     continue
                 matches = greedy_match_thresholds(
-                    gt_centers[gt_mask], pred_centers[pred_mask], pred_scores, self.thresholds
+                    gt_centers[gt_mask],
+                    ignored_centers[ignored_labels == label],
+                    pred_centers[pred_mask],
+                    pred_scores,
+                    self.thresholds,
                 )
-                for threshold, (tp, matched) in matches.items():
+                for threshold, (tp, matched, ignored) in matches.items():
                     # A true positive inherits its matched GT's weight, a false
-                    # positive keeps its own.
+                    # positive keeps its own, a claim on an ignored box counts neither way.
                     weight = pred_weight_all[pred_mask].copy()
                     weight[tp] = gt_weight[matched[tp]]
-                    scores[(label, threshold)].append(pred_scores)
-                    weights[(label, threshold)].append(weight)
-                    is_tp[(label, threshold)].append(tp)
+                    scores[(label, threshold)].append(pred_scores[~ignored])
+                    weights[(label, threshold)].append(weight[~ignored])
+                    is_tp[(label, threshold)].append(tp[~ignored])
 
         per_class: dict[int, float] = {}
         for label in labels:

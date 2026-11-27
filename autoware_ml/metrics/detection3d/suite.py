@@ -40,7 +40,7 @@ from autoware_ml.metrics.base import (
     MetricSuite,
     rank_zero,
 )
-from autoware_ml.metrics.class_groups import fold_labels, resolve_class_groups
+from autoware_ml.metrics.class_groups import fold_labels_tensor, resolve_class_groups
 from autoware_ml.metrics.detection3d.matching import (
     Detection3DState,
     clip_to_range,
@@ -103,7 +103,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             max_distances: Class name to maximum GT distance in meters, applied as a GT
                 filter at accumulation.
             min_num_points: Minimum LiDAR points a GT box needs to count, 0 disables the
-                filter.
+                filter. The boxes below it are ignored: a prediction that claims one counts
+                neither as a true nor as a false positive.
             match_cost: Cost the matching pairs boxes by, or its name (``center`` or
                 ``corner``) as a config spells it.
             class_groups: Group name to member class names. When set, labels are folded onto
@@ -141,6 +142,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         self.add_state("pred_labels", default=[], dist_reduce_fx=None)
         self.add_state("gt_boxes", default=[], dist_reduce_fx=None)
         self.add_state("gt_labels", default=[], dist_reduce_fx=None)
+        self.add_state("ignored_gt_boxes", default=[], dist_reduce_fx=None)
+        self.add_state("ignored_gt_labels", default=[], dist_reduce_fx=None)
         # Per-frame flag: does the frame only pad a streaming lane? It is gathered like every
         # other frame, so the ranks hold as many entries, and left out of every metric.
         self.add_state("padding", default=[], dist_reduce_fx=None)
@@ -168,6 +171,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         self._register_component_filters()
         if self._component_filters:
             self.add_state("gt_region_masks", default=[], dist_reduce_fx=None)
+            self.add_state("ignored_gt_region_masks", default=[], dist_reduce_fx=None)
             self.add_state("pred_region_masks", default=[], dist_reduce_fx=None)
             self.add_state("region_available", default=[], dist_reduce_fx=None)
 
@@ -279,15 +283,25 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.max_distances,
                 self.min_num_points,
             )
+            # The boxes in range that only the point filter drops are ignored
+            ignored = (
+                gt_keep_mask(
+                    frame_boxes, frame_labels, None, self.class_names or (), self.max_distances, 0
+                )
+                & ~keep
+            )
 
             self._note_frame()
             pred_boxes = prediction.bboxes_3d.detach().to(dtype=torch.float32)
+            pred_scores = prediction.scores_3d.detach().to(dtype=torch.float32)
             pred_labels = prediction.labels_3d.detach().to(dtype=torch.long)
             self.pred_boxes.append(pred_boxes)
-            self.pred_scores.append(prediction.scores_3d.detach().to(dtype=torch.float32))
+            self.pred_scores.append(pred_scores)
             self.pred_labels.append(pred_labels)
             self.gt_boxes.append(frame_boxes[keep])
             self.gt_labels.append(frame_labels[keep])
+            self.ignored_gt_boxes.append(frame_boxes[ignored])
+            self.ignored_gt_labels.append(frame_labels[ignored])
             self.padding.append(torch.tensor([frame.is_padding], device=frame_boxes.device))
 
             if self.collision is not None:
@@ -306,7 +320,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                         pred_labels,
                         frame_meta,
                         covered,
-                        scores=prediction.scores_3d.detach(),
+                        scores=pred_scores,
                     )
                 )
 
@@ -317,6 +331,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 )
                 self.gt_region_masks.append(
                     self._region_columns(frame_boxes[keep], frame.frame_meta, available)
+                )
+                self.ignored_gt_region_masks.append(
+                    self._region_columns(frame_boxes[ignored], frame.frame_meta, available)
                 )
                 self.pred_region_masks.append(
                     self._region_columns(pred_boxes, frame.frame_meta, available)
@@ -476,6 +493,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             pred_labels = self.pred_labels[index].cpu()
             gt_boxes = self.gt_boxes[index].cpu()
             gt_labels = self.gt_labels[index].cpu()
+            ignored_gt_boxes = self.ignored_gt_boxes[index].cpu()
+            ignored_gt_labels = self.ignored_gt_labels[index].cpu()
             gt_ttc = self.gt_ttc[index].cpu() if self.collision is not None else None
             pred_ttc = self.pred_ttc[index].cpu() if self.collision is not None else None
             ttc_covered = (
@@ -485,6 +504,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 gt_mask = self.gt_region_masks[index][:, column].cpu()
                 pred_mask = self.pred_region_masks[index][:, column].cpu()
                 gt_boxes, gt_labels = gt_boxes[gt_mask], gt_labels[gt_mask]
+                ignored_mask = self.ignored_gt_region_masks[index][:, column].cpu()
+                ignored_gt_boxes = ignored_gt_boxes[ignored_mask]
+                ignored_gt_labels = ignored_gt_labels[ignored_mask]
                 pred_boxes = pred_boxes[pred_mask]
                 pred_scores = pred_scores[pred_mask]
                 pred_labels = pred_labels[pred_mask]
@@ -499,6 +521,8 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                     pred_labels=self._fold(pred_labels),
                     gt_boxes=gt_boxes,
                     gt_labels=self._fold(gt_labels),
+                    ignored_gt_boxes=ignored_gt_boxes,
+                    ignored_gt_labels=self._fold(ignored_gt_labels),
                     gt_ttc=gt_ttc,
                     pred_ttc=pred_ttc,
                     ttc_covered=ttc_covered,
@@ -516,5 +540,4 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         """Fold trained-class labels onto the behaviour taxonomy (identity if unset)."""
         if self._group_lut is None:
             return labels
-        folded = fold_labels(labels.numpy(), self._group_lut)
-        return torch.from_numpy(folded).to(dtype=torch.long)
+        return fold_labels_tensor(labels, self._group_lut)

@@ -52,13 +52,17 @@ def _sample(preds, pred_scores, pred_labels, gts, gt_labels, pred_ttc=None, gt_t
         gt_labels=torch.tensor(gt_labels, dtype=torch.long)
         if gt_labels
         else torch.zeros(0, dtype=torch.long),
+        ignored_gt_boxes=torch.zeros((0, 9)),
+        ignored_gt_labels=torch.zeros(0, dtype=torch.long),
         pred_ttc=torch.tensor(pred_ttc, dtype=torch.float32) if n_pred else torch.zeros(0),
         gt_ttc=torch.tensor(gt_ttc, dtype=torch.float32) if n_gt else torch.zeros(0),
     )
 
 
 def test_greedy_match_basic() -> None:
-    tp, matched = greedy_match(np.array([[0.0, 0.0]]), np.array([[0.5, 0.0]]), np.array([0.9]), 2.0)
+    tp, matched, _ = greedy_match(
+        np.array([[0.0, 0.0]]), np.zeros((0, 2)), np.array([[0.5, 0.0]]), np.array([0.9]), 2.0
+    )
     assert tp.tolist() == [True]
     assert matched.tolist() == [0]
 
