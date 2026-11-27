@@ -423,6 +423,16 @@ def test_create_optimization_profile_refuses_an_entry_of_no_input_and_the_old_ta
         )
 
 
+def test_engine_path_names_the_engine_after_the_graph() -> None:
+    """Test that the engine of a graph is ``<artifacts_dir>/<graph name>.engine``.
+
+    Input: the directory ``/tmp/out`` and the graph name ``encoder``.
+    Expected: ``/tmp/out/encoder.engine``.
+    Check: the path.
+    """
+    assert deploy.engine_path("/tmp/out", "encoder") == Path("/tmp/out/encoder.engine")
+
+
 def test_build_tensorrt_engine_names_the_missing_profile_before_building(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

@@ -490,6 +490,19 @@ def create_optimization_profile(
     return profile
 
 
+def engine_path(artifacts_dir: str | Path, graph_name: str) -> Path:
+    """Path of a graph's TensorRT engine: ``<artifacts_dir>/<graph_name>.engine``.
+
+    Args:
+        artifacts_dir: Directory the export writes to.
+        graph_name: The graph's name, the artifact stem.
+
+    Returns:
+        The engine path the export writes and a runtime loads.
+    """
+    return Path(artifacts_dir) / f"{graph_name}.engine"
+
+
 def build_tensorrt_engine(
     onnx_path: Path,
     deploy_cfg: DictConfig,

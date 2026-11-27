@@ -31,6 +31,7 @@ from autoware_ml.utils.deploy import (
     should_modify_graph,
     modify_onnx_graph,
     build_tensorrt_engine,
+    engine_path,
 )
 from autoware_ml.utils.mlflow_helpers import get_git_sha
 from autoware_ml.utils.onnx_meta import stamp_onnx_meta
@@ -105,7 +106,7 @@ class DeploymentExport:
         for module_name, export_spec in export_specs.items():
             module_onnx_cfg = merge_module_onnx_cfg(self.deploy_cfg.onnx, module_name)
             module_onnx_path = self.output_dir / f"{module_name}.onnx"
-            module_engine_path = self.output_dir / f"{module_name}.engine"
+            module_engine_path = engine_path(self.output_dir, module_name)
 
             if should_export_stage(self.deploy_cfg.onnx):
                 validate_module_onnx_precision(export_spec.module, module_onnx_cfg)
