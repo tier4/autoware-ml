@@ -15,7 +15,7 @@
 """A model's deployment: the computation graphs it exports and the function that runs them.
 
 A model declares the computation graphs it exports, one :class:`DeploymentGraph` per ONNX file
-and TensorRT engine. It also writes ``deployment_forward(multi_task_batch_inputs, executors,
+and TensorRT engine, each built by the :class:`ExportModule` that runs it. It also writes ``deployment_forward(multi_task_batch_inputs, executors,
 device)``, the PyTorch code between those graphs: it takes the preprocessed batch ``forward()``
 takes, runs each graph as ``executors[name].run(**inputs)`` and returns the model outputs.
 The same function serves export, where :func:`build_export_specs_from_deployment` runs it once
@@ -30,6 +30,7 @@ is derived from a graph and the tensors it ran on.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
@@ -77,6 +78,22 @@ class DeploymentGraph:
                     f"DeploymentGraph {self.name!r} lists {repeated} more than once in its "
                     f"{kind}; each is one ONNX tensor name."
                 )
+
+
+class ExportModule(nn.Module, ABC):
+    """A module that is exported as one deployment graph.
+
+    ``forward()`` runs the graph on its input tensors, in the order of the graph's
+    ``input_names``.
+    """
+
+    @abstractmethod
+    def build_deployment_graph(self) -> DeploymentGraph:
+        """Declare this module as a graph.
+
+        Returns:
+            The graph that traces this module, with its name, tensor names and dynamic axes.
+        """
 
 
 def run_graph_module(graph: DeploymentGraph, args: Sequence[GraphTensor]) -> dict[str, GraphTensor]:

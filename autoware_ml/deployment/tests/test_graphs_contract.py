@@ -27,6 +27,7 @@ from autoware_ml.deployment.graphs import (
     DeploymentDeclaration,
     DeploymentForward,
     DeploymentGraph,
+    ExportModule,
     GraphTensor,
     run_deployment,
     run_deployment_in_torch,
@@ -123,6 +124,35 @@ class TestGraphDeclaration(unittest.TestCase):
         """
         with self.assertRaisesRegex(ValueError, "at least one exportable DeploymentGraph"):
             DeploymentDeclaration((), _toy_forward)
+
+
+class _UndeclaredExportModule(ExportModule):
+    """An export module that runs its graph but does not declare it."""
+
+    def forward(self, x: GraphTensor) -> GraphTensor:
+        """Double the input.
+
+        Args:
+            x: The graph's only input.
+
+        Returns:
+            The doubled input.
+        """
+        return x * 2
+
+
+class TestExportModule(unittest.TestCase):
+    """The contract of an export module: it declares the graph it runs."""
+
+    def test_an_export_module_without_its_graph_declaration_is_refused(self) -> None:
+        """Test that an export module has to implement ``build_deployment_graph()``.
+
+        Input: an ``ExportModule`` subclass with ``forward()`` only.
+        Expected: it cannot be constructed.
+        Check: a TypeError that names ``build_deployment_graph``.
+        """
+        with self.assertRaisesRegex(TypeError, "build_deployment_graph"):
+            _UndeclaredExportModule()
 
 
 class TestRunDeploymentInTorch(unittest.TestCase):
