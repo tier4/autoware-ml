@@ -20,8 +20,33 @@ import torch
 import torch.nn as nn
 
 
+def build_activation(name: str | None) -> nn.Module:
+    """Build an activation module by its name.
+
+    Args:
+        name: ``relu``, ``silu`` or ``gelu``, in any case, or ``None`` for no activation.
+            ReLU and SiLU are built in place.
+
+    Returns:
+        The activation, ``nn.Identity`` for ``None``.
+
+    Raises:
+        ValueError: If the name is none of the supported activations.
+    """
+    if name is None:
+        return nn.Identity()
+    key = name.lower()
+    if key == "relu":
+        return nn.ReLU(inplace=True)
+    if key == "silu":
+        return nn.SiLU(inplace=True)
+    if key == "gelu":
+        return nn.GELU()
+    raise ValueError(f"Unsupported activation {name!r}, expected relu, silu, gelu or None.")
+
+
 class ConvModule(nn.Module):
-    """Convolution, batch normalization, and ReLU activation composed into one block."""
+    """Convolution, batch normalization, and activation composed into one block."""
 
     def __init__(
         self,
@@ -31,6 +56,8 @@ class ConvModule(nn.Module):
         transpose: bool = False,
         norm_eps: float = 1e-3,
         norm_momentum: float = 0.01,
+        kernel_size: int = 3,
+        act: str | None = "relu",
     ) -> None:
         """Initialize the convolution block.
 
@@ -38,9 +65,13 @@ class ConvModule(nn.Module):
             in_channels: Input channel count.
             out_channels: Output channel count.
             stride: Convolution stride.
-            transpose: Whether to use transposed convolution.
+            transpose: Whether to use transposed convolution, whose kernel size is the stride.
             norm_eps: Epsilon used by the batch normalization layer.
             norm_momentum: Momentum used by the batch normalization layer.
+            kernel_size: Kernel size of the regular convolution, padded by
+                ``(kernel_size - 1) // 2`` to keep the resolution at stride 1. Ignored when
+                ``transpose`` is set.
+            act: Activation name, see :func:`build_activation`, or ``None`` for none.
         """
         super().__init__()
         if transpose:
@@ -55,13 +86,13 @@ class ConvModule(nn.Module):
             self.conv = nn.Conv2d(
                 in_channels,
                 out_channels,
-                kernel_size=3,
+                kernel_size=kernel_size,
                 stride=stride,
-                padding=1,
+                padding=(kernel_size - 1) // 2,
                 bias=False,
             )
         self.norm = nn.BatchNorm2d(out_channels, eps=norm_eps, momentum=norm_momentum)
-        self.activation = nn.ReLU(inplace=True)
+        self.activation = build_activation(act)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply convolution, normalization, and activation.
@@ -73,3 +104,37 @@ class ConvModule(nn.Module):
             Activated output feature map.
         """
         return self.activation(self.norm(self.conv(x)))
+
+
+def build_conv_norm(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    stride: int = 1,
+    act: str | None = None,
+) -> ConvModule:
+    """Build a convolution and batch norm block with the PyTorch batch norm defaults.
+
+    This is RT-DETR's ``ConvNormLayer``. Unlike the defaults of :class:`ConvModule`, which the
+    3D detection models train with, the batch norm uses eps 1e-5 and momentum 0.1 and the
+    activation is off unless given.
+
+    Args:
+        in_channels: Input channel count.
+        out_channels: Output channel count.
+        kernel_size: Convolution kernel size.
+        stride: Convolution stride.
+        act: Activation name, see :func:`build_activation`, or ``None`` for none.
+
+    Returns:
+        The block, whose ``conv`` and ``norm`` children match the names of ``ConvNormLayer``.
+    """
+    return ConvModule(
+        in_channels,
+        out_channels,
+        stride,
+        norm_eps=1e-5,
+        norm_momentum=0.1,
+        kernel_size=kernel_size,
+        act=act,
+    )
