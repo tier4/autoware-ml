@@ -58,8 +58,8 @@ class DenoisingQueries:
         num_groups: Number of groups.
     """
 
-    content: Float[Tensor, "batch_size num_denoising embed_dim"]
-    boxes_unact: Float[Tensor, "batch_size num_denoising 4"]
+    content: Float[Tensor, "batch_size num_denoising_queries embed_dim"]
+    boxes_unact: Float[Tensor, "batch_size num_denoising_queries 4"]
     attn_mask: Bool[Tensor, "num_total_queries num_total_queries"]
     positive_indices: tuple[Int64[Tensor, " num_positives"], ...]
     num_groups: int
@@ -102,7 +102,9 @@ def build_contrastive_denoising_queries(
         num_classes: Number of classes; label ``num_classes`` is the padding embedding.
         num_matching_queries: Number of matching queries that follow the denoising ones.
         class_embed: Label embedding with ``num_classes + 1`` entries.
-        num_denoising: Target number of denoising queries per image.
+        num_denoising: Target number of positive denoising queries per image. Each has a
+            negative twin, so the decoder gets about twice as many, and twice the largest box
+            count of the batch when that count exceeds this value.
         label_noise_ratio: The probability that a query gets a random class is half of this
             value.
         box_noise_scale: Size of the box noise, in units of half the box size.
