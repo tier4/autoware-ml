@@ -172,7 +172,8 @@ class TestKeepPointsOnTensors(unittest.TestCase):
         )
 
     def test_masks_a_tensor_as_it_masks_an_array(self) -> None:
-        """
+        """Test that every filter masks points given as a tensor exactly as given as an array.
+
         Input: 4000 scattered points, once as an array and once as a tensor, every filter.
         Expected: the kind of the points decides the kind of the mask, never its values.
         Check: an array gives an array, a tensor a boolean tensor on its device, with equal
@@ -193,7 +194,8 @@ class TestKeepPointsOnTensors(unittest.TestCase):
                     self.assertTrue(0 < int(from_array.sum()) < self.points.shape[0])
 
     def test_tensor_without_points_gives_an_empty_tensor_mask(self) -> None:
-        """
+        """Test that every filter answers a tensor of no points with an empty tensor mask.
+
         Input: a tensor of no points, every filter.
         Expected: a frame without points is answered in kind.
         Check: every filter returns an empty boolean tensor.
@@ -208,7 +210,8 @@ class TestKeepPointsOnTensors(unittest.TestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "needs a CUDA device")
     def test_masks_a_cuda_tensor_on_its_device(self) -> None:
-        """
+        """Test that every filter masks a CUDA tensor on its device, as it masks the array.
+
         Input: the points and the ego pose on a CUDA device, as a test run holds them.
         Expected: the mask stays on that device and equals the mask of the array.
         Check: every filter returns a tensor on the points' device with the array's values.
@@ -225,7 +228,8 @@ class TestKeepPointsOnTensors(unittest.TestCase):
                 )
 
     def test_segmentation_suites_hand_the_points_over_as_a_tensor(self) -> None:
-        """
+        """Test that both segmentation suites hand a filter the frame's points as a tensor.
+
         Input: one frame of two points, a recording filter, each segmentation suite.
         Expected: the suite gives the filter the frame's points without converting them.
         Check: the filter saw one (2, 3) tensor on the device of the frame's points.
