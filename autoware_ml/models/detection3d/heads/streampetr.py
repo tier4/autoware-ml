@@ -37,7 +37,10 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import (
 from autoware_ml.dataclasses.models.detection3d.predictions import Detection3DSamplePredictions
 from autoware_ml.losses.detection3d.focal import SigmoidFocalLoss
 from autoware_ml.models.detection3d.task_modules.assigners import HungarianAssigner3D
-from autoware_ml.models.common.functional import inverse_sigmoid
+from autoware_ml.models.common.functional import (
+    build_denoising_attention_mask,
+    inverse_sigmoid,
+)
 from autoware_ml.models.detection3d.task_modules.bbox_coders import (
     NMSFreeBBoxCoder3D,
     denormalize_boxes3d,
@@ -813,16 +816,9 @@ class StreamPETRHead(nn.Module):
         )
         padded_reference_points[(known_batch_idx, map_known_indice)] = known_bbox_center
 
-        dn_size = pad_size + self.num_queries
-        attn_mask = torch.zeros(dn_size, dn_size, dtype=torch.bool, device=reference_points.device)
-        attn_mask[pad_size:, :pad_size] = True
-        for group_index in range(self.scalar):
-            start = single_pad * group_index
-            end = single_pad * (group_index + 1)
-            if group_index > 0:
-                attn_mask[start:end, :start] = True
-            if group_index < self.scalar - 1:
-                attn_mask[start:end, end:pad_size] = True
+        attn_mask = build_denoising_attention_mask(
+            self.num_queries, self.scalar, single_pad, reference_points.device
+        )
 
         # Hybrid self-attention rows cover the propagated queries and its keys
         # additionally cover the non-propagated temporal memory.

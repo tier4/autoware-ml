@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 import torch
 
 
@@ -37,3 +37,35 @@ def inverse_sigmoid(
     x1 = x.clamp(min=eps)
     x2 = (1.0 - x).clamp(min=eps)
     return torch.log(x1 / x2).to(dtype=dtype)
+
+
+def build_denoising_attention_mask(
+    num_matching_queries: int,
+    num_groups: int,
+    group_size: int,
+    device: torch.device,
+    denoising_first: bool = True,
+) -> Bool[torch.Tensor, "num_total_queries num_total_queries"]:
+    """Build the self-attention mask of a query set that holds groups of denoising queries.
+
+    A matching query sees only the matching queries. A denoising query sees its own group and
+    the matching queries, never another group.
+
+    Args:
+        num_matching_queries: Number of matching queries.
+        num_groups: Number of denoising groups.
+        group_size: Number of denoising queries of every group.
+        device: Device of the mask.
+        denoising_first: Whether the denoising queries come before the matching ones or after
+            them.
+
+    Returns:
+        The mask over rows that attend and columns that are attended; True blocks attention.
+    """
+    denoising_group = torch.arange(num_groups * group_size, device=device) // max(group_size, 1)
+    matching_group = torch.full((num_matching_queries,), -1, device=device)
+    parts = (
+        [denoising_group, matching_group] if denoising_first else [matching_group, denoising_group]
+    )
+    group = torch.cat(parts)
+    return (group[None, :] >= 0) & (group[:, None] != group[None, :])
