@@ -182,6 +182,34 @@ class TestHybridEncoder(unittest.TestCase):
         for out, reference in zip(outs, expected):
             torch.testing.assert_close(out, reference, rtol=0, atol=0)
 
+    def test_runs_in_bfloat16_with_and_without_the_cache(self) -> None:
+        """Test that an encoder cast to bfloat16 runs whether or not its embedding is cached.
+
+        Input: an encoder cached for 64x96 and cast to bfloat16, run in eval on a 64x96 input
+            (cache hit) and on a 96x160 input (cache miss), and an encoder without
+            ``eval_spatial_size`` cast the same way, run on the 64x96 input.
+        Expected: the embedding built on the fly follows the dtype of the features, as the
+            cached buffer does, so all three run and return bfloat16 maps.
+        Check: the dtype of every output.
+        """
+        cached = HybridEncoder(in_channels=(8, 8, 8), hidden_dim=32, eval_spatial_size=(64, 96))
+        plain = HybridEncoder(in_channels=(8, 8, 8), hidden_dim=32)
+        cached.to(torch.bfloat16).eval()
+        plain.to(torch.bfloat16).eval()
+        cases = (
+            ("cache hit", cached, (64, 96)),
+            ("cache miss", cached, (96, 160)),
+            ("no cache", plain, (64, 96)),
+        )
+
+        for name, encoder, (height, width) in cases:
+            with self.subTest(case=name), torch.no_grad():
+                feats = [feat.to(torch.bfloat16) for feat in _features(height, width)]
+
+                outs = encoder(feats)
+
+                self.assertEqual([out.dtype for out in outs], [torch.bfloat16] * 3)
+
     def test_state_dict_follows_rt_detr_v2_checkpoints(self) -> None:
         """
         Input: the encoders of RT-DETRv2-S and -M, on the R18 and R50 stage channels, with

@@ -430,7 +430,7 @@ class HybridEncoder(nn.Module):
         return torch.concat([out_h.sin(), out_h.cos(), out_w.sin(), out_w.cos()], dim=1)[None]
 
     def _position_embedding(
-        self, idx: int, height: int, width: int, device: torch.device
+        self, idx: int, height: int, width: int
     ) -> Float[Tensor, "1 num_tokens hidden_dim"]:
         """Return the position embedding of an encoder level, cached when the size matches.
 
@@ -438,16 +438,16 @@ class HybridEncoder(nn.Module):
             idx: Input level index.
             height: Feature map height.
             width: Feature map width.
-            device: Device of the feature map.
 
         Returns:
-            Embedding of the ``height * width`` tokens.
+            Embedding of the ``height * width`` tokens: the cached buffer, or a float32 one
+            built on the CPU, which the caller moves to the features.
         """
         if not self.training and self._pos_embed_sizes.get(idx) == (height, width):
             return getattr(self, f"pos_embed{idx}")
         return self.build_2d_sincos_position_embedding(
             width, height, self.hidden_dim, self.pe_temperature
-        ).to(device)
+        )
 
     def forward(
         self, feats: Sequence[Float[Tensor, "batch_size channels height width"]]
@@ -470,7 +470,7 @@ class HybridEncoder(nn.Module):
             height, width = proj_feats[idx].shape[2:]
             # (B, C, H, W) -> (B, H * W, C)
             src = proj_feats[idx].flatten(2).permute(0, 2, 1)
-            pos_embed = self._position_embedding(idx, height, width, src.device)
+            pos_embed = self._position_embedding(idx, height, width).to(src)
             memory = encoder(src, pos_embed=pos_embed)
             proj_feats[idx] = (
                 memory.permute(0, 2, 1).reshape(-1, self.hidden_dim, height, width).contiguous()
