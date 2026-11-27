@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from math import pi
+from math import inf, pi
 
 import numpy as np
 import torch
@@ -135,12 +135,22 @@ def gt_keep_mask(
 
     if max_distances:
         distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
-        for box_idx in range(n):
-            label = int(gt_labels[box_idx].item())
-            if 0 <= label < len(class_names):
-                max_dist = max_distances.get(class_names[label])
-                if max_dist is not None and float(distances[box_idx].item()) > max_dist:
-                    keep[box_idx] = False
+        # One cap per class, read for all boxes at once. A class without a cap gets an
+        # infinite one. Detection3DMetricSuite rejects caps without class names and labels
+        # outside the class list; a direct call with such a label gets the trailing
+        # infinite cap, as the old loop skipped it, instead of an out-of-range index.
+        # The comparison runs in float64, so a cap that float32 rounds up (50.2 to
+        # 50.2000008) does not keep a box just beyond it.
+        caps = [max_distances.get(name) for name in class_names]
+        class_caps = torch.tensor(
+            [inf if cap is None else float(cap) for cap in caps] + [inf],
+            dtype=torch.float64,
+            device=gt_boxes.device,
+        )
+        labels = gt_labels.reshape(-1).to(dtype=torch.long)
+        uncapped = len(class_names)  # index of the trailing infinite cap
+        labels = torch.where((labels >= 0) & (labels < uncapped), labels, uncapped)
+        keep &= ~(distances.to(dtype=torch.float64) > class_caps[labels])
 
     if min_num_points > 0 and gt_num_points is not None:
         keep &= gt_num_points >= min_num_points
