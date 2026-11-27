@@ -311,6 +311,14 @@ class DistributedWeightedRandomSampler(DistributedSampler):
         return iter(indices)
 
 
+def split_scene(group: Sequence[int], num_parts: int) -> list[Sequence[int]]:
+    """Cut a scene into ``num_parts`` consecutive parts whose lengths differ by at most one."""
+    # Every part ends at the rounded up share of its index, a scene shorter than the number of
+    # parts gives single frames
+    bounds = [-(-len(group) * part // num_parts) for part in range(num_parts + 1)]
+    return [group[begin:end] for begin, end in zip(bounds[:-1], bounds[1:]) if end > begin]
+
+
 class GroupStreamingSampler(DistributedSampler):
     """Feed every batch position the frames of one scene after another, in time order.
 
@@ -318,6 +326,11 @@ class GroupStreamingSampler(DistributedSampler):
     one after another, so a temporal model can keep one memory per lane; it tells from
     the frame metadata of the batch where a lane starts a new stream and resets that
     lane's memory there.
+
+    Every scene is first split into ``scene_split_num`` consecutive parts whose lengths differ by
+    at most one, a scene shorter than that into single frames, and every part is a scene of its
+    own from then on. Adjacent parts of a scene in one lane continue one stream, since a model
+    resets its memory only on a scene change or a time gap.
 
     Every epoch the scenes are joined, in order or shuffled by ``seed + epoch``, and their
     frames are cut into ``num_lanes`` (``num_replicas * batch_size``) lanes whose lengths
@@ -338,7 +351,8 @@ class GroupStreamingSampler(DistributedSampler):
     With ``consistent_augmentation`` every frame of a scene is a ``StreamSlot`` carrying the
     seed of the scene, the run, the epoch and the scene, from which a dataset draws one
     augmentation for the whole scene, as Sparse4D keeps the augmentation of a sequence. The
-    next scene and the same scene in the next epoch carry another seed.
+    parts of a split scene share that seed, since adjacent parts continue one stream. The next
+    scene and the same scene in the next epoch carry another seed.
 
     As a ``DistributedSampler`` it is never wrapped by Lightning, whose wrapper would keep
     only every ``num_replicas``-th index of each rank and make its lanes skip frames.
@@ -357,6 +371,7 @@ class GroupStreamingSampler(DistributedSampler):
         shuffle: bool,
         seed: int,
         consistent_augmentation: bool,
+        scene_split_num: int = 1,
     ) -> None:
         """Initialize the streaming sampler.
 
@@ -369,22 +384,34 @@ class GroupStreamingSampler(DistributedSampler):
             seed: Base seed for the per-epoch scene shuffle, the experiment seed.
             consistent_augmentation: Whether every frame of a scene carries the seed of its
                 scene, so a dataset augments the frames of a scene alike.
+            scene_split_num: Number of consecutive parts every scene is split into, 1 streams
+                whole scenes.
 
         Raises:
             ValueError: If ``consistent_augmentation`` is set and ``seed`` is outside 0 to
-                ``MAX_STREAM_SEED``. The seed is part of every stream seed, which a pipeline
-                hands to ``np.random.seed``.
+                ``MAX_STREAM_SEED``, the seed being part of every stream seed, which a pipeline
+                hands to ``np.random.seed``, or if ``scene_split_num`` is below 1.
         """
         if consistent_augmentation and not 0 <= seed <= self.MAX_STREAM_SEED:
             raise ValueError(
                 f"GroupStreamingSampler with consistent_augmentation needs a seed from 0 to "
                 f"{self.MAX_STREAM_SEED}, the range a NumPy random state is seeded by, but got {seed}."
             )
+        if scene_split_num < 1:
+            raise ValueError(f"scene_split_num must be at least 1, got {scene_split_num}.")
         num_replicas, rank = _world_size_and_rank()
         # The parent's num_samples and total_size count the dataset, not the lanes; __len__ and
         # __iter__ below replace them.
         super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle, seed=seed)
-        self.scene_groups = dataset.scene_index_groups()
+        parts = [
+            (scene, part)
+            for scene, group in enumerate(dataset.scene_index_groups())
+            for part in split_scene(group, scene_split_num)
+        ]
+        self.scene_groups: list[Sequence[int]] = [part for _, part in parts]
+        # The scene of every part seeds its augmentation, so parts that continue one stream in
+        # a lane are augmented alike
+        self.part_scenes: list[int] = [scene for scene, _ in parts]
         if not self.scene_groups:
             raise ValueError("GroupStreamingSampler requires at least one scene group.")
         self.batch_size = batch_size
@@ -423,12 +450,13 @@ class GroupStreamingSampler(DistributedSampler):
         """Frames of one scene for an epoch, stream slots of one seed when it is augmented alike.
 
         The seed is the run, the epoch and the scene, so every worker and rank and a resumed
-        run draw the same augmentation for the scene, and the next epoch draws another one.
+        run draw the same augmentation for the scene, and the next epoch draws another one. Every
+        part of a split scene carries the seed of the whole scene.
         """
         frames = self.scene_groups[scene_index]
         if not self.consistent_augmentation:
             return frames
-        stream_seed = (self.seed, epoch, scene_index)
+        stream_seed = (self.seed, epoch, self.part_scenes[scene_index])
         return [StreamSlot(index, stream_seed) for index in frames]
 
     def _cut_lanes(self, scene_order: Sequence[int], epoch: int) -> Sequence[Sequence[int]]:

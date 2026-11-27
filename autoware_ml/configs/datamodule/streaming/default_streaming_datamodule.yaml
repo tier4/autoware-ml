@@ -6,3 +6,13 @@ _target_: autoware_ml.datamodule.streaming_data_module.StreamingDataModule
 
 # The training split reshuffles its scenes every epoch from the experiment seed.
 seed: ${seed}
+
+# Every dataloader takes the streaming settings
+train_dataloader:
+  _target_: autoware_ml.datamodule.streaming_data_module.StreamingDataLoaderConfig
+validation_dataloader:
+  _target_: autoware_ml.datamodule.streaming_data_module.StreamingDataLoaderConfig
+test_dataloader:
+  _target_: autoware_ml.datamodule.streaming_data_module.StreamingDataLoaderConfig
+predict_dataloader:
+  _target_: autoware_ml.datamodule.streaming_data_module.StreamingDataLoaderConfig

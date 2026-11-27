@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from torch.utils.data import DataLoader
 
@@ -25,6 +26,23 @@ from autoware_ml.datamodule.samplers import FrameSamplingConfig, GroupStreamingS
 from autoware_ml.datamodule.sources import DatasetSource
 from autoware_ml.datamodule.splitters.splitter_interface import SplitterInterface
 from autoware_ml.types.dataset import SplitType
+
+
+@dataclass
+class StreamingDataLoaderConfig(DataLoaderConfig):
+    """Settings of one dataloader of the streaming datamodule.
+
+    Attributes:
+        stream_consistent_augmentation: Whether every frame of a stream is augmented alike, with
+            one draw per stream and epoch, instead of every frame on its own. It only shares the
+            draws between frames: whether the cameras of a frame share one is an option of the
+            image transform, see ``per_camera_augmentation`` of ``ResizeCropFlipRotImage``.
+        scene_split_num: Number of consecutive streams, their lengths differing by at most one,
+            every scene is split into, 1 streams whole scenes.
+    """
+
+    stream_consistent_augmentation: bool = False
+    scene_split_num: int = 1
 
 
 class StreamingDataModule(DataModule):
@@ -45,10 +63,10 @@ class StreamingDataModule(DataModule):
         self,
         splitter: SplitterInterface,
         sources: Mapping[str, DatasetSource],
-        train_dataloader: DataLoaderConfig | None,
-        validation_dataloader: DataLoaderConfig | None,
-        test_dataloader: DataLoaderConfig | None,
-        predict_dataloader: DataLoaderConfig | None,
+        train_dataloader: StreamingDataLoaderConfig | None,
+        validation_dataloader: StreamingDataLoaderConfig | None,
+        test_dataloader: StreamingDataLoaderConfig | None,
+        predict_dataloader: StreamingDataLoaderConfig | None,
         train_frame_sampling: FrameSamplingConfig | None,
         seed: int,
     ) -> None:
@@ -69,7 +87,23 @@ class StreamingDataModule(DataModule):
 
         Raises:
           ValueError: If frame sampling is set, which would draw the frames of a scene apart.
+          TypeError: If a dataloader is configured without the streaming settings.
         """
+        plain = [
+            name
+            for name, config in (
+                ("train_dataloader", train_dataloader),
+                ("validation_dataloader", validation_dataloader),
+                ("test_dataloader", test_dataloader),
+                ("predict_dataloader", predict_dataloader),
+            )
+            if config is not None and not isinstance(config, StreamingDataLoaderConfig)
+        ]
+        if plain:
+            raise TypeError(
+                f"{plain} are not StreamingDataLoaderConfig, compose "
+                "/datamodule/streaming@datamodule: default_streaming_datamodule."
+            )
         if train_frame_sampling is not None:
             raise ValueError(
                 "Scene streaming serves the frames of every scene in time order, so it cannot "
@@ -86,15 +120,17 @@ class StreamingDataModule(DataModule):
         )
         self.seed = seed
 
-    def build_dataloader(self, split: SplitType, config: DataLoaderConfig | None) -> DataLoader:
+    def build_dataloader(
+        self, split: SplitType, config: StreamingDataLoaderConfig | None
+    ) -> DataLoader:
         """
         Build the streaming dataloader of one split.
 
         Args:
           split: Split the dataloader serves.
           config: Dataloader settings of the split, whose batch size is the number of lanes
-            of every rank and whose ``stream_consistent_augmentation`` augments every frame of
-            a stream alike.
+            of every rank, whose ``stream_consistent_augmentation`` augments every frame of a
+            stream alike and whose ``scene_split_num`` splits every scene into streams.
 
         Returns:
           DataLoader: Dataloader over the concatenated sources of the split, drawing from a
@@ -119,6 +155,7 @@ class StreamingDataModule(DataModule):
             shuffle=split == SplitType.TRAIN,
             seed=self.seed,
             consistent_augmentation=config.stream_consistent_augmentation,
+            scene_split_num=config.scene_split_num,
         )
         return DataLoader(
             dataset=dataset,

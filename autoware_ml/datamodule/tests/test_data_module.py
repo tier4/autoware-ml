@@ -41,7 +41,10 @@ from autoware_ml.datamodule.samplers import (
     GroupStreamingSampler,
 )
 from autoware_ml.datamodule.sources import DatasetSource
-from autoware_ml.datamodule.streaming_data_module import StreamingDataModule
+from autoware_ml.datamodule.streaming_data_module import (
+    StreamingDataLoaderConfig,
+    StreamingDataModule,
+)
 from autoware_ml.datamodule.t4dataset.dataset import T4Dataset
 from autoware_ml.datamodule.common.detection3d import Detection3DTask
 from autoware_ml.datamodule.t4dataset.segmentation3d import T4Segmentation3DTask
@@ -745,6 +748,35 @@ class TestFrameSampling(MultiSourceTestCase):
             data_module.train_dataloader()
 
 
+class TestStreamSettings(unittest.TestCase):
+    """Stream settings belong to the dataloaders of the streaming datamodule."""
+
+    def test_a_plain_dataloader_has_no_stream_settings(self) -> None:
+        """
+        Input: plain dataloader settings that split scenes.
+        Expected: only the streaming datamodule splits scenes, the plain settings do not take it.
+        """
+        with self.assertRaisesRegex(TypeError, "scene_split_num"):
+            DataLoaderConfig(batch_size=1, scene_split_num=2)
+
+    def test_the_streaming_datamodule_refuses_plain_dataloaders(self) -> None:
+        """
+        Input: a streaming datamodule given plain dataloader settings.
+        Expected: TypeError naming the dataloader, its stream settings would be missing.
+        """
+        with self.assertRaisesRegex(TypeError, "train_dataloader"):
+            StreamingDataModule(
+                splitter=SingleSplitSplitter(),
+                sources={},
+                train_dataloader=DataLoaderConfig(batch_size=1),
+                validation_dataloader=None,
+                test_dataloader=None,
+                predict_dataloader=None,
+                train_frame_sampling=None,
+                seed=0,
+            )
+
+
 def with_scenes(
     records: pl.DataFrame, scenario_ids: Sequence[str], timestamps: Sequence[float]
 ) -> pl.DataFrame:
@@ -908,9 +940,9 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
     def build_streaming_data_module(
         self,
         sources: Mapping[str, DatasetSource] | None = None,
-        train_dataloader: DataLoaderConfig | None = None,
-        validation_dataloader: DataLoaderConfig | None = None,
-        predict_dataloader: DataLoaderConfig | None = None,
+        train_dataloader: StreamingDataLoaderConfig | None = None,
+        validation_dataloader: StreamingDataLoaderConfig | None = None,
+        predict_dataloader: StreamingDataLoaderConfig | None = None,
         train_frame_sampling: FrameSamplingConfig | None = None,
         seed: int = 0,
     ) -> StreamingDataModule:
@@ -936,8 +968,8 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         training seed.
         """
         data_module = self.build_streaming_data_module(
-            train_dataloader=DataLoaderConfig(batch_size=2),
-            validation_dataloader=DataLoaderConfig(batch_size=1),
+            train_dataloader=StreamingDataLoaderConfig(batch_size=2),
+            validation_dataloader=StreamingDataLoaderConfig(batch_size=1),
             seed=7,
         )
         data_module.setup("fit")
@@ -952,6 +984,20 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         self.assertEqual((validation_sampler.batch_size, validation_sampler.shuffle), (1, False))
         self.assertEqual(list(validation_sampler), [4, 2, 0, 1, 3])
 
+    def test_scene_split_num_splits_every_scene_into_streams(self) -> None:
+        """
+        Input: a streaming datamodule whose validation loader splits every scene in two.
+        Expected: scene a of three frames streams as two frames and one, scene b of two as two
+          single frames.
+        Check: compare the scene groups of the validation sampler.
+        """
+        data_module = self.build_streaming_data_module(
+            validation_dataloader=StreamingDataLoaderConfig(batch_size=1, scene_split_num=2),
+        )
+        data_module.setup("fit")
+
+        self.assertEqual(data_module.val_dataloader().sampler.scene_groups, [[4, 2], [0], [1], [3]])
+
     def test_rejects_a_shuffling_loader(self) -> None:
         """
         Input: a streaming datamodule whose training loader asks to shuffle.
@@ -960,7 +1006,7 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         Check: building the training loader raises a ValueError naming the shuffle.
         """
         data_module = self.build_streaming_data_module(
-            train_dataloader=DataLoaderConfig(batch_size=1, shuffle=True),
+            train_dataloader=StreamingDataLoaderConfig(batch_size=1, shuffle=True),
         )
         data_module.setup("fit")
 
@@ -976,8 +1022,8 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         Check: both loaders raise a ValueError naming overfit_batches.
         """
         data_module = self.build_streaming_data_module(
-            train_dataloader=DataLoaderConfig(batch_size=2),
-            validation_dataloader=DataLoaderConfig(batch_size=1),
+            train_dataloader=StreamingDataLoaderConfig(batch_size=2),
+            validation_dataloader=StreamingDataLoaderConfig(batch_size=1),
         )
         data_module.setup("fit")
         data_module.trainer = L.Trainer(overfit_batches=2, accelerator="cpu", logger=False)
@@ -995,8 +1041,8 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
         Check: both loaders draw from the scene sampler.
         """
         data_module = self.build_streaming_data_module(
-            train_dataloader=DataLoaderConfig(batch_size=2),
-            validation_dataloader=DataLoaderConfig(batch_size=1),
+            train_dataloader=StreamingDataLoaderConfig(batch_size=2),
+            validation_dataloader=StreamingDataLoaderConfig(batch_size=1),
         )
         data_module.setup("fit")
         data_module.trainer = L.Trainer(accelerator="cpu", logger=False)
@@ -1022,7 +1068,7 @@ class TestStreamingDataModule(StreamedCorpusTestCase):
             )
             data_module = self.build_streaming_data_module(
                 {"main": source},
-                predict_dataloader=DataLoaderConfig(batch_size=batch_size),
+                predict_dataloader=StreamingDataLoaderConfig(batch_size=batch_size),
             )
             data_module.setup("predict")
             return data_module.predict_dataloader()

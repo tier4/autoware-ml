@@ -123,7 +123,8 @@ def dataset(
 def test_frames_with_a_rare_class_weigh_more() -> None:
     # Cars are in every frame, the bicycle in one of four, so only that frame is lifted.
     split = ConcatDataset(
-        [dataset([[box("car")], [box("car")], [box("car")], [box("car"), box("bicycle")]])], [1]
+        [dataset([[box("car")], [box("car")], [box("car")], [box("car"), box("bicycle")]])],
+        [1],
     )
 
     weights = compute_frame_sampling_weights(split, config())
@@ -134,7 +135,16 @@ def test_frames_with_a_rare_class_weigh_more() -> None:
 
 def test_a_frame_weighs_as_much_as_its_rarest_category() -> None:
     split = ConcatDataset(
-        [dataset([[box("car"), box("bicycle")], [box("bicycle")], [box("car")], [box("car")]])],
+        [
+            dataset(
+                [
+                    [box("car"), box("bicycle")],
+                    [box("bicycle")],
+                    [box("car")],
+                    [box("car")],
+                ]
+            )
+        ],
         [1],
     )
 
@@ -220,7 +230,8 @@ def test_an_unsupervised_source_leaves_the_factors_unchanged() -> None:
     records = [[box("car")], [box("car"), box("bicycle")]]
     alone = ConcatDataset([dataset(records)], [1])
     mixed = ConcatDataset(
-        [dataset(records), dataset([[box("bicycle")]] * 4, det3d_supervised=False)], [1, 6]
+        [dataset(records), dataset([[box("bicycle")]] * 4, det3d_supervised=False)],
+        [1, 6],
     )
 
     assert compute_frame_sampling_weights(mixed, config())[:2] == (
@@ -381,6 +392,22 @@ def test_set_epoch_reshuffles_deterministically() -> None:
     assert epoch_indices(0) != epoch_indices(1)
 
 
+def test_shuffled_epochs_have_the_same_length() -> None:
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([9, 2, 7, 3, 8, 1, 6, 4, 5, 5]),
+        batch_size=2,
+        shuffle=True,
+        seed=0,
+        consistent_augmentation=False,
+    )
+    lengths = set()
+    for epoch in range(20):
+        sampler.set_epoch(epoch)
+        lengths.add(len(list(sampler)))
+
+    assert lengths == {len(sampler)}
+
+
 def test_raises_when_lanes_cannot_be_filled() -> None:
     """
     Input: one single-frame scene for two lanes.
@@ -396,6 +423,88 @@ def test_raises_when_lanes_cannot_be_filled() -> None:
             seed=0,
             consistent_augmentation=False,
         )
+
+
+def test_every_scene_is_split_into_the_set_number_of_streams() -> None:
+    """
+    Input: scenes of 7 and 3 frames split into two streams each, served through two lanes.
+    Expected: every scene is cut into two consecutive parts whose lengths differ by at most one,
+    and the joined frames are cut in half, lane 0 holding frames 0 to 4 and lane 1 frames 5 to 9.
+    Check: the scene groups and the indices of the two lanes.
+    """
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([7, 3]),
+        batch_size=2,
+        shuffle=False,
+        seed=0,
+        scene_split_num=2,
+        consistent_augmentation=False,
+    )
+    assert sampler.scene_groups == [[0, 1, 2, 3], [4, 5, 6], [7, 8], [9]]
+    assert list(sampler) == [0, 5, 1, 6, 2, 7, 3, 8, 4, 9]
+
+
+def test_a_scene_gives_as_many_streams_as_set_or_one_per_frame() -> None:
+    """
+    Input: scenes of 9 and 3 frames split into four streams each.
+    Expected: four parts of near-equal length for the long scene, one part per frame for the
+    scene shorter than the number of streams.
+    Check: the scene groups.
+    """
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([9, 3]),
+        batch_size=1,
+        shuffle=False,
+        seed=0,
+        scene_split_num=4,
+        consistent_augmentation=False,
+    )
+    assert sampler.scene_groups == [[0, 1, 2], [3, 4], [5, 6], [7, 8], [9], [10], [11]]
+
+
+def test_rejects_a_scene_split_into_no_stream() -> None:
+    """
+    Input: a scene split into zero streams.
+    Expected: no stream could hold a frame.
+    Check: a ValueError naming scene_split_num is raised.
+    """
+    with pytest.raises(ValueError, match="scene_split_num"):
+        GroupStreamingSampler(
+            _FakeScenesDataset([4]),
+            batch_size=1,
+            shuffle=False,
+            seed=0,
+            scene_split_num=0,
+            consistent_augmentation=False,
+        )
+
+
+def test_shuffled_split_scenes_serve_every_frame_once() -> None:
+    """
+    Input: scenes of 7 and 3 frames split into two streams each, shuffled through two lanes over
+    five epochs.
+    Expected: the shuffled parts serve every frame once per epoch, in as many slots as the
+    sampler reports, and the epochs order the frames differently.
+    Check: the real indices and the length of every epoch.
+    """
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([7, 3]),
+        batch_size=2,
+        shuffle=True,
+        seed=0,
+        scene_split_num=2,
+        consistent_augmentation=False,
+    )
+    orders = set()
+    for epoch in range(5):
+        sampler.set_epoch(epoch)
+        indices = list(sampler)
+        real = [index for index in indices if not isinstance(index, PaddingSlot)]
+        assert len(indices) == len(sampler)
+        assert sorted(real) == list(range(10))
+        orders.add(tuple(real))
+
+    assert len(orders) > 1
 
 
 def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
@@ -418,7 +527,11 @@ def test_is_a_distributed_sampler_so_lightning_does_not_wrap_it() -> None:
 
 
 def _ranks(
-    dataset: _FakeScenesDataset, world_size: int, batch_size: int, shuffle: bool, seed: int = 0
+    dataset: _FakeScenesDataset,
+    world_size: int,
+    batch_size: int,
+    shuffle: bool,
+    seed: int = 0,
 ):
     """The sampler of every rank of a ``world_size``-rank job, built as every rank would."""
     samplers = []
@@ -595,3 +708,24 @@ def test_a_lane_ends_with_at_most_one_padding_slot_holding_its_last_frame(
                 assert not any(padded[:-1])
                 if padded[-1]:
                     assert lane[-1] == lane[-2]
+
+
+def test_the_parts_of_a_split_scene_share_the_augmentation_seed_of_the_scene() -> None:
+    """
+    Input: scenes of 6 and 4 frames split into 2 parts each, augmented alike, one lane.
+    Expected: adjacent parts of a scene continue one stream, so they share one augmentation.
+    Check: the frames of both parts of a scene carry one stream seed, the two scenes two seeds.
+    """
+    sampler = GroupStreamingSampler(
+        _FakeScenesDataset([6, 4]),
+        batch_size=1,
+        shuffle=False,
+        seed=0,
+        scene_split_num=2,
+        consistent_augmentation=True,
+    )
+    seeds = [slot.stream_seed for slot in sampler]
+
+    assert len(sampler.scene_groups) == 4
+    assert set(seeds[:6]) == {(0, 0, 0)}
+    assert set(seeds[6:]) == {(0, 0, 1)}
