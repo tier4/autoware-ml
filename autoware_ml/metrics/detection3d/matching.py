@@ -135,10 +135,12 @@ def gt_keep_mask(
 
     if max_distances:
         distances = torch.linalg.vector_norm(gt_boxes[:, :2].to(dtype=torch.float32), dim=1)
-        # One cap per class, read for all boxes at once. A class without a cap, and a
-        # label outside the class list, gets an infinite one. The comparison runs in
-        # float64, so a cap that float32 rounds up (50.2 to 50.2000008) does not keep a
-        # box just beyond it.
+        # One cap per class, read for all boxes at once. A class without a cap gets an
+        # infinite one. Detection3DMetricSuite rejects caps without class names and labels
+        # outside the class list; a direct call with such a label gets the trailing
+        # infinite cap, as the old loop skipped it, instead of an out-of-range index.
+        # The comparison runs in float64, so a cap that float32 rounds up (50.2 to
+        # 50.2000008) does not keep a box just beyond it.
         caps = [max_distances.get(name) for name in class_names]
         class_caps = torch.tensor(
             [inf if cap is None else float(cap) for cap in caps] + [inf],
