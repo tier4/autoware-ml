@@ -84,7 +84,7 @@ autoware-ml train \
     --weights <rgb_stem_vovnet_backbone.pth>
 ```
 
-Stage 1 trains at the ±51.2 m range of the reference recipe and of the T4 stages: the head normalizes its learned reference points by the range, so they carry over to stage 2.
+Stage 1 trains at the ±51.2 m range of the reference recipe and of the T4 stages: the head normalizes its learned reference points by the range, so they carry over to stage 2. In z the two frames differ: the nuScenes boxes stay in the LIDAR_TOP frame, about 1.84 m above the ground, so stage 1 spans -5 to 3 m, while the T4 stages measure z from the ground (base_link) and span -3 to 5 m. Both cover the same slab above the road.
 
 The backbone init is the upstream StreamPETR DD3D/FCOS3D-pretrained VoVNet-99 (`fcos3d_vovnet_imgbackbone-remapped.pth`, BGR); without it the recipe underperforms. The detector keeps its backbone inside its image feature extractor, so the file's `img_backbone.*` tensors are renamed to `image_feature_extractor.img_backbone.*` (under the original names no tensor matches and `--weights` fails) and the stem conv is flipped to RGB:
 

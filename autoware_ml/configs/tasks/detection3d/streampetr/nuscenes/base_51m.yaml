@@ -17,9 +17,10 @@ taxonomy:
   detection3d:
     class_names: [car, truck, bus, bicycle, pedestrian, traffic_cone, barrier]
 
-# The range of the T4 stages too, so the learned reference points carry over to stage 2; z is
-# measured from the ground as the T4 base_link does, which keeps the centers of the tall vehicles.
-point_cloud_range: [-51.2, -51.2, -3.0, 51.2, 51.2, 5.0]
+# The nuScenes boxes stay in the LIDAR_TOP frame, about 1.84 m above the ground, so z -5 to 3 m
+# spans the slab the T4 stages cover from the ground (base_link, -3 to 5 m) and the learned
+# reference points carry over to stage 2.
+point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 image_size: [320, 800]
 camera_names: [CAM_FRONT, CAM_FRONT_RIGHT, CAM_FRONT_LEFT, CAM_BACK, CAM_BACK_LEFT, CAM_BACK_RIGHT]

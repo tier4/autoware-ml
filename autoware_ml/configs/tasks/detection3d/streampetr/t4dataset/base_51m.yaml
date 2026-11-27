@@ -18,7 +18,8 @@ taxonomy:
   detection3d:
     class_names: [car, truck, bus, bicycle, pedestrian, barrier, traffic_cone]
 
-# z is measured from the ground as the T4 base_link does, the range of the nuScenes pretrain too.
+# z is measured from the ground as the T4 base_link does; the nuScenes pretrain covers the same
+# slab with -5 to 3 m, as its boxes stay in the LIDAR_TOP frame.
 point_cloud_range: [-51.2, -51.2, -3.0, 51.2, 51.2, 5.0]
 post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
 image_size: [480, 640]
