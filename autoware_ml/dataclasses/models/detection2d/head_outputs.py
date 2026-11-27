@@ -100,8 +100,8 @@ class RTDETRv2DenoisingOutputs(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True, arbitrary_types_allowed=True)
 
-    cls_scores: Float[torch.Tensor, "num_layers batch_size num_denoising num_classes"]
-    bbox_preds: Float[torch.Tensor, "num_layers batch_size num_denoising 4"]
+    cls_scores: Float[torch.Tensor, "num_layers batch_size num_denoising_queries num_classes"]
+    bbox_preds: Float[torch.Tensor, "num_layers batch_size num_denoising_queries 4"]
     positive_indices: tuple[Int64[torch.Tensor, " num_positives"], ...]
     num_groups: int
 

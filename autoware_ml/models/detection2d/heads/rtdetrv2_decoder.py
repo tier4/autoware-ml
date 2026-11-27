@@ -312,8 +312,10 @@ class RTDETRv2Decoder(nn.Module):
             num_layers: Number of decoder layers run in training.
             dim_feedforward: Feed-forward dimension of the decoder layers.
             dropout: Dropout of the decoder layers.
-            num_denoising: Target number of denoising queries per image in training; 0
-                disables them.
+            num_denoising: Target number of positive denoising queries per image in training;
+                0 disables them. Each has a negative twin, so the decoder gets about twice as
+                many, and twice the largest box count of the batch when that count exceeds
+                this value.
             label_noise_ratio: Twice the probability that the label of a denoising query is
                 replaced by a random class.
             box_noise_scale: Box noise of the denoising queries, relative to half the box
