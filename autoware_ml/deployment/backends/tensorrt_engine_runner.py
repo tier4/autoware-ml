@@ -172,11 +172,11 @@ class TensorRTEngineRunner:
             self.output_names,
         )
 
-    def _as_binding(self, name: str, tensor: GraphTensor) -> GraphTensor:
+    def _as_binding(self, input_name: str, tensor: GraphTensor) -> GraphTensor:
         """Return ``tensor`` on :attr:`device`, contiguous, in the binding's dtype.
 
         Args:
-            name: The engine input the tensor is bound to.
+            input_name: The engine input the tensor is bound to.
             tensor: The caller's tensor, on any device and of any dtype.
 
         Returns:
@@ -184,13 +184,13 @@ class TensorRTEngineRunner:
             otherwise silently corrupt the activations, and int64 indices feed ``INT32``
             inputs.
         """
-        return tensor.to(device=self.device, dtype=self._dtypes[name]).contiguous()
+        return tensor.to(device=self.device, dtype=self._dtypes[input_name]).contiguous()
 
-    def _bind_input(self, name: str, tensor: GraphTensor) -> tuple[int, ...]:
+    def _bind_input(self, input_name: str, tensor: GraphTensor) -> tuple[int, ...]:
         """Declare an input's shape and address for this call.
 
         Args:
-            name: The engine input.
+            input_name: The engine input.
             tensor: The tensor bound to it, as :meth:`_as_binding` returns it.
 
         Returns:
@@ -200,25 +200,27 @@ class TensorRTEngineRunner:
             RuntimeError: If the engine rejects the shape (wrong rank or outside the profile).
         """
         shape = tuple(tensor.shape)
-        if not self._context.set_input_shape(name, shape):
-            declared = tuple(self._engine.get_tensor_shape(name))
+        if not self._context.set_input_shape(input_name, shape):
+            declared = tuple(self._engine.get_tensor_shape(input_name))
             allowed = f"engine shape {declared}"
             if -1 in declared:
                 low, _, high = self._engine.get_tensor_profile_shape(
-                    name, self._context.active_optimization_profile
+                    input_name, self._context.active_optimization_profile
                 )
                 allowed += f", profile min {tuple(low)} max {tuple(high)}"
-            raise RuntimeError(f"TensorRT rejected shape {shape} for input {name!r} ({allowed}).")
-        self._context.set_tensor_address(name, tensor.data_ptr())
+            raise RuntimeError(
+                f"TensorRT rejected shape {shape} for input {input_name!r} ({allowed})."
+            )
+        self._context.set_tensor_address(input_name, tensor.data_ptr())
         return shape
 
     def _allocate_output(
-        self, name: str, input_shapes: Mapping[str, tuple[int, ...]]
+        self, output_name: str, input_shapes: Mapping[str, tuple[int, ...]]
     ) -> GraphTensor:
         """Allocate an output's buffer for the bound input shapes and bind it.
 
         Args:
-            name: The engine output.
+            output_name: The engine output.
             input_shapes: The shapes bound to the inputs, for the error messages.
 
         Returns:
@@ -231,19 +233,19 @@ class TensorRTEngineRunner:
         try:
             # TensorRT reports an unresolvable shape as a Dims of negative rank, which the
             # Python binding cannot iterate.
-            shape = tuple(self._context.get_tensor_shape(name))
+            shape = tuple(self._context.get_tensor_shape(output_name))
         except ValueError:
             raise RuntimeError(
-                f"TensorRT could not infer the shape of output {name!r} from the input shapes "
-                f"{dict(input_shapes)}; the inputs disagree with each other."
+                f"TensorRT could not infer the shape of output {output_name!r} from the input "
+                f"shapes {dict(input_shapes)}; the inputs disagree with each other."
             ) from None
         if -1 in shape:
             raise RuntimeError(
-                f"Output {name!r} has the data-dependent shape {shape}; the runner allocates "
-                "outputs from the input shapes and does not support such engines."
+                f"Output {output_name!r} has the data-dependent shape {shape}; the runner "
+                "allocates outputs from the input shapes and does not support such engines."
             )
-        buffer = torch.empty(shape, dtype=self._dtypes[name], device=self.device)
-        self._context.set_tensor_address(name, buffer.data_ptr())
+        buffer = torch.empty(shape, dtype=self._dtypes[output_name], device=self.device)
+        self._context.set_tensor_address(output_name, buffer.data_ptr())
         return buffer
 
     def run(self, inputs: Mapping[str, GraphTensor]) -> dict[str, GraphTensor]:
