@@ -353,7 +353,10 @@ class PTv3BaseModel(ModuleBaseModel):
         outputs: dict[str, GraphTensor] = {}
         for name, head in executors.items():
             if name != LIDAR_ENCODER_GRAPH:
-                outputs.update(head.run(**{key: tensors[key] for key in head.input_names}))
+                # A head reads the outputs of the heads declared before it by name
+                produced = head.run(**{key: tensors[key] for key in head.input_names})
+                tensors.update(produced)
+                outputs.update(produced)
         return outputs
 
     def deployment_inputs(

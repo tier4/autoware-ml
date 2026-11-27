@@ -45,7 +45,7 @@ from autoware_ml.datamodule.base_dataset import (
     StreamPaddingSlot,
     StreamSlot,
 )
-from autoware_ml.transforms.boxes3d.filters import parse_exclusion_rules
+from autoware_ml.geometry.bbox_3d.exclusion import parse_exclusion_rules
 from autoware_ml.types.geometry import Box3DFieldIndex
 
 logger = logging.getLogger(__name__)

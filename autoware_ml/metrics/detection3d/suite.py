@@ -48,7 +48,7 @@ from autoware_ml.metrics.detection3d.matching import (
     gt_keep_mask,
 )
 from autoware_ml.metrics.detection3d.naming import metric_token
-from autoware_ml.metrics.detection3d.observation import StreamObserver
+from autoware_ml.metrics.detection3d.observation import StreamObserver, observe_detection_frame
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
@@ -312,7 +312,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.min_num_points,
             )
             if self.observer is not None:
-                keep &= self.observer.observe(i, frame).to(keep.device)
+                keep &= observe_detection_frame(self.observer, i, frame).to(keep.device)
             # The boxes in range that only the point or the observation filter drops are ignored
             ignored = (
                 gt_keep_mask(
