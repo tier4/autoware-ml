@@ -123,6 +123,11 @@ class Detection3DEvalOutput(BaseModel):
         """Whether the frames carry the lidar point count of every ground truth box."""
         return all(frame.gt_num_points is not None for frame in self.frames)
 
+    @property
+    def check_all_gt_instance_ids(self) -> bool:
+        """Whether the frames carry the object identity of every ground truth box."""
+        return all(frame.gt_instance_ids is not None for frame in self.frames)
+
 
 class Segmentation3DEvalFrame(BaseModel):
     """
@@ -240,6 +245,7 @@ class MetricRequirements(BaseModel):
       segmentation3d: The suite reads the segmentation frames.
       frame_meta: A filter or a collision provider reads the pose and lanelet map of the frames.
       gt_num_points: A ground truth point filter reads the lidar point count of every box.
+      gt_instance_ids: A temporal suite follows the ground truth objects by their identities.
       scores: A point metric reads the per-class scores of the points.
       gt_boxes: A cross-task point metric reads the detection ground truth of the frames.
     """
@@ -250,6 +256,7 @@ class MetricRequirements(BaseModel):
     segmentation3d: bool = False
     frame_meta: bool = False
     gt_num_points: bool = False
+    gt_instance_ids: bool = False
     scores: bool = False
     gt_boxes: bool = False
 
@@ -280,6 +287,10 @@ class MetricRequirements(BaseModel):
             missing.append("frame_meta (ego pose, scene token and lanelet map path per frame)")
         if self.gt_num_points and not (detection is not None and detection.check_all_gt_num_points):
             missing.append("gt_num_points (lidar points per ground truth box)")
+        if self.gt_instance_ids and not (
+            detection is not None and detection.check_all_gt_instance_ids
+        ):
+            missing.append("gt_instance_ids (object identity per ground truth box)")
         if self.scores and not (segmentation is not None and segmentation.check_all_scores):
             missing.append("scores (per-class probabilities per point)")
         if self.gt_boxes and not (segmentation is not None and segmentation.check_all_gt_boxes):

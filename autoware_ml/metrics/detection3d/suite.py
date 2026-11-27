@@ -48,6 +48,7 @@ from autoware_ml.metrics.detection3d.matching import (
     gt_keep_mask,
 )
 from autoware_ml.metrics.detection3d.naming import metric_token
+from autoware_ml.metrics.detection3d.observation import StreamObserver
 from autoware_ml.metrics.detection3d.structures import Detection3DSample
 from autoware_ml.metrics.eval_output import EvalOutput, MetricRequirements
 from autoware_ml.metrics.report import MetricReport
@@ -89,6 +90,7 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         ),
         max_distances: dict[str, float] | None = None,
         min_num_points: int = 0,
+        min_observed_points: int | None = None,
         match_cost: MatchCost | str = MatchCost.CENTER,
         class_groups: dict[str, list[str]] | None = None,
         collision: Any = None,
@@ -106,6 +108,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
             min_num_points: Minimum LiDAR points a GT box needs to count, 0 disables the
                 filter. The boxes below it are ignored: a prediction that claims one counts
                 neither as a true nor as a false positive.
+            min_observed_points: Count a box only from the first frame of its stream in which it
+                holds that many lidar points, see :class:`StreamObserver`, and ignore it before.
+                None counts every box, a suite of a temporal model sets it.
             match_cost: Cost the matching pairs boxes by, or its name (``center`` or
                 ``corner``) as a config spells it.
             class_groups: Group name to member class names. When set, labels are folded onto
@@ -120,6 +125,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         _validate_name_tokens(self.class_names)
         self.max_distances = max_distances
         self.min_num_points = int(min_num_points)
+        self.observer = (
+            StreamObserver(min_observed_points) if min_observed_points is not None else None
+        )
         # A config typo must fail at build, not after the epoch.
         self.match_cost = MatchCost(match_cost)
         if collision is None and any(component.needs_ttc for component in self.components):
@@ -230,6 +238,12 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                         metric_range.name,
                     )
 
+    def reset(self) -> None:
+        """Clear the accumulated frames and forget what every stream observed."""
+        super().reset()
+        if self.observer is not None:
+            self.observer.reset()
+
     def requirements(self) -> MetricRequirements:
         """The detection frames, plus the frame metadata and point counts the config reads.
 
@@ -243,8 +257,13 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
         """
         return MetricRequirements(
             detection3d=True,
-            frame_meta=self.collision is not None or self._filters_need_frame_meta(),
-            gt_num_points=self.min_num_points > 0,
+            frame_meta=(
+                self.collision is not None
+                or self.observer is not None
+                or self._filters_need_frame_meta()
+            ),
+            gt_num_points=self.min_num_points > 0 or self.observer is not None,
+            gt_instance_ids=self.observer is not None,
         )
 
     def update(self, eval_output: EvalOutput) -> None:
@@ -292,7 +311,9 @@ class Detection3DMetricSuite(MetricSuite[Detection3DState]):
                 self.max_distances,
                 self.min_num_points,
             )
-            # The boxes in range that only the point filter drops are ignored
+            if self.observer is not None:
+                keep &= self.observer.observe(i, frame).to(keep.device)
+            # The boxes in range that only the point or the observation filter drops are ignored
             ignored = (
                 gt_keep_mask(
                     frame_boxes, frame_labels, None, self.class_names or (), self.max_distances, 0

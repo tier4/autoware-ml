@@ -36,7 +36,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Generic, TypeVar
+from typing import Any, ClassVar, Generic, TypeVar
 
 from jaxtyping import Bool, Float
 import numpy as np
@@ -319,10 +319,12 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
     and once per range, then asks each stage-applicable metric to ``evaluate``.
 
     Subclasses implement the task-specific parts only: ``add_state`` (in their
-    ``__init__``), ``update``, ``state_for`` and ``requirements``.
+    ``__init__``), ``update``, ``state_for`` and ``requirements``. A suite that reports no
+    filtered slices sets ``supports_filters`` to False and refuses a filtered component.
     """
 
     prefix: str = ""
+    supports_filters: ClassVar[bool] = True
 
     full_state_update: bool = False
 
@@ -346,11 +348,23 @@ class MetricSuite(torchmetrics.Metric, ABC, Generic[StateT]):
                 The eval mixin fails loud on a prefix collision.
             **kwargs: Forwarded to ``torchmetrics.Metric`` (for example
                 ``sync_on_compute``).
+
+        Raises:
+            ValueError: If a component sets a filter and the suite reports no filtered slices.
         """
         super().__init__(**kwargs)
         if prefix is not None:
             self.prefix = str(prefix)
         self.components = list(components)
+        filtered = [
+            type(component).__name__
+            for component in self.components
+            if component.filter is not IDENTITY
+        ]
+        if filtered and not self.supports_filters:
+            raise ValueError(
+                f"{type(self).__name__} reports no filtered slices, {filtered} set a filter."
+            )
         self.ranges = tuple(ranges)
         self._stage = EvalStage.TEST
         # Availability-gated filters (lanelet region / collision area) register here so
