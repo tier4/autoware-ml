@@ -36,7 +36,7 @@ from autoware_ml.dataclasses.models.detection3d.head_outputs import Detection3DH
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
-from autoware_ml.deployment.graphs import DeploymentGraph
+from autoware_ml.deployment.graphs import DeploymentGraph, ExportModule
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
 from autoware_ml.models.detection3d.task_modules.partial_annotations import PartialAnnotations
@@ -336,7 +336,7 @@ def det3d_head_export_dynamic_axes(stage_count: int) -> dict[str, dict[int, str]
     }
 
 
-class PTv3Det3DHeadExportModule(nn.Module):
+class PTv3Det3DHeadExportModule(ExportModule):
     """Export-only detection head consuming the two coarsest encoder stages."""
 
     def __init__(

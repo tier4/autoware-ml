@@ -39,7 +39,12 @@ from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
 from autoware_ml.dataclasses.models.model_predictions import ModelPredictions
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.deployment.graphs import DeploymentGraph, GraphExecutor, GraphTensor
+from autoware_ml.deployment.graphs import (
+    DeploymentGraph,
+    ExportModule,
+    GraphExecutor,
+    GraphTensor,
+)
 from autoware_ml.metrics.base import MetricSuite
 from autoware_ml.metrics.detection3d.eval_output import detection3d_eval_output
 from autoware_ml.metrics.eval_output import EvalOutput
@@ -61,7 +66,7 @@ from autoware_ml.ops.voxelization.voxelization import VoxelsData
 from autoware_ml.utils.deploy import ExportSpec
 
 
-class BEVFusionLidarExportModule(nn.Module):
+class BEVFusionLidarExportModule(ExportModule):
     """The ``bevfusion_lidar`` graph: the lidar-only main body on single-sample voxel tensors.
 
     Used when the image branch is disabled. The module holds the export copies of the lidar
