@@ -35,6 +35,38 @@ def _set_last_dim(value_info: Any, value: int) -> None:
     last_dim.dim_value = value
 
 
+def _select_topk_node(model: onnx.ModelProto, node_name_substring: str | None) -> onnx.NodeProto:
+    """Return the one TopK node whose name contains a substring.
+
+    Args:
+        model: ONNX model to search.
+        node_name_substring: Text the node name must contain, or None for any TopK node.
+
+    Returns:
+        The TopK node.
+
+    Raises:
+        RuntimeError: If no TopK node or more than one matches.
+    """
+    matches = [
+        node
+        for node in model.graph.node
+        if node.op_type == "TopK"
+        and (node_name_substring is None or node_name_substring in (node.name or ""))
+    ]
+    if not matches:
+        filter_text = (
+            f" matching '{node_name_substring}'" if node_name_substring is not None else ""
+        )
+        raise RuntimeError(f"Could not find TopK node{filter_text} in exported ONNX graph.")
+    if len(matches) > 1:
+        node_names = [node.name for node in matches]
+        raise RuntimeError(
+            f"Expected exactly one TopK node to patch, found {len(matches)}: {node_names}"
+        )
+    return matches[0]
+
+
 @dataclass(slots=True)
 class TopKConstantKModifier:
     """Replace a TopK node K input with a compile-time constant.
@@ -49,36 +81,12 @@ class TopKConstantKModifier:
     node_name_substring: str | None = None
     output_path: str | Path | None = None
 
-    def _select_topk_node(self, model: Any) -> Any:
-        matches = []
-        for node in model.graph.node:
-            if node.op_type != "TopK":
-                continue
-            node_name = node.name or ""
-            if self.node_name_substring is not None and self.node_name_substring not in node_name:
-                continue
-            matches.append(node)
-
-        if not matches:
-            filter_text = (
-                f" matching '{self.node_name_substring}'"
-                if self.node_name_substring is not None
-                else ""
-            )
-            raise RuntimeError(f"Could not find TopK node{filter_text} in exported ONNX graph.")
-        if len(matches) > 1:
-            node_names = [node.name for node in matches]
-            raise RuntimeError(
-                f"Expected exactly one TopK node to patch, found {len(matches)}: {node_names}"
-            )
-        return matches[0]
-
     def modify(self, onnx_path: str | Path) -> Path:
         """Rewrite the target TopK node to use the configured fixed K."""
         source_path = Path(onnx_path)
         model = onnx.load(source_path.as_posix())
         graph = model.graph
-        topk = self._select_topk_node(model)
+        topk = _select_topk_node(model, self.node_name_substring)
         if len(topk.input) < 2:
             raise RuntimeError(
                 f"TopK node '{topk.name or '<unnamed>'}' does not have the expected K input."
@@ -109,6 +117,149 @@ class TopKConstantKModifier:
             elif value_info.name == topk.output[1]:
                 _set_last_dim(value_info, self.k)
                 value_info.type.tensor_type.elem_type = TensorProto.INT64
+
+        destination_path = Path(self.output_path) if self.output_path is not None else source_path
+        onnx.save_model(model, destination_path.as_posix())
+        return destination_path
+
+    __call__ = modify
+
+
+@dataclass(slots=True)
+class TopKPerRowModifier:
+    """Split a TopK over flattened rows into a TopK per row and a TopK over their results.
+
+    TensorRT's TopK runs one thread block per row of its input, so a TopK over a
+    ``(batch, rows * columns)`` reshape of ``(batch, rows, columns)`` scores runs on one SM.
+    This modifier takes the top ``k`` of each row first, then the top ``k`` of the
+    ``rows * k`` candidates, and maps each pick back to its flat index. Every entry of the
+    overall top ``k`` is in its row's top ``k``. The candidates are laid out row by row, so
+    equal scores keep ONNX's rule of the lower flat index first, and the result equals one
+    sorted TopK. The target TopK needs a constant K (run :class:`TopKConstantKModifier`
+    first) of at most ``columns``.
+    """
+
+    node_name_substring: str | None = None
+    output_path: str | Path | None = None
+
+    def modify(self, onnx_path: str | Path) -> Path:
+        """Replace the target TopK with the per-row selection.
+
+        Args:
+            onnx_path: Path of the exported ONNX model.
+
+        Returns:
+            Path of the modified model.
+
+        Raises:
+            RuntimeError: If the target TopK is not a largest-first TopK with a constant K over
+                the last axis of a rank-2 reshape of a rank-3 tensor.
+        """
+        source_path = Path(onnx_path)
+        model = onnx.load(source_path.as_posix())
+        graph = model.graph
+        topk = _select_topk_node(model, self.node_name_substring)
+        name = topk.name or "TopK"
+        attributes = {
+            attribute.name: helper.get_attribute_value(attribute) for attribute in topk.attribute
+        }
+        if attributes.get("axis", -1) not in (-1, 1) or attributes.get("largest", 1) != 1:
+            raise RuntimeError(f"TopK '{name}' is not a largest-first TopK over the last axis.")
+        initializer_names = {initializer.name for initializer in graph.initializer}
+        if len(topk.input) < 2 or topk.input[1] not in initializer_names:
+            raise RuntimeError(f"TopK '{name}' has no constant K; run TopKConstantKModifier first.")
+
+        producers = {output: node for node in graph.node for output in node.output}
+        reshape = producers.get(topk.input[0])
+        inferred = onnx.shape_inference.infer_shapes(model).graph
+        ranks = {
+            value.name: len(value.type.tensor_type.shape.dim)
+            for value in [*inferred.input, *inferred.value_info, *inferred.output]
+            if value.type.tensor_type.HasField("shape")
+        }
+        if reshape is None or reshape.op_type != "Reshape":
+            raise RuntimeError(f"TopK '{name}' does not read a Reshape output.")
+        scores = reshape.input[0]
+        if ranks.get(scores) != 3 or ranks.get(topk.input[0]) != 2:
+            raise RuntimeError(
+                f"TopK '{name}' does not read a rank-2 reshape of a rank-3 tensor "
+                f"(ranks {ranks.get(scores)} and {ranks.get(topk.input[0])})."
+            )
+
+        flat_shape = f"{name}_PerRowFlatShape"
+        last_axis = f"{name}_PerRowLastAxis"
+        graph.initializer.extend(
+            [
+                numpy_helper.from_array(np.array([0, -1], dtype=np.int64), name=flat_shape),
+                numpy_helper.from_array(np.array(-1, dtype=np.int64), name=last_axis),
+            ]
+        )
+        values, indices = topk.output
+        per_row = [
+            helper.make_node(
+                "TopK",
+                [scores, topk.input[1]],
+                [f"{name}_RowValues", f"{name}_RowIndices"],
+                name=f"{name}_PerRow",
+                axis=-1,
+                largest=1,
+                sorted=1,
+            ),
+            helper.make_node(
+                "Reshape",
+                [f"{name}_RowValues", flat_shape],
+                [f"{name}_CandidateValues"],
+                name=f"{name}_CandidateValuesReshape",
+            ),
+            helper.make_node(
+                "Reshape",
+                [f"{name}_RowIndices", flat_shape],
+                [f"{name}_CandidateColumns"],
+                name=f"{name}_CandidateColumnsReshape",
+            ),
+            helper.make_node(
+                "TopK",
+                [f"{name}_CandidateValues", topk.input[1]],
+                [values, f"{name}_Candidates"],
+                name=f"{name}_OverRows",
+                axis=-1,
+                largest=1,
+                sorted=1,
+            ),
+            # Candidate c is pick c % k of row c // k.
+            helper.make_node(
+                "Div", [f"{name}_Candidates", topk.input[1]], [f"{name}_Rows"], name=f"{name}_Row"
+            ),
+            helper.make_node(
+                "GatherElements",
+                [f"{name}_CandidateColumns", f"{name}_Candidates"],
+                [f"{name}_Columns"],
+                name=f"{name}_Column",
+                axis=-1,
+            ),
+            helper.make_node("Shape", [scores], [f"{name}_ScoresShape"], name=f"{name}_Shape"),
+            helper.make_node(
+                "Gather",
+                [f"{name}_ScoresShape", last_axis],
+                [f"{name}_ColumnCount"],
+                name=f"{name}_ColumnCount",
+            ),
+            helper.make_node(
+                "Mul",
+                [f"{name}_Rows", f"{name}_ColumnCount"],
+                [f"{name}_RowStarts"],
+                name=f"{name}_RowStart",
+            ),
+            helper.make_node(
+                "Add", [f"{name}_RowStarts", f"{name}_Columns"], [indices], name=f"{name}_FlatIndex"
+            ),
+        ]
+        position = list(graph.node).index(topk)
+        graph.node.remove(topk)
+        for offset, node in enumerate(per_row):
+            graph.node.insert(position + offset, node)
+        if not any(reshape.output[0] in node.input for node in graph.node):
+            graph.node.remove(reshape)
 
         destination_path = Path(self.output_path) if self.output_path is not None else source_path
         onnx.save_model(model, destination_path.as_posix())
@@ -223,6 +374,7 @@ class TransHeadTensorRTModifier:
     k: int
     topk_node_name_substring: str | None = "/bbox_head/TopK"
     attention_node_name_substring: str = "/bbox_head/decoder"
+    topk_per_class: bool = False
     output_path: str | Path | None = None
 
     def modify(self, onnx_path: str | Path) -> Path:
@@ -235,6 +387,11 @@ class TransHeadTensorRTModifier:
             node_name_substring=self.topk_node_name_substring,
             output_path=destination_path,
         ).modify(onnx_path)
+        if self.topk_per_class:
+            patched_path = TopKPerRowModifier(
+                node_name_substring=self.topk_node_name_substring,
+                output_path=destination_path,
+            ).modify(patched_path)
         return AttentionScaleToDivModifier(
             node_name_substring=self.attention_node_name_substring,
             fail_if_no_match=False,
