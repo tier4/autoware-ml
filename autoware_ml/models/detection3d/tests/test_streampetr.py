@@ -461,11 +461,11 @@ def test_stream_continuity_follows_the_scene_and_the_time_of_every_lane() -> Non
     head = _build_model().bbox_head
 
     # No previous frame: every lane starts a stream.
-    first = head.stream_continuity(["a", "b", "c"], torch.tensor([0.0, 0.0, 5.0]))
+    first = head.stream_continuity(["a", "b", "c"], torch.tensor([0.0, 0.0, 5.0])).prev_exists
     # Lane 0 continues, lane 1 moved to another scene, lane 2 restarted its scene.
-    second = head.stream_continuity(["a", "d", "c"], torch.tensor([0.5, 0.5, 1.0]))
+    second = head.stream_continuity(["a", "d", "c"], torch.tensor([0.5, 0.5, 1.0])).prev_exists
     # A batch of another size cannot be matched lane by lane.
-    third = head.stream_continuity(["a"], torch.tensor([1.0]))
+    third = head.stream_continuity(["a"], torch.tensor([1.0])).prev_exists
 
     assert first.tolist() == [0.0, 0.0, 0.0]
     assert second.tolist() == [1.0, 0.0, 0.0]
@@ -1024,7 +1024,27 @@ def test_stream_continuity_breaks_over_a_long_gap() -> None:
     continuity = StreamContinuity(max_stream_gap=1.0)
     continuity(["a", "b"], torch.tensor([0.0, 0.0]))
 
-    assert continuity(["a", "b"], torch.tensor([0.5, 1.5])).tolist() == [1.0, 0.0]
+    assert continuity(["a", "b"], torch.tensor([0.5, 1.5])).prev_exists.tolist() == [1.0, 0.0]
+
+
+def test_stream_continuity_keeps_the_shortest_gap_and_every_gap() -> None:
+    """
+    Input: three lanes whose next frames come 0.05 s, 0.01 s and 2 s after their previous ones,
+    with a shortest stream gap of 0.05 s and a longest of 2 s.
+    Expected: the gaps on both bounds continue, the shorter one starts a new stream, the gaps of
+    the lanes are kept, and a shortest gap not below the longest is rejected.
+    Check: compare the ``prev_exists`` flags and the gaps of both calls.
+    """
+    continuity = StreamContinuity(max_stream_gap=2.0, min_stream_gap=0.05)
+    start = torch.zeros(3, dtype=torch.float64)
+    assert continuity(["a", "b", "c"], start).gap.tolist() == [0.0, 0.0, 0.0]
+
+    gap = torch.tensor([0.05, 0.01, 2.0], dtype=torch.float64)
+    step = continuity(["a", "b", "c"], start + gap)
+    assert step.prev_exists.tolist() == [1.0, 0.0, 1.0]
+    torch.testing.assert_close(step.gap, gap)
+    with pytest.raises(ValueError, match="below max_stream_gap"):
+        StreamContinuity(max_stream_gap=1.0, min_stream_gap=1.0)
 
 
 def test_loss_keys_and_graph_are_uniform_without_ground_truth() -> None:
@@ -1396,7 +1416,7 @@ def test_a_padding_slot_starts_a_new_stream_and_leaves_the_next_epoch_alone() ->
     continuity = StreamContinuity()
     last_time = torch.tensor([4.0], dtype=torch.float64)
     continuity(["a"], last_time)
-    assert continuity(["a"], last_time).tolist() == [0.0]
+    assert continuity(["a"], last_time).prev_exists.tolist() == [0.0]
 
     model = _build_model().eval()
     fresh = deepcopy(model)

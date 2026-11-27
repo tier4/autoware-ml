@@ -150,3 +150,36 @@ class ImageChannel(StrEnum):
     """
 
     RGB = "RGB"
+
+
+class AnchorFieldIndex(IntEnum):
+    """
+    Channel of every field of a box anchor.
+
+    Attributes:
+      X: Center x.
+      Y: Center y.
+      Z: Center z.
+      LOG_LENGTH: Logarithm of the length.
+      LOG_WIDTH: Logarithm of the width.
+      LOG_HEIGHT: Logarithm of the height.
+      SIN_YAW: Sine of the heading.
+      COS_YAW: Cosine of the heading.
+      VELOCITY_X: Velocity along x in m/s.
+      VELOCITY_Y: Velocity along y in m/s.
+    """
+
+    X = 0
+    Y = 1
+    Z = 2
+    LOG_LENGTH = 3
+    LOG_WIDTH = 4
+    LOG_HEIGHT = 5
+    SIN_YAW = 6
+    COS_YAW = 7
+    VELOCITY_X = 8
+    VELOCITY_Y = 9
+
+
+# Channels of a box anchor: center, log size, sine and cosine of the heading, velocity
+ANCHOR_DIM = len(AnchorFieldIndex)

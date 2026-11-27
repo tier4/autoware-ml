@@ -43,6 +43,7 @@ nav = [
     { "FRNet" = "models/frnet.md" },
     { "PointTransformerV3" = "models/ptv3.md" },
     { "LitePT" = "models/litept.md" },
+    { "SparseDrive" = "models/sparsedrive.md" },
   ]},
   { "Contributing" = [
     { "Contribution Overview" = "contributing/contribution-overview.md" },

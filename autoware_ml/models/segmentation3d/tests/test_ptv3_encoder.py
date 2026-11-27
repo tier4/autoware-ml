@@ -28,6 +28,7 @@ import torch.nn as nn
 import autoware_ml.utils.point_cloud.structures as point_structures
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.utils.point_cloud.structures import pooled_sparse_shape
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.segmentation3d import Segmentation3DGTBatch
 from autoware_ml.dataclasses.geometry.voxels import VoxelsData
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
@@ -791,6 +792,52 @@ def test_points_outside_the_voxel_grid_are_excluded_from_loss_and_eval() -> None
     (frame,) = segmentation3d_eval_output(voxel_logits, batch).frames
     assert torch.equal(frame.pred, torch.tensor([0, 1]))
     assert torch.equal(frame.target, torch.tensor([0, 1]))
+
+
+def test_point_loss_leaves_out_the_padding_and_non_key_samples() -> None:
+    """
+    Input: two frames of two labelled points each, the second padding a lane or lying between key
+    frames, then a batch whose every frame is unsupervised.
+    Expected: the loss equals the loss of the first frame alone, a batch without a supervised
+    frame gives a finite zero cross entropy that backpropagates.
+    """
+    head = build_seg3d_head(num_classes=3, dec_depths=(0,))
+    voxel_logits = torch.tensor(
+        [[3.0, 0.1, 0.2], [0.2, 2.5, 0.1], [0.1, 0.2, 4.0], [1.0, 1.0, 1.0]], requires_grad=True
+    )
+    points = torch.zeros((2, 5), dtype=torch.float32)
+    labels = [torch.tensor([0, 1]), torch.tensor([2, 0])]
+    batch = _seg3d_processed([points, points], torch.arange(4), segment_frames=labels)
+    reference = _seg3d_processed([points], torch.arange(2), segment_frames=labels[:1])
+    expected = segmentation3d_point_loss(head, voxel_logits[:2], reference)
+
+    def frame_meta(key_frames: list[bool]) -> FrameMetaBatch:
+        return FrameMetaBatch(
+            ego2globals=torch.eye(4, dtype=torch.float64).repeat(2, 1, 1),
+            scene_tokens=["scene", "scene"],
+            timestamps=torch.tensor([0.0, 0.1], dtype=torch.float64),
+            lanelet_map_paths=[None, None],
+            key_frames=key_frames,
+        )
+
+    gt_batch = batch.multi_task_gt_batch
+    unsupervised = {
+        "padding": gt_batch._replace(padding_mask=torch.tensor([False, True])),
+        "non-key": gt_batch._replace(frame_meta_batch=frame_meta([True, False])),
+    }
+    for name, frames in unsupervised.items():
+        metrics = segmentation3d_point_loss(
+            head, voxel_logits, batch.replace(multi_task_gt_batch=frames)
+        )
+        assert torch.allclose(metrics["loss"], expected["loss"]), name
+
+    nothing = gt_batch._replace(padding_mask=torch.tensor([True, True]))
+    metrics = segmentation3d_point_loss(
+        head, voxel_logits, batch.replace(multi_task_gt_batch=nothing)
+    )
+    assert torch.isfinite(metrics["loss"])
+    assert float(metrics["loss_ce"]) == 0.0
+    metrics["loss"].backward()
 
 
 def test_predict_outputs_reconstructs_current_frame_point_predictions() -> None:

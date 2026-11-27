@@ -360,7 +360,7 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             timestamp=frame_meta.timestamps,
             prev_exists=self.bbox_head.stream_continuity(
                 frame_meta.scene_tokens, frame_meta.timestamps
-            ),
+            ).prev_exists,
             # The head runs in float32, the float64 pose is inverted before the cast
             ego_pose=frame_meta.ego2globals.float(),
             ego_pose_inv=torch.linalg.inv(frame_meta.ego2globals).float(),
