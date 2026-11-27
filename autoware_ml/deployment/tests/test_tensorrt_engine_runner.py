@@ -23,7 +23,10 @@ import unittest
 
 import torch
 
-from autoware_ml.deployment.backends.tensorrt_engine_runner import TensorRTEngineRunner
+from autoware_ml.deployment.backends.tensorrt_engine_runner import (
+    TensorRTEngineRunner,
+    pinned_cuda_device,
+)
 from autoware_ml.deployment.tests.tensorrt_fixtures import (
     N_PROFILE,
     add_graph,
@@ -225,6 +228,42 @@ class TestTensorRTEngineRunner(unittest.TestCase):
         """
         with self.assertRaisesRegex(ValueError, "CUDA"):
             TensorRTEngineRunner(self.tmp_path / "missing.engine", torch.device("cpu"))
+
+    @REQUIRES_CUDA
+    def test_runner_refuses_a_missing_plugin_library(self) -> None:
+        """Test that a plugin library that does not exist is refused before the engine loads.
+
+        Input: the identity Gemm engine and the path of a plugin library that was never built.
+        Expected: a FileNotFoundError naming the library.
+        Check: the error message.
+        """
+        path = build_engine(identity_gemm_graph(self.tmp_path), {})
+        missing = self.tmp_path / "libmissing_plugins.so"
+
+        with self.assertRaisesRegex(FileNotFoundError, "plugin library not found.*libmissing"):
+            TensorRTEngineRunner(path, torch.device("cuda"), plugin_libraries=[str(missing)])
+
+    @REQUIRES_CUDA
+    def test_pinned_cuda_device_fixes_the_index_of_a_bare_cuda(self) -> None:
+        """Test that a CUDA device without an index becomes the current device.
+
+        Input: ``"cuda"`` and ``torch.device("cuda")``.
+        Expected: the CUDA device whose index is ``torch.cuda.current_device()``.
+        Check: the returned devices.
+        """
+        current = torch.device("cuda", torch.cuda.current_device())
+
+        self.assertEqual(pinned_cuda_device("cuda"), current)
+        self.assertEqual(pinned_cuda_device(torch.device("cuda")), current)
+
+    def test_pinned_cuda_device_keeps_a_given_index(self) -> None:
+        """Test that a CUDA device with an index is returned as it is, whatever is current.
+
+        Input: ``"cuda:1"``.
+        Expected: ``torch.device("cuda", 1)``.
+        Check: the returned device.
+        """
+        self.assertEqual(pinned_cuda_device("cuda:1"), torch.device("cuda", 1))
 
 
 if __name__ == "__main__":
