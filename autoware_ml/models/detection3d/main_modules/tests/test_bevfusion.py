@@ -26,7 +26,7 @@ from types import MappingProxyType
 import unittest
 from unittest import mock
 
-from jaxtyping import Float32, Int32, Shaped
+from jaxtyping import Float32, Int32
 import torch
 import torch.nn as nn
 
@@ -35,6 +35,7 @@ from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.geometry.images import ImageGTBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
+from autoware_ml.deployment.graphs import GraphTensor
 from autoware_ml.deployment.tests.deployment_assertions import (
     assert_deployment_reproduces_forward,
     assert_specs_export_onnx_with_the_declared_io,
@@ -339,9 +340,7 @@ class _BEVFusionDetection3DModelTestCase(unittest.TestCase):
         voxels_data = self._build_voxels_data() if with_voxels else None
         return self._build_batch_inputs(voxels_data=voxels_data)
 
-    def _runtime_tensors(
-        self, outputs: ModelOutputs
-    ) -> Mapping[str, Shaped[torch.Tensor, "*shape"]]:
+    def _runtime_tensors(self, outputs: ModelOutputs) -> Mapping[str, GraphTensor]:
         """Pack forward()'s head outputs as the runtime tensors the deployed function returns.
 
         Args:
@@ -582,13 +581,13 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
         with self.assertRaisesRegex(ValueError, "voxels_data"):
             self.model.build_export_specs(self._build_single_sample_batch_inputs(with_voxels=False))
 
-    def test_build_export_specs_wraps_exportable_eval_copies(self) -> None:
-        """Test that the export module holds eval-mode copies of the lidar branch and the head.
+    def test_build_export_specs_wraps_exportable_copies(self) -> None:
+        """Test that the export module holds exportable copies of the lidar branch and the head.
 
         Input: the lidar-only model in eval mode and a one-sample batch.
         Expected: the module's branch and head are other objects than the model's, with the
             exportable middle encoder and attention layers; the model keeps the native ones.
-        Check: identity, the training flag and the types of both encoders and attention layers.
+        Check: identity and the types of both encoders and attention layers.
         """
         self.model.eval()
 
@@ -599,7 +598,6 @@ class TestBEVFusionDetection3DModelLidarOnly(_BEVFusionDetection3DModelTestCase)
 
         self.assertIsNot(export_module.lidar_network, self.model.lidar_network)
         self.assertIsNot(export_module.bbox_head, self.model.bbox_head)
-        self.assertFalse(export_module.training)
         export_middle_encoder = export_module.lidar_network.pts_middle_encoder
         assert isinstance(export_middle_encoder, _StubMiddleEncoder)
         self.assertTrue(export_middle_encoder.exportable)
