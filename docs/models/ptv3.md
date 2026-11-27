@@ -104,7 +104,7 @@ PointTransformerV3 ONNX export is available. The PTv3 configs keep
 `deploy.tensorrt.enabled=false`: the engines need the sparse convolution and
 `SegmentCSR` plugins (`autoware::GetIndicePairsImplicitGemm`, `ImplicitGemm`,
 `SegmentCSR`), which the TensorRT builder does not load yet, so enabling the
-stage fails in the TensorRT parser on `ptv3_encoder`.
+stage fails in the TensorRT parser on `lidar_encoder`.
 
 ```bash
 autoware-ml deploy \
@@ -133,7 +133,7 @@ model:
 deploy:
   onnx:
     modules:
-      ptv3_det3d_head:
+      det3d_head:
         precision: fp16
 ```
 
@@ -146,7 +146,7 @@ autoware-ml deploy \
     --config-name detection3d/ptv3/nuscenes/voxel005_b16_30e_nuscenes_51m \
     --weights <checkpoint> \
     model.bbox_head.use_bf16_cross_attention=false \
-    deploy.onnx.modules.ptv3_det3d_head.precision=fp32
+    deploy.onnx.modules.det3d_head.precision=fp32
 ```
 
 The exported ONNX model returns both `pred_labels` and `pred_probs`. The

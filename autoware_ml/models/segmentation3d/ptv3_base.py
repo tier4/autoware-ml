@@ -68,9 +68,9 @@ ENCODER_EXPORT_INPUT_NAMES = (
     "patch_order",
     "serialized_inverse",
 )
-ENCODER_GRAPH = "ptv3_encoder"
-SEG3D_HEAD_GRAPH = "ptv3_seg3d_head"
-DET3D_HEAD_GRAPH = "ptv3_det3d_head"
+LIDAR_ENCODER_GRAPH = "lidar_encoder"
+SEG3D_HEAD_GRAPH = "seg3d_head"
+DET3D_HEAD_GRAPH = "det3d_head"
 #: Per-voxel argmax labels and softmax scores.
 SEG3D_HEAD_OUTPUT_NAMES = ("pred_labels", "pred_probs")
 
@@ -337,7 +337,7 @@ class PTv3BaseModel(ModuleBaseModel):
         executors: Mapping[str, GraphExecutor],
         device: torch.device,
     ) -> Mapping[str, GraphTensor]:
-        """Serialize the points, run ``ptv3_encoder``, then every head graph the model declares.
+        """Serialize the points, run ``lidar_encoder``, then every head graph the model declares.
 
         Args:
             multi_task_batch_inputs: The preprocessed single-sample batch, holding the voxels.
@@ -348,11 +348,11 @@ class PTv3BaseModel(ModuleBaseModel):
             Every head's outputs by name, in the order the heads are declared.
         """
         tensors = self.serialize_points(multi_task_batch_inputs)
-        encoder = executors[ENCODER_GRAPH]
+        encoder = executors[LIDAR_ENCODER_GRAPH]
         tensors.update(encoder.run(**{name: tensors[name] for name in encoder.input_names}))
         outputs: dict[str, GraphTensor] = {}
         for name, head in executors.items():
-            if name != ENCODER_GRAPH:
+            if name != LIDAR_ENCODER_GRAPH:
                 outputs.update(head.run(**{key: tensors[key] for key in head.input_names}))
         return outputs
 
@@ -582,7 +582,7 @@ def make_serialized_pooling_from_flat_inputs(
 
 
 class PTv3EncoderExportModule(nn.Module):
-    """The ``ptv3_encoder`` graph: voxels and serialization in, per-stage point features out."""
+    """The ``lidar_encoder`` graph: voxels and serialization in, per-stage point features out."""
 
     def __init__(
         self,
@@ -649,7 +649,7 @@ class PTv3EncoderExportModule(nn.Module):
         return tuple(stage.feat for stage in collect_encoder_stage_points(point))
 
     def build_deployment_graph(self) -> DeploymentGraph:
-        """Declare this module as the ``ptv3_encoder`` graph.
+        """Declare this module as the ``lidar_encoder`` graph.
 
         Returns:
             The graph from the voxels and their serialization to the per-stage point features.
@@ -658,7 +658,7 @@ class PTv3EncoderExportModule(nn.Module):
         stage_count = num_pooling_stages + 1
         input_names = encoder_graph_input_names(num_pooling_stages)
         return DeploymentGraph(
-            ENCODER_GRAPH,
+            LIDAR_ENCODER_GRAPH,
             module=self,
             input_names=input_names,
             output_names=tuple(stage_feature_names(stage_count)),
@@ -821,7 +821,7 @@ class PTv3Seg3DHeadExportModule(nn.Module):
         return probs.argmax(dim=1), probs
 
     def build_deployment_graph(self) -> DeploymentGraph:
-        """Declare this module as the ``ptv3_seg3d_head`` graph.
+        """Declare this module as the ``seg3d_head`` graph.
 
         Returns:
             The graph from the per-stage features to ``pred_labels`` and ``pred_probs``.
@@ -838,7 +838,7 @@ class PTv3Seg3DHeadExportModule(nn.Module):
 
 
 def encoder_graph_input_names(num_pooling_stages: int) -> tuple[str, ...]:
-    """Return the ``ptv3_encoder`` graph's input names.
+    """Return the ``lidar_encoder`` graph's input names.
 
     Args:
         num_pooling_stages: Number of encoder pooling stages.

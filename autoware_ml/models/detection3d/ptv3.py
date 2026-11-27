@@ -375,7 +375,7 @@ class PTv3Det3DHeadExportModule(nn.Module):
         return outputs.export_tensors(self.output_names)
 
     def build_deployment_graph(self) -> DeploymentGraph:
-        """Declare this module as the ``ptv3_det3d_head`` graph.
+        """Declare this module as the ``det3d_head`` graph.
 
         Returns:
             The graph from the two coarsest stages' features to the head outputs.
@@ -515,7 +515,7 @@ class PTv3Detection3DModel(PTv3BaseModel):
         return self.bbox_head.decode_outputs(outputs=outputs.detection3d())
 
     def deployment_graphs(self) -> Sequence[DeploymentGraph]:
-        """Declare ``ptv3_encoder`` and ``ptv3_det3d_head``; the deployed forward serializes first.
+        """Declare ``lidar_encoder`` and ``det3d_head``; the deployed forward serializes first.
 
         Returns:
             The encoder graph, then the detection head graph.
