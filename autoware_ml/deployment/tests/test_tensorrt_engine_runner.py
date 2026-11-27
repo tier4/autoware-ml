@@ -237,9 +237,9 @@ class TestTensorRTEngineRunner(unittest.TestCase):
         Check: the error message.
         """
         path = build_engine(doubling_gemm_graph(self.tmp_path), {})
-        missing = self.tmp_path / "libmissing_plugins.so"
+        missing = self.tmp_path / "missing_plugins.so"
 
-        with self.assertRaisesRegex(FileNotFoundError, "plugin library not found.*libmissing"):
+        with self.assertRaisesRegex(FileNotFoundError, "plugin library not found.*missing_plugins"):
             TensorRTEngineRunner(path, torch.device("cuda"), plugin_libraries=[str(missing)])
 
     @REQUIRES_CUDA
