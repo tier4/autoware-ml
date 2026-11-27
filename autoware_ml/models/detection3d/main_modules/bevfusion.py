@@ -61,23 +61,6 @@ from autoware_ml.ops.voxelization.voxelization import VoxelsData
 from autoware_ml.utils.deploy import ExportSpec
 
 
-def _export_copy(model: BEVFusionDetection3DModel) -> BEVFusionDetection3DModel:
-    """Return an export-ready copy of the model with exportable submodules.
-
-    Args:
-        model: The trained BEVFusion model.
-
-    Returns:
-        Deep copy of the model in eval mode with the sparse middle encoder and the
-        detection head replaced by their ONNX-exportable variants.
-    """
-    export_model = deepcopy(model).eval()
-    if export_model.lidar_network is not None:
-        export_model.lidar_network = export_model.lidar_network.prepare_for_export()
-    export_model.bbox_head = export_model.bbox_head.prepare_for_export()
-    return export_model
-
-
 class BEVFusionLidarExportModule(nn.Module):
     """The ``bevfusion_lidar`` graph: the lidar-only main body on single-sample voxel tensors.
 
@@ -154,10 +137,10 @@ class _BEVFusionExportWrapper(nn.Module):
 
     The wrapper holds the export copy of the model, rebuilds a :class:`ModelBatchInputs`
     from the flat single-sample tensors the deployment runtime provides, exposes a
-    tensor-only signature and returns runtime-decodable detection outputs. The signature takes ``depth_maps`` where the previous
-    export took ``points``, ``lidar2image`` and ``img_aug_matrix``: the
-    ``autoware_bevfusion`` runtime node still binds the old inputs and does not
-    build depth maps, so it has to be updated before a camera-lidar model
+    tensor-only signature and returns runtime-decodable detection outputs. The signature
+    takes ``depth_maps`` where the previous export took ``points``, ``lidar2image`` and
+    ``img_aug_matrix``: the ``autoware_bevfusion`` runtime node still binds the old inputs
+    and does not build depth maps, so it has to be updated before a camera-lidar model
     exported here can be deployed. See ``docs/models/bevfusion.md``, section
     "Runtime compatibility".
     """
@@ -641,7 +624,11 @@ class BEVFusionDetection3DModel(ModuleBaseModel):
         voxels, coors, num_points_per_voxel = self._first_sample_voxel_inputs(
             multi_task_batch_inputs
         )
-        export_model = _export_copy(self)
+        # An eval copy with the ONNX-exportable middle encoder and detection head.
+        export_model = deepcopy(self).eval()
+        if export_model.lidar_network is not None:
+            export_model.lidar_network = export_model.lidar_network.prepare_for_export()
+        export_model.bbox_head = export_model.bbox_head.prepare_for_export()
 
         image_data = multi_task_batch_inputs.image_data
         if image_data is None:
