@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import NamedTuple
 from collections.abc import Sequence
 
-from jaxtyping import Float32, Int32, Int64
+from jaxtyping import Float32, Float64, Int32, Int64
 import torch
 from torch import Tensor
 
@@ -171,7 +171,7 @@ class LiDARPointCloudSample(NamedTuple):
     # Transformation matrix from LiDAR sensor frame to ego pose of this LiDAR sensor frame
     sensor_to_ego_pose_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from ego pose of this LiDAR sensor frame to global frame
-    lidar_to_ego_pose_to_global_matrix: Float32[Tensor, "4 4"]  # (4, 4)
+    lidar_to_ego_pose_to_global_matrix: Float64[Tensor, "4 4"]  # (4, 4)
     # Transformation matrix from the main lidar sensor to other lidar sweeps at this frame
     lidar_sensor_to_lidar_sweep_matrix: Float32[Tensor, "4 4"]  # (4, 4)
     # Location of the frame in the t4pack file of its channel, None when the scene has no pack

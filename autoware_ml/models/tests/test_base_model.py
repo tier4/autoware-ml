@@ -23,6 +23,7 @@ import lightning as L
 import pytest
 import torch
 
+from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
 from autoware_ml.dataclasses.geometry.point_clouds import PointCloudGTBatch
 from autoware_ml.dataclasses.models.model_batch_inputs import ModelBatchInputs
@@ -64,6 +65,12 @@ class _StreamingModel(_PointSumModel):
     requires_streaming: ClassVar[bool] = True
 
 
+class _KeyFrameStreamingModel(_StreamingModel):
+    """A streaming model whose losses skip the frames without annotations."""
+
+    skips_unsupervised_frames: ClassVar[bool] = True
+
+
 class _ForeignDataModule(L.LightningDataModule):
     """A Lightning datamodule from outside the framework that claims to stream."""
 
@@ -71,8 +78,10 @@ class _ForeignDataModule(L.LightningDataModule):
 
 
 def _without_sources(datamodule_type: type[DataModule]) -> DataModule:
-    """An instance of a framework datamodule built without sources, which ``setup`` never reads."""
-    return datamodule_type.__new__(datamodule_type)
+    """An instance of a framework datamodule built without sources."""
+    datamodule = datamodule_type.__new__(datamodule_type)
+    datamodule.sources = {}
+    return datamodule
 
 
 def _attach_trainer(model: ModuleBaseModel, datamodule: object | None) -> None:
@@ -168,6 +177,39 @@ def test_setup_rejects_a_streaming_model_without_a_streaming_datamodule(
 
     with pytest.raises(ValueError, match=f"use a StreamingDataModule, got {found}"):
         model.setup("fit")
+
+
+def _with_key_frames(*key_frames: bool) -> ModelBatchInputs:
+    """The two-sample batch whose frames carry the given key frame flags."""
+    gt_batch = _batch_inputs().multi_task_gt_batch._replace(
+        frame_meta_batch=FrameMetaBatch(
+            ego2globals=torch.eye(4, dtype=torch.float64).repeat(2, 1, 1),
+            scene_tokens=["scene", "scene"],
+            timestamps=torch.tensor([0.0, 0.1], dtype=torch.float64),
+            lanelet_map_paths=[None, None],
+            key_frames=list(key_frames),
+        )
+    )
+    return ModelBatchInputs.from_gt_batch(gt_batch)
+
+
+def test_a_step_takes_frames_between_key_frames_only_for_a_model_that_skips_them() -> None:
+    """
+    Input: a batch holding a frame between key frames, stepped by a model computing its losses on
+    every frame and by one whose losses skip the unannotated frames.
+    Expected: the frame carries no annotations, so only the second model takes it.
+    Check: a ValueError for the first model, a loss for the second.
+    """
+    batch = _with_key_frames(True, False)
+    model = _StreamingModel()
+    model.log_dict = lambda values, batch_size, **kwargs: None
+    with pytest.raises(ValueError, match="computes its losses on every frame"):
+        model.validation_step(batch, batch_idx=0)
+
+    model = _KeyFrameStreamingModel()
+    model.log_dict = lambda values, batch_size, **kwargs: None
+    model.validation_step(batch, batch_idx=0)
+    model.validation_step(_with_key_frames(True, True), batch_idx=0)
 
 
 def test_setup_ignores_the_datamodule_for_a_model_without_memory() -> None:

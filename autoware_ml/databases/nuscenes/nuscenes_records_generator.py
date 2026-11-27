@@ -78,8 +78,16 @@ class NuScenesRecordsGenerator:
             set the sweep window on either side of a sample and the sampling step.
           lidar_pointcloud_num_features: Number of features of the lidar pointcloud.
           box3d_pipelines: List of box3d pipelines to process the box3d annotations.
+
+        Raises:
+          ValueError: If the dataset asks for its non-key frames, nuScenes records its samples only.
         """
 
+        if scenario_data.dataset_params.non_key_frames:
+            raise ValueError(
+                f"nuScenes dataset {scenario_data.dataset_params.dataset_name} records its samples "
+                "only, it cannot serve the non-key frames."
+            )
         self.database_root_path = Path(database_root_path)
         self.scenario_data = scenario_data
         self.sample_steps = scenario_data.dataset_params.sample_steps

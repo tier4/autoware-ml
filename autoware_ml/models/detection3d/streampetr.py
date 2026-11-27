@@ -358,10 +358,9 @@ class StreamPETRDetection3DModel(ModuleBaseModel):
             prev_exists=self.bbox_head.stream_continuity(
                 frame_meta.scene_tokens, frame_meta.timestamps
             ),
-            ego_pose=frame_meta.ego2globals,
-            # Inverted in float64 so that the inversion adds no rounding to the map-frame pose;
-            # the head composes the poses elementwise (see compose_poses).
-            ego_pose_inv=torch.linalg.inv(frame_meta.ego2globals.double()).float(),
+            # The head runs in float32, the float64 pose is inverted before the cast
+            ego_pose=frame_meta.ego2globals.float(),
+            ego_pose_inv=torch.linalg.inv(frame_meta.ego2globals).float(),
             gt_boxes=gt_boxes,
             gt_labels=gt_labels,
         )

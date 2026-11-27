@@ -295,6 +295,8 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
         active = self._stage_filter_keys()
         needs_boxes = self._needs_boxes()
         for frame in output.frames:
+            if not frame.scored:
+                continue
             if frame.scores is None:
                 raise ValueError(
                     "The point cloud suite reads the per-class scores of every point, the "

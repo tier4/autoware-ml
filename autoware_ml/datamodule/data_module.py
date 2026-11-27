@@ -119,6 +119,10 @@ class DataModule(L.LightningDataModule):
           predict_dataloader: Dataloader settings of the predict split.
           train_frame_sampling: Repeat factor sampling of the training split, None when its
             samples are drawn uniformly.
+
+        Raises:
+          ValueError: If there is no source, or if a source serves cameras from a database that
+            serves the frames between its key frames, which hold no camera frames.
         """
         super().__init__()
 
@@ -127,6 +131,14 @@ class DataModule(L.LightningDataModule):
             raise ValueError("The datamodule needs at least one dataset source.")
 
         self.sources: dict[str, DatasetSource] = dict(sources)
+        for name, source in self.sources.items():
+            if source.database.serves_non_key_frames and any(
+                dataset.serves_cameras for dataset in source.datasets.values()
+            ):
+                raise ValueError(
+                    f"Source {name} serves cameras from database {source.database.version}, "
+                    "whose frames between key frames hold no camera frames."
+                )
         self.datasets: dict[SplitType, ConcatDataset] = {}
         self.train_dataloader_config = train_dataloader
         self.validation_dataloader_config = validation_dataloader
@@ -192,11 +204,25 @@ class DataModule(L.LightningDataModule):
                 an empty split without failing: an empty validation split skips validation, and
                 the checkpoint callbacks save after validation only, so a training run would
                 end without a checkpoint, and a test on an empty split returns nothing. The run
-                stops here instead, naming the sources to fix.
+                stops here instead, naming the sources to fix. Also if a database serving the
+                frames between its key frames serves the training or validation split, whose
+                frames are all annotated.
         """
         split_records: dict[str, Mapping[SplitType, Any]] = {}
         for split in splits:
             sources = self.split_sources(split)
+            if split in (SplitType.TRAIN, SplitType.VAL):
+                unlabelled = [
+                    name
+                    for name, source in sources.items()
+                    if source.database.serves_non_key_frames
+                ]
+                if unlabelled:
+                    raise ValueError(
+                        f"Sources {unlabelled} serve the frames between key frames to split "
+                        f"{split}. Models train and validate on annotated frames only, such a "
+                        "database serves the test and predict splits."
+                    )
             if not sources:
                 logger.info(f"No dataset source serves split {split}, skipping it.")
                 continue

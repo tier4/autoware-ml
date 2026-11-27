@@ -33,8 +33,10 @@ class FrameMetaTestCase(unittest.TestCase):
         """Build two frames whose map poses are translations of 1 and 2 along x."""
         self.device = torch.device("cpu")
         self.samples = [
-            FrameMetaSample(self.make_ego2global(1.0), "db/scene_a/0", 10.0),
-            FrameMetaSample(self.make_ego2global(2.0), "db/scene_b/1", 20.5, "/maps/scene_b.osm"),
+            FrameMetaSample(self.make_ego2global(1.0), "db/scene_a/0", 10.0, True),
+            FrameMetaSample(
+                self.make_ego2global(2.0), "db/scene_b/1", 20.5, False, "/maps/scene_b.osm"
+            ),
         ]
 
     def make_ego2global(self, x: float, yaw_rad: float = 0.0) -> torch.Tensor:
@@ -81,17 +83,18 @@ class TestFrameMetaSample(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2global``, ``scene_token``, ``timestamp`` and the
-        optional ``lanelet_map_path``, which defaults to None for a frame without a map.
-        Check: compare ``_fields`` against the expected names and the default.
+        Expected: the tuple exposes ``ego2global``, ``scene_token``, ``timestamp``, the required
+        ``key_frame`` and the optional ``lanelet_map_path``, None for a frame without a map.
+        Check: compare ``_fields`` against the expected names, the map default and a missing flag.
         """
         self.assertEqual(
             FrameMetaSample._fields,
-            ("ego2global", "scene_token", "timestamp", "lanelet_map_path"),
+            ("ego2global", "scene_token", "timestamp", "key_frame", "lanelet_map_path"),
         )
-        self.assertIsNone(
-            FrameMetaSample(self.make_ego2global(0.0), "db/s/0", 0.0).lanelet_map_path
-        )
+        sample = FrameMetaSample(self.make_ego2global(0.0), "db/s/0", 0.0, True)
+        self.assertIsNone(sample.lanelet_map_path)
+        with self.assertRaises(TypeError):
+            FrameMetaSample(self.make_ego2global(0.0), "db/s/0", 0.0)
 
     def test_holds_given_fields(self) -> None:
         """
@@ -123,13 +126,13 @@ class TestFrameMetaBatchFields(FrameMetaTestCase):
     def test_field_order(self) -> None:
         """
         Input: the class itself.
-        Expected: the tuple exposes ``ego2globals``, ``scene_tokens``, ``timestamps``
-        and ``lanelet_map_paths``, the order of the sample's fields.
+        Expected: the tuple exposes ``ego2globals``, ``scene_tokens``, ``timestamps``,
+        ``lanelet_map_paths`` and ``key_frames``.
         Check: compare ``_fields`` against the expected names.
         """
         self.assertEqual(
             FrameMetaBatch._fields,
-            ("ego2globals", "scene_tokens", "timestamps", "lanelet_map_paths"),
+            ("ego2globals", "scene_tokens", "timestamps", "lanelet_map_paths", "key_frames"),
         )
 
     def test_is_immutable(self) -> None:
@@ -167,6 +170,7 @@ class TestFrameMetaBatchCollate(FrameMetaTestCase):
             batch.timestamps, torch.tensor([10.0, 20.5], dtype=torch.float64)
         )
         self.assertEqual(list(batch.lanelet_map_paths), [None, "/maps/scene_b.osm"])
+        self.assertEqual(list(batch.key_frames), [True, False])
 
     def test_output_dtype(self) -> None:
         """
@@ -237,7 +241,7 @@ class TestFrameMetaBatchLidarAugmentation(FrameMetaTestCase):
         expected = ego2global @ torch.linalg.inv(augmentation.transformation_matrix)
 
         batch = FrameMetaBatch.collate_gt_samples(
-            [FrameMetaSample(ego2global, "db/scene/0", 0.0)], [augmentation]
+            [FrameMetaSample(ego2global, "db/scene/0", 0.0, True)], [augmentation]
         )
 
         torch.testing.assert_close(batch.ego2globals[0], expected)
@@ -259,7 +263,7 @@ class TestFrameMetaBatchLidarAugmentation(FrameMetaTestCase):
         augmented_point = self.apply(augmentation.transformation_matrix, raw_point)
 
         batch = FrameMetaBatch.collate_gt_samples(
-            [FrameMetaSample(ego2global, "db/scene/0", 0.0)], [augmentation]
+            [FrameMetaSample(ego2global, "db/scene/0", 0.0, True)], [augmentation]
         )
 
         expected_map_point = self.apply(ego2global, raw_point)

@@ -88,10 +88,13 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
 
     A temporal model that carries a memory across batches sets ``requires_streaming``, and
     :meth:`setup` then requires a :class:`StreamingDataModule`, which streams scene-contiguous
-    frames.
+    frames. A model whose losses leave out the frames between key frames, which carry no
+    annotations, sets ``skips_unsupervised_frames``, and only such a model takes a batch holding
+    such frames outside of prediction.
     """
 
     requires_streaming: ClassVar[bool] = False
+    skips_unsupervised_frames: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -142,9 +145,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
                 datamodule, or with one that is not a StreamingDataModule.
         """
         super().setup(stage)
+        datamodule = self.trainer.datamodule
         if not self.requires_streaming:
             return
-        datamodule = self.trainer.datamodule
         if not isinstance(datamodule, StreamingDataModule):
             found = "no datamodule" if datamodule is None else type(datamodule).__name__
             raise ValueError(
@@ -247,9 +250,9 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
     def get_log_batch_size(self, multi_task_batch_inputs: ModelBatchInputs) -> int | None:
         """Infer the effective sample batch size for logging.
 
-        The ground-truth batch counts its samples, leaving out those that only pad a streaming
-        lane. Models with non-standard input structures should override this hook to provide
-        an explicit sample count.
+        The ground-truth batch counts the samples the losses learn from, the key frames that pad
+        no streaming lane. Models with non-standard input structures should override this hook to
+        provide an explicit sample count.
 
         Args:
             multi_task_batch_inputs: Full batch dictionary from the dataloader.
@@ -257,7 +260,7 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         Returns:
             Sample batch size when it can be inferred, otherwise ``None``.
         """
-        return multi_task_batch_inputs.multi_task_gt_batch.num_real_samples()
+        return multi_task_batch_inputs.multi_task_gt_batch.num_supervised_samples()
 
     def _core_step(
         self,
@@ -275,7 +278,19 @@ class ModuleBaseModel(MetricEvalMixin, L.LightningModule, ABC):
         Returns:
             Tuple of the metric dictionary (as a ``MappingProxyType``) and the raw model outputs.
             The metric dictionary contains at least a ``"loss"`` key.
+
+        Raises:
+            ValueError: If the batch holds a frame between key frames, which carries no
+                annotations, and the losses of the model do not skip such frames.
         """
+        if (
+            not self.skips_unsupervised_frames
+            and not multi_task_batch_inputs.multi_task_gt_batch.key_frame_mask().all()
+        ):
+            raise ValueError(
+                f"{type(self).__name__} computes its losses on every frame, but the batch holds "
+                "frames between key frames, which carry no annotations. Serve key frames only."
+            )
         outputs = self(multi_task_batch_inputs)
         metrics = self.compute_metrics(multi_task_batch_inputs, outputs)
         if "loss" not in metrics:

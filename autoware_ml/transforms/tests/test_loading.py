@@ -76,7 +76,7 @@ class SweepLoadingTestCase(unittest.TestCase):
             num_features=num_features,
             intensity_scale=255.0,
             sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
-            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32),
+            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float64),
             lidar_sensor_to_lidar_sweep_matrix=torch.eye(4, dtype=torch.float32),
         )
 
@@ -454,7 +454,7 @@ class TestLoadPointsFromFile(SweepLoadingTestCase):
             num_features=5,
             intensity_scale=255.0,
             sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
-            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32),
+            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float64),
             lidar_sensor_to_lidar_sweep_matrix=torch.eye(4, dtype=torch.float32),
         )
         sample = ModelGTSample(
@@ -497,7 +497,7 @@ class TestLoadPointsFromFile(SweepLoadingTestCase):
             num_features=5,
             intensity_scale=255.0,
             sensor_to_ego_pose_matrix=torch.eye(4, dtype=torch.float32),
-            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float32),
+            lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float64),
             lidar_sensor_to_lidar_sweep_matrix=torch.eye(4, dtype=torch.float32),
             source_view=LidarSourceView(
                 point_index_begin=2, num_points=3, sensor_to_frame_matrix=sensor_to_frame

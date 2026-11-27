@@ -954,7 +954,7 @@ class TestGlobalRotScaleTransCameraOnly(PinholeCameraTestCase):
                     [[*local_box.tolist(), 4.0, 2.0, 1.5, 0.0]], [0]
                 ),
                 frame_meta=FrameMetaSample(
-                    ego2global=pose, scene_token="scene", timestamp=timestamp
+                    ego2global=pose, scene_token="scene", timestamp=timestamp, key_frame=True
                 ),
             )
             augmented.append(self.augment(sample, seed=seed))

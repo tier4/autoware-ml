@@ -147,9 +147,10 @@ class MotionDataset(BaseDataset):
             num_tracks=motion.num_tracks,
         )
         # The tracks are served in the frame of their source, so the frame of the sample is
-        # the global frame itself
+        # the global frame itself. Every scenario is annotated, a key frame.
         frame_meta = FrameMetaSample(
-            ego2global=torch.eye(4, dtype=torch.float32),
+            ego2global=torch.eye(4, dtype=torch.float64),
+            key_frame=True,
             scene_token=scenario_id,
             timestamp=timestamp_seconds,
             lanelet_map_path=None,

@@ -51,6 +51,9 @@ class Detection3DEvalFrame(BaseModel):
       gt_num_points: Lidar points inside every ground truth box, when the dataset counts them.
       is_padding: Whether the frame only pads a streaming lane. It is kept so every rank holds
         as many frames as the others for the gather, and the metrics leave it out.
+      key_frame: Whether the frame is a key frame of its scene. A frame between key frames feeds
+        the temporal state of the model only, carries no annotations, and the metrics leave it
+        out.
       frame_meta: Pose, scene and lanelet map of the frame, when the dataset attaches them.
     """
 
@@ -61,7 +64,13 @@ class Detection3DEvalFrame(BaseModel):
     gt_labels: Int64[torch.Tensor, " num_gt_boxes"]
     gt_num_points: Int[torch.Tensor, " num_gt_boxes"] | None = None
     is_padding: bool = False
+    key_frame: bool
     frame_meta: InstanceOf[FrameMetaSample] | None = None
+
+    @property
+    def scored(self) -> bool:
+        """Whether the metrics score the frame: a key frame that pads no lane."""
+        return self.key_frame and not self.is_padding
 
     @model_validator(mode="after")
     def _check_ground_truth(self) -> Detection3DEvalFrame:
@@ -116,6 +125,9 @@ class Segmentation3DEvalFrame(BaseModel):
       pred: Predicted class of every point.
       target: Ground truth class of every point, the ignore index included.
       scores: Softmax probability of every class per point, when the metrics read them.
+      is_padding: Whether the frame only pads a streaming lane, the metrics leave it out.
+      key_frame: Whether the frame is a key frame of its scene. A frame between key frames carries
+        no annotations, and the metrics leave it out.
       frame_meta: Pose, scene and lanelet map of the frame, when the dataset attaches them.
       gt_boxes: Detection ground truth boxes of the frame, for the cross-task metrics.
       gt_box_labels: Class index of every detection ground truth box.
@@ -127,9 +139,16 @@ class Segmentation3DEvalFrame(BaseModel):
     pred: Int[torch.Tensor, " num_points"]
     target: Int[torch.Tensor, " num_points"]
     scores: Float[torch.Tensor, "num_points num_classes"] | None = None
+    is_padding: bool = False
+    key_frame: bool
     frame_meta: InstanceOf[FrameMetaSample] | None = None
     gt_boxes: Float32[torch.Tensor, "num_gt_boxes num_box_params"] | None = None
     gt_box_labels: Int64[torch.Tensor, " num_gt_boxes"] | None = None
+
+    @property
+    def scored(self) -> bool:
+        """Whether the metrics score the frame: a key frame that pads no lane."""
+        return self.key_frame and not self.is_padding
 
     @model_validator(mode="after")
     def _check_points_and_boxes(self) -> Segmentation3DEvalFrame:

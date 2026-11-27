@@ -120,6 +120,8 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             )
         active_filter_keys = self._stage_filter_keys()
         for frame in output.frames:
+            if not frame.scored:
+                continue
             predictions = frame.pred.detach().reshape(-1)
             targets = frame.target.detach().reshape(-1)
             coord = frame.coord.detach().to(dtype=torch.float32)

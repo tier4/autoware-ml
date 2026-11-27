@@ -30,7 +30,9 @@ from autoware_ml.models.tests.batch_inputs_fixtures import (
 )
 
 
-def _batch_inputs(num_frames: int) -> ModelBatchInputs:
+def _batch_inputs(
+    num_frames: int, key_frames: tuple[bool, bool] = (True, True)
+) -> ModelBatchInputs:
     """Model inputs carrying the frame metadata and the boxes of every frame."""
     batch_inputs = build_batch_inputs(
         detection=build_detection3d_gt_batch(
@@ -43,6 +45,7 @@ def _batch_inputs(num_frames: int) -> ModelBatchInputs:
         scene_tokens=["scene-a", "scene-b"][:num_frames],
         timestamps=torch.zeros(num_frames, dtype=torch.float64),
         lanelet_map_paths=["/maps/a.osm", None][:num_frames],
+        key_frames=list(key_frames[:num_frames]),
     )
     gt_batch = batch_inputs.multi_task_gt_batch._replace(frame_meta_batch=frame_meta)
     return batch_inputs.replace(multi_task_gt_batch=gt_batch)
@@ -98,6 +101,27 @@ class TestSegmentation3DFramesEvalOutput(unittest.TestCase):
         self.assertTrue(output.check_all_frame_meta)
         self.assertTrue(output.check_all_scores)
         self.assertTrue(output.check_all_gt_boxes)
+
+    def test_flags_the_frames_between_key_frames(self) -> None:
+        """
+        Input: a key frame and a frame between key frames.
+        Expected: the frame between key frames is flagged for the suites to leave out.
+        Check: the key frame and scored flags of both frames.
+        """
+        labels = torch.zeros(2, dtype=torch.long)
+
+        output = segmentation3d_frames_eval_output(
+            torch.zeros((2, 3)),
+            labels,
+            labels,
+            torch.full((2, 2), 0.5),
+            torch.tensor([0, 1]),
+            2,
+            _batch_inputs(num_frames=2, key_frames=(True, False)),
+        )
+
+        self.assertEqual([frame.key_frame for frame in output.frames], [True, False])
+        self.assertEqual([frame.scored for frame in output.frames], [True, False])
 
     def test_rejects_frame_meta_that_does_not_align_with_the_frames(self) -> None:
         """

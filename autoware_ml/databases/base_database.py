@@ -180,6 +180,15 @@ class BaseDatabase:
         return self._version
 
     @property
+    def serves_non_key_frames(self) -> bool:
+        """Whether a dataset of the database serves the frames between its key frames."""
+        return any(
+            params.non_key_frames
+            for scenarios in self.scenarios.values()
+            for params in scenarios.dataset_params
+        )
+
+    @property
     def scenarios(self) -> MappingProxyType[str, Scenarios]:
         """
         Get the scenarios for each scenario group.

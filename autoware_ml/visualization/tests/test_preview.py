@@ -119,7 +119,7 @@ def _lidar_frame(
         num_features=5,
         intensity_scale=255.0,
         sensor_to_ego_pose_matrix=torch.eye(4),
-        lidar_to_ego_pose_to_global_matrix=torch.eye(4),
+        lidar_to_ego_pose_to_global_matrix=torch.eye(4, dtype=torch.float64),
         lidar_sensor_to_lidar_sweep_matrix=to_frame if to_frame is not None else torch.eye(4),
     )
 
@@ -181,7 +181,12 @@ def _sample(
             else None
         ),
         frame_meta=(
-            FrameMetaSample(ego2global=torch.eye(4), scene_token=scene_token, timestamp=timestamp)
+            FrameMetaSample(
+                ego2global=torch.eye(4),
+                scene_token=scene_token,
+                timestamp=timestamp,
+                key_frame=True,
+            )
             if scene_token is not None
             else None
         ),
@@ -758,6 +763,25 @@ class TestIntermediateFrames(_PreviewTestCase):
         self.assertEqual(len(intermediate.detection3d_gt_bboxes_3d), 0)
         # The record itself keeps its annotations.
         self.assertEqual(len(dataset.samples[0].detection3d_gt_bboxes_3d), 2)
+
+    def test_an_intermediate_frame_keeps_its_map_position_to_the_millimeter(self) -> None:
+        """
+        Input: a keyframe whose next stored frame sits 65 km from the map origin.
+        Expected: the re-anchored frame takes the float64 pose of the stored frame.
+        Check: the dtype and the x of its ego2global to a tenth of a millimeter.
+        """
+        sample = _keyframe_with_stored_frames(1.0)
+        frames = list(sample.lidar_point_cloud_samples)
+        to_global = torch.eye(4, dtype=torch.float64)
+        to_global[0, 3] = 65460.2134
+        frames[2] = frames[2]._replace(lidar_to_ego_pose_to_global_matrix=to_global)
+        dataset = _SampleDataset([sample._replace(lidar_point_cloud_samples=frames)])
+        model = _PreviewModel(lambda inputs: _segmentation_predictions(4))
+        self.run_preview(dataset, model, max_samples=1, prediction_frequency_hz=10.0)
+
+        ego2global = dataset.transformed[1].frame_meta.ego2global
+        self.assertEqual(ego2global.dtype, torch.float64)
+        self.assertAlmostEqual(float(ego2global[0, 3]), 65460.2134, places=4)
 
 
 if __name__ == "__main__":
