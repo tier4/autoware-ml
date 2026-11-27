@@ -25,10 +25,9 @@ reproduces its queries.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
-from jaxtyping import Bool, Float, Int64
+from jaxtyping import Bool, Float, Int, Int64
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -72,8 +71,9 @@ class DenoisingQueries:
 
 
 def build_contrastive_denoising_queries(
-    gt_labels: Sequence[Int64[Tensor, " num_boxes"]],
-    gt_boxes: Sequence[Float[Tensor, "num_boxes 4"]],
+    gt_labels: Int[Tensor, "num_images max_num_boxes"],
+    gt_boxes: Float[Tensor, "num_images max_num_boxes 4"],
+    num_valid_boxes: Int[Tensor, " num_images"],
     num_classes: int,
     num_matching_queries: int,
     class_embed: nn.Embedding,
@@ -89,9 +89,16 @@ def build_contrastive_denoising_queries(
     label embedding in use, so distributed ranks with and without boxes update the same
     parameters (lyuwenyu/RT-DETR#684).
 
+    The ground truth comes padded, as it is collated: image ``i`` holds its boxes in the first
+    ``num_valid_boxes[i]`` rows, and the rows after them are ignored. The queries are laid out
+    by the largest valid count of the batch, not by the padded width, so the query count and
+    the random draws do not depend on how wide the batch was collated.
+
     Args:
-        gt_labels: Class index of every box of every image.
-        gt_boxes: ``(cx, cy, w, h)`` of every box of every image, normalized by the image size.
+        gt_labels: Class index of every box of every image, padded.
+        gt_boxes: ``(cx, cy, w, h)`` of every box of every image, normalized by the image size,
+            padded.
+        num_valid_boxes: Number of valid boxes of every image.
         num_classes: Number of classes; label ``num_classes`` is the padding embedding.
         num_matching_queries: Number of matching queries that follow the denoising ones.
         class_embed: Label embedding with ``num_classes + 1`` entries.
@@ -104,43 +111,29 @@ def build_contrastive_denoising_queries(
         The denoising queries.
 
     Raises:
-        ValueError: If ``num_denoising`` is not positive, or the images of the labels and the
-            boxes differ.
+        ValueError: If ``num_denoising`` is not positive.
     """
     if num_denoising <= 0:
         raise ValueError(f"num_denoising must be positive, got {num_denoising}.")
-    if len(gt_labels) != len(gt_boxes):
-        raise ValueError(
-            f"gt_labels and gt_boxes must cover the same images, got {len(gt_labels)} and "
-            f"{len(gt_boxes)}."
-        )
 
-    num_gts = [len(labels) for labels in gt_labels]
-    device = gt_labels[0].device
-    max_gt_num = max(num_gts)
-    is_empty_batch = max_gt_num == 0
-    if is_empty_batch:
+    device = gt_labels.device
+    batch_size = gt_labels.shape[0]
+    num_gts = num_valid_boxes.tolist()
+    max_gt_num = max(num_gts, default=0)
+    if max_gt_num == 0:
+        # A small box at the image center, as in the official code.
         max_gt_num = 1
         num_groups = 1
+        query_class = torch.full([batch_size, 1], num_classes, dtype=torch.int32, device=device)
+        query_box = torch.tensor([[[0.5, 0.5, 0.1, 0.1]]], device=device).repeat(batch_size, 1, 1)
+        pad_gt_mask = torch.zeros([batch_size, 1], dtype=torch.bool, device=device)
     else:
         num_groups = max(num_denoising // max_gt_num, 1)
-
-    batch_size = len(num_gts)
-    query_class = torch.full(
-        [batch_size, max_gt_num], num_classes, dtype=torch.int32, device=device
-    )
-    query_box = torch.zeros([batch_size, max_gt_num, 4], device=device)
-    pad_gt_mask = torch.zeros([batch_size, max_gt_num], dtype=torch.bool, device=device)
-    if is_empty_batch:
-        # A small box at the image center, as in the official code.
-        query_box[..., :2] = 0.5
-        query_box[..., 2:] = 0.1
-
-    for i, num_gt in enumerate(num_gts):
-        if num_gt > 0:
-            query_class[i, :num_gt] = gt_labels[i]
-            query_box[i, :num_gt] = gt_boxes[i]
-            pad_gt_mask[i, :num_gt] = True
+        pad_gt_mask = torch.arange(max_gt_num, device=device) < num_valid_boxes.to(device)[:, None]
+        query_class = torch.where(pad_gt_mask, gt_labels[:, :max_gt_num], num_classes).to(
+            torch.int32
+        )
+        query_box = torch.where(pad_gt_mask[..., None], gt_boxes[:, :max_gt_num], 0.0)
 
     query_class = query_class.tile([1, 2 * num_groups])
     query_box = query_box.tile([1, 2 * num_groups, 1])
