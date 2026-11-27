@@ -71,14 +71,20 @@ datasets:
 
           filter_attributes: ${filter_attributes}
 
+        # The cameras are downscaled to just cover 480x640 while still uint8, so the shuffle
+        # and the resize below work on a few megabytes per camera instead of the 64 MB of a
+        # 2880x1860 float32 image, which stalled the dataloader workers in page faults.
         - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
           _convert_: all
+
+          cover_size: ${image_size}
 
         # The reference T4 recipe shuffles the camera order of every training frame.
         - _target_: autoware_ml.transforms.camera.permutation.ShuffleCameraOrder
           _convert_: all
 
-        # +-0.02 around the scale at which a camera covers 480x640, whatever its resolution.
+        # +-0.02 around the scale at which a camera covers 480x640, whatever its resolution;
+        # the loader already covers it, so the factor is drawn around one.
         - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
           _convert_: all
 
@@ -132,6 +138,8 @@ datasets:
 
         - _target_: autoware_ml.transforms.camera.loading.LoadImagesFromFile
           _convert_: all
+
+          cover_size: ${image_size}
 
         - _target_: autoware_ml.transforms.camera.resize.ResizeCropFlipRotImage
           _convert_: all
