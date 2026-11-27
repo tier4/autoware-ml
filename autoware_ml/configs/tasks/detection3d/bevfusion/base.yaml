@@ -178,8 +178,8 @@ model:
   scheduler:
     _target_: autoware_ml.utils.schedulers.cyclic_cosine_annealing.CyclicCosineAnnealingLR
     _partial_: true
-    # Set by every leaf next to trainer.max_epochs, which they must add up to: the cosine keeps
-    # being evaluated past decay_epochs and climbs back towards the peak.
+    # Set by every leaf next to trainer.max_epochs, which they must add up to: past decay_epochs
+    # the LR stays at its minimum, so the extra epochs would train at it.
     warmup_epochs: ???
     decay_epochs: ???
     max_lr_factor: ???
