@@ -69,7 +69,7 @@ def identity_poses(batch_size: int, count: int, device: torch.device) -> torch.T
     return torch.eye(4, device=device).expand(batch_size, count, 4, 4)
 
 
-class DenoisingQueries(NamedTuple):
+class StreamPETRDenoisingQueries(NamedTuple):
     """Bookkeeping of the denoising queries of one training forward.
 
     Attributes:
@@ -81,10 +81,10 @@ class DenoisingQueries(NamedTuple):
         pad_size: Number of denoising slots leading the query set of every sample.
     """
 
-    known_labels: torch.Tensor
-    known_boxes: torch.Tensor
-    batch_indices: torch.Tensor
-    slot_indices: torch.Tensor
+    known_labels: Int[torch.Tensor, " num_noised_queries"]
+    known_boxes: Float[torch.Tensor, "num_noised_queries 9"]
+    batch_indices: Int[torch.Tensor, " num_noised_queries"]
+    slot_indices: Int[torch.Tensor, " num_noised_queries"]
     pad_size: int
 
 
@@ -739,9 +739,13 @@ class StreamPETRHead(nn.Module):
     def prepare_for_dn(
         self,
         batch_size: int,
-        gt_boxes: list[torch.Tensor] | None,
-        gt_labels: list[torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, DenoisingQueries | None]:
+        gt_boxes: list[Float[torch.Tensor, "num_boxes 9"]] | None,
+        gt_labels: list[Int[torch.Tensor, " num_boxes"]] | None,
+    ) -> tuple[
+        Float[torch.Tensor, "batch_size num_reference_points 3"],
+        Bool[torch.Tensor, "num_attending_queries num_attended_queries"] | None,
+        StreamPETRDenoisingQueries | None,
+    ]:
         """Lead the learnable reference points with denoising queries in training.
 
         Every ground-truth box of the batch is replicated ``scalar`` times, its center
@@ -749,6 +753,12 @@ class StreamPETRHead(nn.Module):
         set; the attention mask keeps the denoising groups and the detection queries from
         seeing each other. Outside training, without denoising or without any box the
         reference points are returned unchanged.
+
+        Args:
+            batch_size: Number of samples.
+            gt_boxes: Metric ``[cx, cy, cz, l, w, h, yaw, vx, vy]`` ground-truth boxes of every
+                sample; ``None`` without ground truth.
+            gt_labels: Class of every ground-truth box of every sample; ``None`` likewise.
 
         Returns:
             The per-sample reference points, the self-attention mask (``None`` without
@@ -835,7 +845,7 @@ class StreamPETRHead(nn.Module):
         temporal_attn_mask[pad_size:, :pad_size] = True
         attn_mask = temporal_attn_mask
 
-        denoising = DenoisingQueries(
+        denoising = StreamPETRDenoisingQueries(
             known_labels=known_labels,
             known_boxes=known_boxes,
             batch_indices=known_batch_idx,
