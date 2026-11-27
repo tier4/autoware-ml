@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 
 from jaxtyping import Float32, Int32
 import torch
@@ -118,11 +119,13 @@ class BEVFusionLidar(nn.Module):
         bev_features = self.pts_neck(self.pts_backbone(bev_features))
         return bev_features
 
-    def prepare_for_export(self) -> BEVMiddleEncoder:
-        """Swap the middle encoder for its ONNX-exportable variant, in place.
+    def prepare_for_export(self) -> BEVFusionLidar:
+        """Return an export copy of the branch with the ONNX-exportable middle encoder.
 
         Returns:
-            The exportable middle encoder that replaced the original.
+            Deep copy of the branch in eval mode, its middle encoder swapped for the exportable
+            variant.
         """
-        self.pts_middle_encoder = self.pts_middle_encoder.prepare_for_export()
-        return self.pts_middle_encoder
+        lidar = deepcopy(self).eval()
+        lidar.pts_middle_encoder = lidar.pts_middle_encoder.prepare_for_export()
+        return lidar
