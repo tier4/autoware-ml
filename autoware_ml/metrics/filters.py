@@ -476,9 +476,10 @@ class CollisionFilter(MetricFilter):
         if region.is_empty:
             return np.zeros(points.shape[0], dtype=bool)
         map_xy = _to_map_xy(points, frame_meta.ego2global)
+        # The coordinates go in as they are: a shapely point object per lidar point
+        # costs far more than the test itself.
         # TODO: remove this shapely operation to speed up the evaluation.
-        map_points = shapely.points(map_xy[:, 0], map_xy[:, 1])
-        return np.asarray(shapely.contains(region, map_points), dtype=bool)
+        return np.asarray(shapely.contains_xy(region, map_xy[:, 0], map_xy[:, 1]), dtype=bool)
 
     def keep_boxes(
         self,
