@@ -21,7 +21,7 @@ import unittest
 import torch
 import torch.nn as nn
 
-from autoware_ml.models.common.layers.conv import ConvModule, build_activation
+from autoware_ml.models.common.layers.conv import ConvModule, build_activation, build_conv_norm
 
 
 class TestBuildActivation(unittest.TestCase):
@@ -131,3 +131,25 @@ class TestConvModule(unittest.TestCase):
                 "norm.weight",
             ],
         )
+
+
+class TestBuildConvNorm(unittest.TestCase):
+    """The convolution and batch norm block of RT-DETR."""
+
+    def test_uses_the_pytorch_batch_norm_defaults_and_no_activation(self) -> None:
+        """Test that the block keeps the batch norm settings RT-DETR trains with.
+
+        Input: a 3x3 block at stride 2 built without an activation, and one with SiLU.
+        Expected: a bias-free 3x3 convolution at stride 2, eps 1e-5 and momentum 0.1 instead
+            of the 1e-3 and 0.01 of ConvModule, the identity unless an activation is given.
+        Check: the convolution, batch norm and activation attributes.
+        """
+        for act, activation_type in ((None, nn.Identity), ("silu", nn.SiLU)):
+            with self.subTest(act=act):
+                block = build_conv_norm(4, 6, 3, 2, act=act)
+
+                self.assertEqual(block.conv.kernel_size, (3, 3))
+                self.assertEqual(block.conv.stride, (2, 2))
+                self.assertIsNone(block.conv.bias)
+                self.assertEqual((block.norm.eps, block.norm.momentum), (1e-5, 0.1))
+                self.assertIsInstance(block.activation, activation_type)

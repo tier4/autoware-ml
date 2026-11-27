@@ -38,7 +38,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from torchvision.ops.misc import FrozenBatchNorm2d
 
-from autoware_ml.models.common.layers.conv import ConvModule, build_activation
+from autoware_ml.models.common.layers.conv import build_activation, build_conv_norm
 
 _STAGE_BLOCKS: dict[int, tuple[int, int, int, int]] = {
     18: (2, 2, 2, 2),
@@ -48,39 +48,6 @@ _STAGE_BLOCKS: dict[int, tuple[int, int, int, int]] = {
 }
 _STAGE_WIDTHS = (64, 128, 256, 512)
 _STAGE_STRIDES = (4, 8, 16, 32)
-
-
-def _conv_norm(
-    in_channels: int,
-    out_channels: int,
-    kernel_size: int,
-    stride: int = 1,
-    act: str | None = None,
-) -> ConvModule:
-    """Build a convolution, batch norm and activation block as RT-DETR does.
-
-    The batch norm keeps the PyTorch defaults that RT-DETR trains with, not the ones of
-    :class:`ConvModule`, and the activation is off unless given.
-
-    Args:
-        in_channels: Input channel count.
-        out_channels: Output channel count.
-        kernel_size: Convolution kernel size.
-        stride: Convolution stride.
-        act: Activation name, or ``None`` for none.
-
-    Returns:
-        The block, with the ``conv`` and ``norm`` children of RT-DETR.
-    """
-    return ConvModule(
-        in_channels,
-        out_channels,
-        stride,
-        norm_eps=1e-5,
-        norm_momentum=0.1,
-        kernel_size=kernel_size,
-        act=act,
-    )
 
 
 def _projection_shortcut(in_channels: int, out_channels: int, stride: int) -> nn.Module:
@@ -100,11 +67,11 @@ def _projection_shortcut(in_channels: int, out_channels: int, stride: int) -> nn
             OrderedDict(
                 [
                     ("pool", nn.AvgPool2d(2, 2, 0, ceil_mode=True)),
-                    ("conv", _conv_norm(in_channels, out_channels, 1, 1)),
+                    ("conv", build_conv_norm(in_channels, out_channels, 1, 1)),
                 ]
             )
         )
-    return _conv_norm(in_channels, out_channels, 1, stride)
+    return build_conv_norm(in_channels, out_channels, 1, stride)
 
 
 class BasicBlock(nn.Module):
@@ -128,8 +95,8 @@ class BasicBlock(nn.Module):
         self.shortcut = shortcut
         if not shortcut:
             self.short = _projection_shortcut(in_channels, width, stride)
-        self.branch2a = _conv_norm(in_channels, width, 3, stride, act=act)
-        self.branch2b = _conv_norm(width, width, 3, 1)
+        self.branch2a = build_conv_norm(in_channels, width, 3, stride, act=act)
+        self.branch2b = build_conv_norm(width, width, 3, 1)
         self.act = build_activation(act)
 
     def forward(
@@ -166,9 +133,9 @@ class BottleNeck(nn.Module):
         """
         super().__init__()
         out_channels = width * self.expansion
-        self.branch2a = _conv_norm(in_channels, width, 1, 1, act=act)
-        self.branch2b = _conv_norm(width, width, 3, stride, act=act)
-        self.branch2c = _conv_norm(width, out_channels, 1, 1)
+        self.branch2a = build_conv_norm(in_channels, width, 1, 1, act=act)
+        self.branch2b = build_conv_norm(width, width, 3, stride, act=act)
+        self.branch2c = build_conv_norm(width, out_channels, 1, 1)
         self.shortcut = shortcut
         if not shortcut:
             self.short = _projection_shortcut(in_channels, out_channels, stride)
@@ -293,12 +260,12 @@ class PResNet(nn.Module):
         self.conv1 = nn.Sequential(
             OrderedDict(
                 [
-                    ("conv1_1", _conv_norm(3, stem_channels // 2, 3, 2, act=act)),
+                    ("conv1_1", build_conv_norm(3, stem_channels // 2, 3, 2, act=act)),
                     (
                         "conv1_2",
-                        _conv_norm(stem_channels // 2, stem_channels // 2, 3, 1, act=act),
+                        build_conv_norm(stem_channels // 2, stem_channels // 2, 3, 1, act=act),
                     ),
-                    ("conv1_3", _conv_norm(stem_channels // 2, stem_channels, 3, 1, act=act)),
+                    ("conv1_3", build_conv_norm(stem_channels // 2, stem_channels, 3, 1, act=act)),
                 ]
             )
         )

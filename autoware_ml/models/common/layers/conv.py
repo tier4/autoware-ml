@@ -104,3 +104,37 @@ class ConvModule(nn.Module):
             Activated output feature map.
         """
         return self.activation(self.norm(self.conv(x)))
+
+
+def build_conv_norm(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    stride: int = 1,
+    act: str | None = None,
+) -> ConvModule:
+    """Build a convolution and batch norm block with the PyTorch batch norm defaults.
+
+    This is RT-DETR's ``ConvNormLayer``. Unlike the defaults of :class:`ConvModule`, which the
+    3D detection models train with, the batch norm uses eps 1e-5 and momentum 0.1 and the
+    activation is off unless given.
+
+    Args:
+        in_channels: Input channel count.
+        out_channels: Output channel count.
+        kernel_size: Convolution kernel size.
+        stride: Convolution stride.
+        act: Activation name, see :func:`build_activation`, or ``None`` for none.
+
+    Returns:
+        The block, whose ``conv`` and ``norm`` children match the names of ``ConvNormLayer``.
+    """
+    return ConvModule(
+        in_channels,
+        out_channels,
+        stride,
+        norm_eps=1e-5,
+        norm_momentum=0.1,
+        kernel_size=kernel_size,
+        act=act,
+    )

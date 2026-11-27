@@ -22,7 +22,6 @@ Module names match the source ("v2" input projection), so its checkpoints load u
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Sequence
 import copy
 
@@ -32,40 +31,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from autoware_ml.models.common.layers.conv import ConvModule, build_activation
-
-
-def _conv_norm(
-    in_channels: int,
-    out_channels: int,
-    kernel_size: int,
-    stride: int = 1,
-    act: str | None = None,
-) -> ConvModule:
-    """Build a convolution, batch norm and activation block as RT-DETR does.
-
-    The batch norm keeps the PyTorch defaults that RT-DETR trains with, not the ones of
-    :class:`ConvModule`, and the activation is off unless given.
-
-    Args:
-        in_channels: Input channel count.
-        out_channels: Output channel count.
-        kernel_size: Convolution kernel size.
-        stride: Convolution stride.
-        act: Activation name, or ``None`` for none.
-
-    Returns:
-        The block, with the ``conv`` and ``norm`` children of RT-DETR.
-    """
-    return ConvModule(
-        in_channels,
-        out_channels,
-        stride,
-        norm_eps=1e-5,
-        norm_momentum=0.1,
-        kernel_size=kernel_size,
-        act=act,
-    )
+from autoware_ml.models.common.layers.conv import (
+    ConvModule,
+    build_activation,
+    build_conv_norm,
+)
 
 
 class RepVggBlock(nn.Module):
@@ -97,8 +67,8 @@ class RepVggBlock(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.conv1 = _conv_norm(in_channels, out_channels, 3, 1)
-        self.conv2 = _conv_norm(in_channels, out_channels, 1, 1)
+        self.conv1 = build_conv_norm(in_channels, out_channels, 3, 1)
+        self.conv2 = build_conv_norm(in_channels, out_channels, 1, 1)
         self.conv: nn.Conv2d | None = None
         self.act = build_activation(act)
 
@@ -186,13 +156,13 @@ class CSPRepLayer(nn.Module):
         """
         super().__init__()
         hidden_channels = int(out_channels * expansion)
-        self.conv1 = _conv_norm(in_channels, hidden_channels, 1, 1, act=act)
-        self.conv2 = _conv_norm(in_channels, hidden_channels, 1, 1, act=act)
+        self.conv1 = build_conv_norm(in_channels, hidden_channels, 1, 1, act=act)
+        self.conv2 = build_conv_norm(in_channels, hidden_channels, 1, 1, act=act)
         self.bottlenecks = nn.Sequential(
             *[RepVggBlock(hidden_channels, hidden_channels, act=act) for _ in range(num_blocks)]
         )
         if hidden_channels != out_channels:
-            self.conv3 = _conv_norm(hidden_channels, out_channels, 1, 1, act=act)
+            self.conv3 = build_conv_norm(hidden_channels, out_channels, 1, 1, act=act)
         else:
             self.conv3 = nn.Identity()
 
@@ -348,15 +318,7 @@ class HybridEncoder(nn.Module):
         self.out_strides = self.feat_strides
 
         self.input_proj = nn.ModuleList(
-            nn.Sequential(
-                OrderedDict(
-                    [
-                        ("conv", nn.Conv2d(channels, hidden_dim, kernel_size=1, bias=False)),
-                        ("norm", nn.BatchNorm2d(hidden_dim)),
-                    ]
-                )
-            )
-            for channels in self.in_channels
+            build_conv_norm(channels, hidden_dim, 1) for channels in self.in_channels
         )
 
         encoder_layer = TransformerEncoderLayer(
@@ -370,14 +332,14 @@ class HybridEncoder(nn.Module):
         num_blocks = round(3 * depth_mult)
         num_fusions = len(self.in_channels) - 1
         self.lateral_convs = nn.ModuleList(
-            _conv_norm(hidden_dim, hidden_dim, 1, 1, act=act) for _ in range(num_fusions)
+            build_conv_norm(hidden_dim, hidden_dim, 1, 1, act=act) for _ in range(num_fusions)
         )
         self.fpn_blocks = nn.ModuleList(
             CSPRepLayer(hidden_dim * 2, hidden_dim, num_blocks, expansion=expansion, act=act)
             for _ in range(num_fusions)
         )
         self.downsample_convs = nn.ModuleList(
-            _conv_norm(hidden_dim, hidden_dim, 3, 2, act=act) for _ in range(num_fusions)
+            build_conv_norm(hidden_dim, hidden_dim, 3, 2, act=act) for _ in range(num_fusions)
         )
         self.pan_blocks = nn.ModuleList(
             CSPRepLayer(hidden_dim * 2, hidden_dim, num_blocks, expansion=expansion, act=act)
