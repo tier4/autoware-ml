@@ -68,7 +68,7 @@ deploy:
 model:
   _target_: autoware_ml.models.segmentation3d.ptv3.PTv3Segmentation3DModel
   _convert_: all
-  metrics: ${metrics}
+  metric_suites: ${metric_suites}
   log_dict_configs:
     _target_: autoware_ml.models.module_base_model.LogDictConfigs
     _convert_: all

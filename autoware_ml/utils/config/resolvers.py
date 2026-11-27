@@ -41,7 +41,7 @@ def merge_lists(*lists: Iterable[Any]) -> ListConfig:
     needs the union of several lists requests it explicitly::
 
         model:
-          metrics: ${merge_lists:${det3d.metrics},${seg3d.metrics}}
+          metric_suites: ${merge_lists:${det3d.metric_suites},${seg3d.metric_suites}}
 
     Every element is fully resolved while its source node is still attached to
     the config tree, so the result carries plain values only.

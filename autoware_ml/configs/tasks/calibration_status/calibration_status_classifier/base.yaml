@@ -11,7 +11,7 @@ database: ???
 camera_sources: ???
 
 # The classifier scores itself through its head, there are no metric suites to run.
-metrics: []
+metric_suites: []
 metric_ranges: []
 
 optimizer:

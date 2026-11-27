@@ -4,8 +4,8 @@ defaults:
   # The metric suites of both tasks, their ranges and the datamodule belong to the evaluated
   # database, so the range base composes them. nuScenes has no lanelet maps, so no joint suite.
   - /metrics/nuscenes/detection3d/default_detection3d_metrics
-  - /metrics/nuscenes/detection3d@detection3d_metrics: default_detection3d_metric_suites
-  - /metrics/nuscenes/segmentation3d@segmentation3d_metrics: default_segmentation3d_metric_suites
+  - /metrics/nuscenes/detection3d@detection3d_metric_suites: default_detection3d_metric_suites
+  - /metrics/nuscenes/segmentation3d@segmentation3d_metric_suites: default_segmentation3d_metric_suites
   - /metrics/nuscenes/detection3d@metric_ranges: default_detection3d_50m_metric_ranges
   - /datamodule@datamodule: nuscenes/default_det3d_seg3d_datamodule
   - /database/nuscenes/taxonomy@taxonomy: default_coarse
@@ -35,7 +35,7 @@ taxonomy:
 
 point_cloud_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
 
-metrics: ${merge_lists:${detection3d_metrics},${segmentation3d_metrics}}
+metric_suites: ${merge_lists:${detection3d_metric_suites},${segmentation3d_metric_suites}}
 
 # nuScenes boxes carry no attributes the pipelines filter on.
 filter_attributes: []
