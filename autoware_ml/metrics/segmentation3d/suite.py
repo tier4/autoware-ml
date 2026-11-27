@@ -29,7 +29,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import torch
 
 from autoware_ml.metrics.base import IDENTITY, Metric, MetricFilter, MetricRange, MetricSuite
@@ -137,18 +136,21 @@ class Segmentation3DConfusionMatrixMetricSuite(MetricSuite[ConfusionState]):
             self._note_frame()
             self._accumulate(0, predictions, targets, coord)
             if not active_filter_keys:
-                # No region filter is active at this stage (they are test-only):
-                # skip the device-to-host copy entirely on validation epochs.
+                # No region filter is active at this stage (they are test-only).
                 continue
-            coord_np = coord[:, :3].cpu().numpy()  # xyz only, filters convert dtype themselves
+            xyz = coord[:, :3]  # filters convert the dtype themselves
             for index, metric_filter in enumerate(self._component_filters):
                 if metric_filter.cache_key not in active_filter_keys:
                     continue
                 if not self._frame_available(index, metric_filter, frame.frame_meta):
                     continue  # scene without a lanelet map, excluded from this slice
-                keep = torch.from_numpy(
-                    np.asarray(metric_filter.keep_points(coord_np, frame.frame_meta), dtype=bool)
-                ).to(predictions.device)
+                # The points go in as the tensor they are, so a filter that works on a
+                # tensor answers on the points' device and nothing is copied to the host.
+                keep = torch.as_tensor(
+                    metric_filter.keep_points(xyz, frame.frame_meta),
+                    dtype=torch.bool,
+                    device=predictions.device,
+                )
                 self._accumulate(index + 1, predictions[keep], targets[keep], coord[keep])
 
     def _accumulate(

@@ -328,8 +328,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                     raise ValueError("target labels exceed the int16 cache range.")
             confidence_values, entropy = _reduce_scores(scores, pred)
             self._note_frame()
-            coord_cpu = coord.cpu()
-            self.coord.append(coord_cpu)
+            self.coord.append(coord.cpu())
             self.pred.append(pred.to(torch.int16).cpu())
             self.target.append(target.to(torch.int16).cpu())
             self.confidence.append(confidence_values.cpu())
@@ -359,9 +358,10 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
                 else labels.detach().to(dtype=torch.long).cpu()
             )
             if self._component_filters and active:
-                # filters convert the coordinates to float64 themselves
+                # The points go in on the device the model left them on, so a filter that
+                # works on a tensor masks them there. Filters convert to float64 themselves.
                 point_masks, box_masks, available = self._filter_masks(
-                    frame.frame_meta, coord_cpu.numpy(), self.gt_boxes[-1].numpy(), active
+                    frame.frame_meta, coord, self.gt_boxes[-1].numpy(), active
                 )
                 self.region_masks.append(point_masks)
                 self.box_region_masks.append(box_masks)
@@ -512,7 +512,7 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
     def _filter_masks(
         self,
         frame_meta: FrameMetaSample | None,
-        coord_np: np.ndarray,
+        coord: torch.Tensor,
         boxes_np: np.ndarray,
         active: Any,
     ) -> tuple[torch.Tensor, torch.Tensor, list[bool]]:
@@ -524,14 +524,16 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
 
         Args:
             frame_meta: Metadata of the frame, read by the filters.
-            coord_np: ``(N, 3+)`` point coordinates of the frame.
+            coord: ``(N, 3+)`` point coordinates of the frame, on any device.
             boxes_np: ``(M, 7+)`` detection GT boxes of the frame.
             active: Cache keys of the filters this stage reads.
 
         Returns:
             The ``(N, F)`` point mask, the ``(M, F)`` box mask, one column per filter,
-            and per filter whether it covered this frame.
+            both on the CPU, and per filter whether it covered this frame.
         """
+        num_points = coord.shape[0]
+        xyz = coord[:, :3]
         columns = []
         box_columns = []
         available = []
@@ -541,34 +543,41 @@ class Segmentation3DPointCloudMetricSuite(MetricSuite[PointCloudSeg3DState]):
             )
             available.append(is_available)
             if not is_available:
-                columns.append(np.zeros(coord_np.shape[0], dtype=bool))
-                box_columns.append(np.zeros(boxes_np.shape[0], dtype=bool))
+                columns.append(torch.zeros(num_points, dtype=torch.bool, device=coord.device))
+                box_columns.append(torch.zeros(boxes_np.shape[0], dtype=torch.bool))
                 continue
             # Points go in as xyz only, boxes as full rows for footprint-overlap membership.
-            columns.append(metric_filter.keep_points(coord_np[:, :3], frame_meta))
-            box_columns.append(metric_filter.keep_boxes(boxes_np, frame_meta))
+            columns.append(
+                torch.as_tensor(
+                    metric_filter.keep_points(xyz, frame_meta),
+                    dtype=torch.bool,
+                    device=coord.device,
+                )
+            )
+            box_columns.append(
+                torch.as_tensor(metric_filter.keep_boxes(boxes_np, frame_meta), dtype=torch.bool)
+            )
         return (
-            self._stack_masks(columns, coord_np.shape[0]),
+            self._stack_masks(columns, num_points),
             self._stack_masks(box_columns, boxes_np.shape[0]),
             available,
         )
 
-    def _stack_masks(self, columns: list[np.ndarray], num_rows: int) -> torch.Tensor:
-        """Stack one keep-mask column per filter into a ``(num_rows, F)`` tensor.
+    def _stack_masks(self, columns: list[torch.Tensor], num_rows: int) -> torch.Tensor:
+        """Stack one keep-mask column per filter into a ``(num_rows, F)`` tensor on the CPU.
+
+        The columns of a frame's points come stacked off their device in one copy.
 
         Args:
-            columns: One boolean column per configured filter.
+            columns: One boolean column per configured filter, all on one device.
             num_rows: Rows the masks cover, points or boxes of the frame.
 
         Returns:
-            The stacked mask.
+            The stacked mask, on the CPU.
         """
-        stacked = (
-            np.stack(columns, axis=1)
-            if num_rows
-            else np.zeros((0, len(self._component_filters)), dtype=bool)
-        )
-        return torch.from_numpy(np.asarray(stacked, dtype=bool))
+        if not num_rows:
+            return torch.zeros((0, len(self._component_filters)), dtype=torch.bool)
+        return torch.stack(columns, dim=1).cpu()
 
     @staticmethod
     def _range_mask(xy: np.ndarray, metric_range: MetricRange) -> np.ndarray:

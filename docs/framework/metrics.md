@@ -213,6 +213,12 @@ detection boxes of a frame, and reads what it needs off the frame's `FrameMetaSa
 that reads it sets `needs_frame_meta`, which makes its suite require the frame metadata, and may
 override `available` to leave out the frames it cannot cover.
 
+The segmentation suites hand `keep_points` the points as the tensor the model produced, and the
+mask comes back the way the points came in: an array for an array, a tensor on the same device for
+a tensor. `RegionFilter` and `CorridorFilter` mask a tensor on its device, so a frame's points stay
+on the GPU for them. `CollisionFilter` tests against a shapely area built for the one ego pose, so
+it converts the points itself and returns only the mask to their device.
+
 ## Data requirements
 
 The baseline metrics need nothing beyond the model's predictions and the ground truth. Each
