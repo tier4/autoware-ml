@@ -189,6 +189,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             gt_bboxes_num_points=torch.tensor(
                 [[100], [200]], dtype=torch.int32, device=self.device
             ),
+            gt_bboxes_instance_ids=torch.tensor([[0], [1]], dtype=torch.int64, device=self.device),
         )
         return ModelBatchInputs(
             multi_task_gt_batch=ModelGTBatch(
@@ -460,6 +461,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             gt_labels_3d=gt_boxes.gt_labels_3d[:1],
             gt_valid_bboxes=gt_boxes.gt_valid_bboxes[:1],
             gt_bboxes_num_points=gt_boxes.gt_bboxes_num_points[:1],
+            gt_bboxes_instance_ids=gt_boxes.gt_bboxes_instance_ids[:1],
         )
         cases = {
             "last sample": ModelBatchInputs(

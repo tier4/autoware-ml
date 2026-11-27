@@ -20,9 +20,9 @@ Note that the code is modified from:
 https://github.com/open-mmlab/mmdetection3d/blob/main/mmdet3d/structures/bbox_3d/lidar_box3d.py
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from torch import Tensor
-from jaxtyping import Bool, Float32, Int32
+from jaxtyping import Bool, Float32, Int32, Int64
 import torch
 
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
@@ -60,6 +60,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
         bbox_labels: Int32[Tensor, " num_bboxes"],
         bbox_label_names: Sequence[str],
         bbox_num_lidar_points: Int32[Tensor, " num_bboxes"],
+        bbox_instance_ids: Int64[Tensor, " num_bboxes"],
         bbox_center_coordinate_type: Box3DCenterCoordinateType,
         bbox_attributes: Sequence[Sequence[str]] | None = None,
     ) -> None:
@@ -71,6 +72,8 @@ class LidarBBoxes3D(BaseBBoxes3D):
             bbox_labels (Int32[Tensor, "num_bboxes"]): The labels of the 3D bounding boxes.
             bbox_label_names (Sequence[str]): The label names of the 3D bounding boxes.
             bbox_num_lidar_points (Int32[Tensor, "num_bboxes"]): The number of LiDAR points in each 3D bounding box.
+            bbox_instance_ids (Int64[Tensor, "num_bboxes"]): Object identity of every box,
+                equal across the frames of a scene.
             bbox_center_coordinate_type (Box3DCenterCoordinateType): The center coordinate type of the 3D bounding boxes.
                 It only support "gravity_center (center of z is in the middle)" for now.
                 We specify this to make sure users are aware of the center coordinate type being used.
@@ -84,6 +87,7 @@ class LidarBBoxes3D(BaseBBoxes3D):
             bbox_labels=bbox_labels,
             bbox_label_names=bbox_label_names,
             bbox_num_lidar_points=bbox_num_lidar_points,
+            bbox_instance_ids=bbox_instance_ids,
             bbox_center_coordinate_type=bbox_center_coordinate_type,
             bbox_attributes=bbox_attributes,
         )
@@ -157,6 +161,14 @@ class LidarBBoxes3D(BaseBBoxes3D):
             dtype=torch.bool,
             device=self.bbox_params.device,
         )
+        for index, inside_points in self._points_inside_each_bbox(points):
+            in_bboxes_mask[index, inside_points] = True
+        return in_bboxes_mask
+
+    def _points_inside_each_bbox(
+        self, points: Float32[Tensor, "num_points 3"]
+    ) -> Iterator[tuple[int, Int64[Tensor, " num_inside"]]]:
+        """Yield every box index with the indices of the points inside it, the surface included."""
         centers = self.center
         half_dims = self.dims / 2
         # Only the points within the circumscribed BEV radius of a box are tested: the slice
@@ -182,8 +194,26 @@ class LidarBBoxes3D(BaseBBoxes3D):
                 & (local_y.abs() <= half_dims[index, 1])
                 & (offsets[:, 2].abs() <= half_dims[index, 2])
             )
-            in_bboxes_mask[index, order[begin:end][candidates][inside]] = True
-        return in_bboxes_mask
+            yield index, order[begin:end][candidates][inside]
+
+    def count_points_in_bboxes(
+        self, points: Float32[Tensor, "num_points 3"]
+    ) -> Int32[Tensor, " num_bboxes"]:
+        """
+        Count the points inside each 3D bounding box, the surface included.
+
+        Args:
+            points (Float32[Tensor, "num_points 3"]): The point cloud data in shape (N, 3).
+
+        Returns:
+            Int32[Tensor, "num_bboxes"]: Number of points inside every box.
+        """
+        counts = torch.zeros(
+            self.bbox_params.shape[0], dtype=torch.int32, device=self.bbox_params.device
+        )
+        for index, inside_points in self._points_inside_each_bbox(points):
+            counts[index] = inside_points.numel()
+        return counts
 
     def rotate(
         self,

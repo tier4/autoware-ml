@@ -58,6 +58,11 @@ def build_detection3d_gt_batch(
         gt_bboxes_num_points=torch.zeros(
             (len(gt_boxes), max_boxes), dtype=torch.int32, device=device
         ),
+        gt_bboxes_instance_ids=torch.where(
+            torch.arange(max_boxes, device=device)[None] < valid[:, None],
+            torch.arange(max_boxes, device=device)[None].expand(len(gt_boxes), -1),
+            -1,
+        ),
     )
 
 
