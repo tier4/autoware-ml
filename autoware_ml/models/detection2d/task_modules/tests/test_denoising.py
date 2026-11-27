@@ -226,6 +226,52 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         ):
             torch.testing.assert_close(wide_index, narrow_index)
 
+    def test_seeded_queries_match_the_official_code(self) -> None:
+        """Test that a seeded run gives the queries of the official code.
+
+        Input: two images with 2 and 1 boxes, ``num_denoising=4`` (2 groups),
+        ``label_noise_ratio=1.0`` so that labels get replaced, seed 1.
+        Expected: the labels and noised boxes that lyuwenyu/RT-DETR@df2a96c
+        (``get_contrastive_denoising_training_group``) gives for the same inputs and seed;
+        padding queries keep the padding label and a zero box. Reordering the label or box
+        draws changes them.
+        Check: the content against the embedding of the expected labels, and the boxes of
+        the first group after the sigmoid.
+        """
+        torch.manual_seed(1)
+        queries, _, _ = self._build((2, 1), num_denoising=4, label_noise_ratio=1.0)
+
+        pad = NUM_CLASSES
+        labels = torch.tensor([[0, 1, 2, 1, 0, 1, 1, 1], [0, pad, 0, pad, 0, pad, 3, pad]])
+        torch.testing.assert_close(queries.content, self.class_embed(labels))
+        boxes = queries.boxes_unact.sigmoid()
+        torch.testing.assert_close(
+            boxes[0, :4],
+            torch.tensor(
+                [
+                    [0.3479, 0.4235, 0.1617, 0.0880],
+                    [0.3588, 0.3919, 0.0260, 0.0845],
+                    [0.4578, 0.4650, 0.2803, 0.1226],
+                    [0.3591, 0.5069, 0.0000, 0.1135],
+                ]
+            ),
+            rtol=0,
+            atol=1e-4,
+        )
+        torch.testing.assert_close(
+            boxes[1, :4],
+            torch.tensor(
+                [
+                    [0.3489, 0.4393, 0.1401, 0.0822],
+                    [0.0000, 0.0000, 0.0000, 0.0000],
+                    [0.1513, 0.3323, 0.2658, 0.1275],
+                    [0.0000, 0.0000, 0.0000, 0.0000],
+                ]
+            ),
+            rtol=0,
+            atol=1e-4,
+        )
+
     def test_rejects_zero_num_denoising(self) -> None:
         """Test that a non-positive ``num_denoising`` is refused.
 
