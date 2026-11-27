@@ -346,6 +346,13 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
                 "grid_size and point_cloud_range must be provided at construction time to deploy."
             )
         sparse_shape, serialization_depth = self.compute_export_geometry(torch.device("cpu"))
+        seg3d_head = PTv3Seg3DHeadExportModule(
+            self.seg3d_head,
+            self.EXPORT_ORDER,
+            sparse_shape,
+            self.encoder.stride,
+            reuse_subm_pairs=self.export_subm_pairs,
+        )
         return (
             PTv3EncoderExportModule(
                 self.encoder,
@@ -353,10 +360,9 @@ class PTv3Det3DSeg3DModel(PTv3BaseModel):
                 self.EXPORT_ORDER,
                 sparse_shape,
                 serialization_depth,
+                subm_pair_stages=tuple(seg3d_head.subm_pair_keys),
             ).build_deployment_graph(),
-            PTv3Seg3DHeadExportModule(
-                self.seg3d_head, self.EXPORT_ORDER, sparse_shape, self.encoder.stride
-            ).build_deployment_graph(),
+            seg3d_head.build_deployment_graph(),
             PTv3Det3DHeadExportModule(
                 self.bev_neck, self.bbox_head, len(self.encoder.stride) + 1
             ).build_deployment_graph(),

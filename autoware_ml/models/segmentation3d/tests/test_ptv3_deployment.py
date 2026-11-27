@@ -18,8 +18,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import partial
+from pathlib import Path
+import tempfile
 import unittest
 
+from omegaconf import OmegaConf
+import onnx
 import torch
 
 from autoware_ml.dataclasses.models.model_outputs import ModelOutputs
@@ -42,8 +46,10 @@ from autoware_ml.models.segmentation3d.ptv3_base import (
     SEG3D_HEAD_GRAPH,
     SEG3D_HEAD_OUTPUT_NAMES,
     encoder_graph_input_names,
+    subm_pair_names,
 )
 from autoware_ml.ops.spconv.availability import IS_SPCONV_AVAILABLE
+from autoware_ml.utils.deploy import export_to_onnx
 
 REQUIRES_SPARSE_CUDA = unittest.skipUnless(
     IS_SPCONV_AVAILABLE and torch.cuda.is_available(), "PTv3 export needs spconv and CUDA"
@@ -130,6 +136,63 @@ class TestSeg3dDeployment(unittest.TestCase):
             set(SEG3D_HEAD_OUTPUT_NAMES), set(graphs[SEG3D_HEAD_GRAPH].onnx_dynamic_axes)
         )
         assert_specs_export_onnx_with_the_declared_io(self.model, self.batch)
+
+
+@REQUIRES_SPARSE_CUDA
+class TestSeg3dDeploymentReusingSubmPairs(unittest.TestCase):
+    """The segmentation export in which the head reuses the encoder's index pairs."""
+
+    def setUp(self) -> None:
+        """Build one batch on the GPU."""
+        self.batch = build_inputs(device=torch.device("cuda"))
+
+    def _export(self, export_subm_pairs: bool) -> dict[str, onnx.GraphProto]:
+        """Export the segmentation model's graphs with the base config's ONNX settings.
+
+        Args:
+            export_subm_pairs: Whether the export hands the encoder's index pairs to the head.
+
+        Returns:
+            The ONNX graph of every deployment graph, by name.
+        """
+        model = build_seg3d_model(export_subm_pairs=export_subm_pairs).cuda().eval()
+        onnx_cfg = OmegaConf.create(
+            {"opset_version": 17, "dynamo": False, "do_constant_folding": False}
+        )
+        graphs = {}
+        with tempfile.TemporaryDirectory() as directory:
+            for name, spec in model.build_export_specs(self.batch).items():
+                path = Path(directory) / f"{name}.onnx"
+                export_to_onnx(spec, onnx_cfg, path)
+                graphs[name] = onnx.load(path).graph
+        return graphs
+
+    def test_the_encoder_hands_its_pairs_to_the_head(self) -> None:
+        """Test that the encoder outputs the pairs the head convolves with, under one name.
+
+        Input: the segmentation model's ONNX with and without ``export_subm_pairs``; its one
+            decoder level has a block.
+        Expected: the encoder outputs the level's pairs after the level features, with both
+            axes of the pair table dynamic; the head takes them as its last inputs, builds no
+            pairs and no longer reads the level's voxel coordinates. The default head builds
+            pairs.
+        Check: the ONNX output and input names, the pair table's ``dim_param`` and the
+            ``GetIndicePairsImplicitGemm`` nodes of both heads.
+        """
+        pairs = subm_pair_names([0])
+        graphs = self._export(export_subm_pairs=True)
+        encoder, head = graphs[ENCODER_GRAPH], graphs[SEG3D_HEAD_GRAPH]
+        self.assertEqual([tensor.name for tensor in encoder.output][-3:], pairs)
+        head_inputs = {tensor.name: tensor for tensor in head.input}
+        self.assertEqual(list(head_inputs)[-3:], pairs)
+        self.assertNotIn("grid_coord", head_inputs)
+        dims = head_inputs[pairs[0]].type.tensor_type.shape.dim
+        self.assertEqual([dim.dim_param for dim in dims], [f"{pairs[0]}_rows", f"{pairs[0]}_cols"])
+        builders = [node for node in head.node if node.op_type == "GetIndicePairsImplicitGemm"]
+        self.assertEqual(builders, [])
+        default_head = self._export(export_subm_pairs=False)[SEG3D_HEAD_GRAPH]
+        default_ops = {node.op_type for node in default_head.node}
+        self.assertIn("GetIndicePairsImplicitGemm", default_ops)
 
 
 @REQUIRES_SPARSE_CUDA
@@ -221,6 +284,19 @@ class TestDeploymentReproducesForward(unittest.TestCase):
         model = build_seg3d_model(patch_sizes=self.patch_sizes).cuda().eval()
         assert_deployment_reproduces_forward(
             model, self.batch, self.device, self._seg3d_tensors, rtol=1e-5, atol=1e-5
+        )
+
+    def test_seg3d_deployment_reusing_subm_pairs_reproduces_forward(self) -> None:
+        """Test that the segmentation deployment reproduces forward() when the head reuses pairs.
+
+        Input: a segmentation model with ``export_subm_pairs`` whose window at every level is
+            that level's voxel count, and one batch.
+        Expected: the deployed labels equal forward()'s and the probabilities match to 1e-5.
+        Check: assert_deployment_reproduces_forward().
+        """
+        model = build_seg3d_model(patch_sizes=self.patch_sizes, export_subm_pairs=True)
+        assert_deployment_reproduces_forward(
+            model.cuda().eval(), self.batch, self.device, self._seg3d_tensors, rtol=1e-5, atol=1e-5
         )
 
     def test_det3d_deployment_reproduces_forward(self) -> None:
