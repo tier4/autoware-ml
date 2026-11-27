@@ -42,17 +42,9 @@ _TORCH_DTYPES: Mapping[trt.DataType, torch.dtype] = {
 }
 
 
-@functools.cache
-def tensorrt_logger() -> trt.Logger:
-    """Return the one TensorRT logger of the process.
-
-    TensorRT keeps a raw pointer to the logger it was given: a logger created per engine load
-    is destroyed before the runtime and the engine that log through it.
-
-    Returns:
-        The process-wide logger, at warning level.
-    """
-    return trt.Logger(trt.Logger.WARNING)
+#: The one TensorRT logger of the process. TensorRT keeps a raw pointer to its logger, which has
+#: to stay valid for as long as an engine created through it.
+_TENSORRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
 
 @functools.cache
@@ -78,7 +70,7 @@ def _load_plugin_library(library: str) -> None:
 @functools.cache
 def _init_plugin_registry() -> None:
     """Register TensorRT's built-in plugins, once per process."""
-    trt.init_libnvinfer_plugins(tensorrt_logger(), "")
+    trt.init_libnvinfer_plugins(_TENSORRT_LOGGER, "")
 
 
 def pinned_cuda_device(device: str | torch.device) -> torch.device:
@@ -143,7 +135,7 @@ class TensorRTEngineRunner:
             _load_plugin_library(str(library))
         _init_plugin_registry()
         # The runtime has to outlive the engine, so it is kept alongside it.
-        self._runtime = trt.Runtime(tensorrt_logger())
+        self._runtime = trt.Runtime(_TENSORRT_LOGGER)
         # An engine is bound to the device current when it is deserialized.
         with torch.cuda.device(self.device):
             self._engine = self._runtime.deserialize_cuda_engine(engine_path.read_bytes())
