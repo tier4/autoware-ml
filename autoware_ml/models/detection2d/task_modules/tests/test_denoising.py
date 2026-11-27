@@ -39,13 +39,17 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         self.class_embed = nn.Embedding(NUM_CLASSES + 1, 8, padding_idx=NUM_CLASSES)
 
     def _build(
-        self, box_counts: tuple[int, ...], **kwargs: float | int
+        self, box_counts: tuple[int, ...], pad_width: int | None = None, **kwargs: float | int
     ) -> tuple[DenoisingQueries, list[torch.Tensor], list[torch.Tensor]]:
         """Build the queries of images holding the given box counts.
 
-        The boxes are 0.2 x 0.1 and centered away from the border, so the noise is never
-        clipped; the labels cycle through the classes.
+        The ground truth is padded as it is collated: labels -1 and zero boxes past the valid
+        count, up to ``pad_width``, by default two rows wider than the largest count. The boxes
+        are 0.2 x 0.1 and centered away from the border, so the noise is never clipped; the
+        labels cycle through the classes. Also returns the valid labels and boxes per image.
         """
+        if pad_width is None:
+            pad_width = max(box_counts) + 2
         labels = [torch.arange(n) % NUM_CLASSES for n in box_counts]
         boxes = [
             torch.tensor([[0.3 + 0.05 * i, 0.4 + 0.02 * i, 0.2, 0.1] for i in range(n)]).reshape(
@@ -53,8 +57,19 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
             )
             for n in box_counts
         ]
+        padded_labels = torch.full((len(box_counts), pad_width), -1, dtype=torch.int32)
+        padded_boxes = torch.zeros(len(box_counts), pad_width, 4)
+        for image, count in enumerate(box_counts):
+            padded_labels[image, :count] = labels[image]
+            padded_boxes[image, :count] = boxes[image]
         queries = build_contrastive_denoising_queries(
-            labels, boxes, NUM_CLASSES, NUM_MATCHING_QUERIES, self.class_embed, **kwargs
+            padded_labels,
+            padded_boxes,
+            torch.tensor(box_counts, dtype=torch.int32),
+            NUM_CLASSES,
+            NUM_MATCHING_QUERIES,
+            self.class_embed,
+            **kwargs,
         )
         return queries, labels, boxes
 
@@ -174,22 +189,34 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         )
         self.assertIsNotNone(self.class_embed.weight.grad)
 
-    def test_rejects_zero_num_denoising_and_unequal_image_counts(self) -> None:
+    def test_queries_do_not_depend_on_the_padded_width(self) -> None:
         """
-        Input: ``num_denoising=0``; and labels for two images but boxes for one.
-        Expected: each is refused.
-        Check: a ValueError is raised for each.
+        Input: two images with 3 and 1 boxes, padded once to 3 and once to 50 rows, each with
+        the same seed.
+        Expected: the queries are laid out by the largest valid count, so both paddings give
+        the same groups, query count, noise and positive indices.
+        Check: every field of the two results.
         """
-        labels = [torch.tensor([0]), torch.tensor([1])]
-        boxes = [torch.tensor([[0.5, 0.5, 0.1, 0.1]])] * 2
-        for kwargs in (
-            {"gt_labels": labels, "gt_boxes": boxes, "num_denoising": 0},
-            {"gt_labels": labels, "gt_boxes": boxes[:1]},
+        torch.manual_seed(1)
+        narrow, _, _ = self._build((3, 1), pad_width=3)
+        torch.manual_seed(1)
+        wide, _, _ = self._build((3, 1), pad_width=50)
+
+        self.assertEqual((narrow.num_groups, narrow.num_queries), (33, 198))
+        self.assertEqual((wide.num_groups, wide.num_queries), (33, 198))
+        torch.testing.assert_close(wide.content, narrow.content, rtol=0, atol=0)
+        torch.testing.assert_close(wide.boxes_unact, narrow.boxes_unact, rtol=0, atol=0)
+        torch.testing.assert_close(wide.attn_mask, narrow.attn_mask)
+        for wide_index, narrow_index in zip(
+            wide.positive_indices, narrow.positive_indices, strict=True
         ):
-            with self.subTest(**kwargs), self.assertRaises(ValueError):
-                build_contrastive_denoising_queries(
-                    num_classes=NUM_CLASSES,
-                    num_matching_queries=NUM_MATCHING_QUERIES,
-                    class_embed=self.class_embed,
-                    **kwargs,
-                )
+            torch.testing.assert_close(wide_index, narrow_index)
+
+    def test_rejects_zero_num_denoising(self) -> None:
+        """
+        Input: ``num_denoising=0``.
+        Expected: refused.
+        Check: a ValueError is raised.
+        """
+        with self.assertRaises(ValueError):
+            self._build((1, 1), num_denoising=0)
