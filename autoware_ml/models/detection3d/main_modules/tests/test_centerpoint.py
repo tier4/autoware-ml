@@ -14,12 +14,8 @@
 
 """Unit tests for CenterPoint detection model."""
 
-from pathlib import Path
-import tempfile
 import unittest
 
-from omegaconf import OmegaConf
-import onnx
 from jaxtyping import Float32
 import torch
 
@@ -29,11 +25,14 @@ from autoware_ml.dataclasses.batch.detection3d import (
     Detection3DGTBatch,
 )
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch
-from autoware_ml.deployment.tests.deployment_assertions import assert_deployment_reproduces_forward
+from autoware_ml.deployment.tests.deployment_assertions import (
+    assert_deployment_reproduces_forward,
+    assert_specs_export_onnx_with_the_declared_io,
+)
 from autoware_ml.models.detection3d.main_modules.centerpoint import (
+    CenterPointBackboneNeckHeadExportModule,
     CenterPointDetection3DModel,
-    _CenterPointBackboneNeckHeadExportWrapper,
-    _CenterPointVoxelEncoderExportWrapper,
+    CenterPointVoxelEncoderExportModule,
 )
 from autoware_ml.models.detection3d.backbones.second import SECONDBackbone
 from autoware_ml.models.detection3d.encoders.pillars.pillar_feature_net import PillarFeatureNet
@@ -44,7 +43,6 @@ from autoware_ml.models.module_base_model import LogDictConfigs
 from autoware_ml.preprocessing.detection3d.point_pillar_preprocessor import PointPillarPreprocessor
 from autoware_ml.preprocessing.data_preprocessor import DataPreprocessor
 from autoware_ml.ops.voxelization.voxelization import VoxelsData
-from autoware_ml.utils.deploy import export_to_onnx
 
 
 class TestCenterPointDetection3DModel(unittest.TestCase):
@@ -284,7 +282,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         )
 
         voxel_spec = specs["pts_voxel_encoder_centerpoint"]
-        self.assertIsInstance(voxel_spec.module, _CenterPointVoxelEncoderExportWrapper)
+        self.assertIsInstance(voxel_spec.module, CenterPointVoxelEncoderExportModule)
         self.assertEqual(voxel_spec.input_names, ["input_features"])
         self.assertEqual(voxel_spec.output_names, ["pillar_features"])
         self.assertEqual(
@@ -304,7 +302,7 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
         self.assertEqual(pillar_features.shape, (num_pillars, 1, 32))
 
         head_spec = specs["pts_backbone_neck_head_centerpoint"]
-        self.assertIsInstance(head_spec.module, _CenterPointBackboneNeckHeadExportWrapper)
+        self.assertIsInstance(head_spec.module, CenterPointBackboneNeckHeadExportModule)
         self.assertEqual(head_spec.input_names, ["spatial_features"])
         self.assertEqual(head_spec.output_names, ["heatmap", "reg", "height", "dim", "rot", "vel"])
         expected_axes = {"spatial_features": {0: "batch_size", 2: "H", 3: "W"}}
@@ -358,37 +356,23 @@ class TestCenterPointDetection3DModel(unittest.TestCase):
             self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
 
     def test_exported_graphs_keep_the_runtime_names_and_the_model_in_eval_mode(self) -> None:
-        """Test that the exported graphs keep the runtime names and leave the model in eval mode.
+        """Test that the exported graphs carry the runtime names and leave the model in eval mode.
 
-        Input: the two export specs of the default model, exported with the base config's
-            ONNX settings.
-        Expected: each ONNX carries the runtime's input and output names in binding order.
-        Check: the graph input and output names per spec, and that no submodule trains after.
+        Input: the default model in eval mode and one batch.
+        Expected: the graphs take the runtime's ``input_features`` and ``spatial_features``, each
+            ONNX carries its graph's input and output names and dynamic axes, and no submodule
+            trains after the export.
+        Check: the graphs' input names, assert_specs_export_onnx_with_the_declared_io(), and
+            the training flag of every submodule.
         """
         self.centerpoint.eval()
-        specs = self.centerpoint.build_export_specs(self._build_multi_task_batch_inputs())
-        # deploy.onnx of the CenterPoint base config.
-        onnx_cfg = OmegaConf.create(
-            {"dynamo": False, "opset_version": 17, "do_constant_folding": False}
+        self.assertEqual(
+            [graph.input_names for graph in self.centerpoint.deployment_graphs()],
+            [("input_features",), ("spatial_features",)],
         )
-        expected_names = {
-            "pts_voxel_encoder_centerpoint": (["input_features"], ["pillar_features"]),
-            "pts_backbone_neck_head_centerpoint": (
-                ["spatial_features"],
-                ["heatmap", "reg", "height", "dim", "rot", "vel"],
-            ),
-        }
-
-        with tempfile.TemporaryDirectory() as output_dir:
-            for name, spec in specs.items():
-                onnx_path = Path(output_dir) / f"{name}.onnx"
-                export_to_onnx(spec, onnx_cfg, onnx_path)
-                graph = onnx.load(str(onnx_path)).graph
-                self.assertEqual(
-                    ([value.name for value in graph.input], [value.name for value in graph.output]),
-                    expected_names[name],
-                )
-
+        assert_specs_export_onnx_with_the_declared_io(
+            self.centerpoint, self._build_multi_task_batch_inputs()
+        )
         self.assertEqual(
             [name for name, module in self.centerpoint.named_modules() if module.training], []
         )
