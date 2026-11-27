@@ -34,7 +34,15 @@ class MyModel(ModuleBaseModel):
         ...
 
     # Deployment
-    def build_export_spec(self, multi_task_batch_inputs: ModelBatchInputs) -> ExportSpec:
+    def deployment_graphs(self) -> Sequence[DeploymentGraph] | None:
+        ...
+
+    def deployment_forward(
+        self,
+        multi_task_batch_inputs: ModelBatchInputs,
+        executors: Mapping[str, GraphExecutor],
+        device: torch.device,
+    ) -> Mapping[str, torch.Tensor]:
         ...
 ```
 
@@ -43,15 +51,17 @@ scheduler configuration, metric logging, runtime preprocessing and the deploymen
 `forward()` takes the typed model inputs, a `ModelBatchInputs` the `DataPreprocessor` built from
 the collated batch, and returns a `ModelOutputs` with the head outputs of every task the model
 predicts. `forward()`, `compute_metrics()` and `decode_outputs()` are abstract, so a model
-that lacks one fails at construction. `build_export_spec()` raises `NotImplementedError` in the
-base class, so a model that never deploys can leave it out. `build_eval_output()` returns an
-empty dict by default, which is right for a model without metrics.
+that lacks one fails at construction. `deployment_graphs()` returns `None` in the base class,
+so a model that never deploys can leave both deployment methods out; a model that deploys
+declares its graphs and writes `deployment_forward()`, the PyTorch code between them (see
+[Deployment](../user-guide/deployment.md#model-owned-export-wrappers)). `build_eval_output()`
+returns an empty dict by default, which is right for a model without metrics.
 
 !!! note "Extending `ModuleBaseModel`"
     Specialized models should still use `ModuleBaseModel`. When the shared step path is not
     enough, override hooks such as `decode_outputs()`, `build_eval_output()`,
-    `get_log_batch_size()`, `build_optimizer_groups()` or `build_export_spec()` /
-    `build_export_specs()` instead of introducing a standalone `LightningModule`. Output
+    `get_log_batch_size()`, `build_optimizer_groups()` or `deployment_graphs()` /
+    `deployment_forward()` instead of introducing a standalone `LightningModule`. Output
     decoding (for example, the voxel-to-point scatter of segmentation) belongs inside the
     model, in `forward()`, `compute_metrics()`, `build_eval_output()` and `decode_outputs()`,
     not in a separate framework pipeline.
@@ -138,7 +148,7 @@ class MyModel(ModuleBaseModel):
 5. **Metrics read `build_eval_output()`** - At validation and test the mixin feeds the flat
    dict it returns into every attached metric suite, see [Metrics](../framework/metrics.md).
 
-6. **Optimizer and scheduler** - Passed as callables to `ModuleBaseModel.__init__()`, marked
+6. **Optimizer and scheduler** - Passed as factory functions to `ModuleBaseModel.__init__()`, marked
    `_partial_: true` in the YAML config. Override `build_optimizer_groups()` to expose parameter
    groups for `optimizer_group_overrides`.
 
@@ -147,7 +157,7 @@ class MyModel(ModuleBaseModel):
    the base class.
 
 8. **Use hooks when needed** - If your model needs custom batch size inference,
-   prediction formatting, or an explicit deployment wrapper, override the
+   prediction formatting, or its own deployed function, override the
    appropriate `ModuleBaseModel` hook instead of bypassing the shared training and
    deployment flow. A temporal model that carries a memory across batches sets the
    `requires_streaming` class variable to `True`; `ModuleBaseModel.setup()` then refuses a

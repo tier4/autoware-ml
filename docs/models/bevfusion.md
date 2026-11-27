@@ -73,7 +73,7 @@ autoware-ml deploy \
     --release v1.0.0
 ```
 
-The export produces the ONNX modules for `autoware_universe/perception/autoware_bevfusion`. LiDAR-only configurations export a single `bevfusion_lidar.onnx` main body restricted to the first three inputs below, and the runtime node consumes it unchanged. Camera-LiDAR models export two modules: `bevfusion_image_backbone.onnx` encodes raw `uint8` multiview images (the training-time `1 / 255` normalization is baked into the graph) into `image_feats`, and `bevfusion_camera_lidar.onnx` is the main body consuming those features together with the LiDAR depth maps and precomputed `bev_pool` metadata. **The camera-LiDAR main body is not consumed by the current runtime node**: its inputs changed and the node has not been updated yet, see [Runtime compatibility](#runtime-compatibility).
+The export produces the ONNX modules for `autoware_universe/perception/autoware_bevfusion`. LiDAR-only configurations declare a single `bevfusion_lidar` graph, exported as `bevfusion_lidar.onnx`, a main body restricted to the first three inputs below that the runtime node consumes unchanged; the graph is single-sample, so the deploy refuses a predict batch of more than one sample. Camera-LiDAR models export two modules: `bevfusion_image_backbone.onnx` encodes raw `uint8` multiview images (the training-time `1 / 255` normalization is baked into the graph) into `image_feats`, and `bevfusion_camera_lidar.onnx` is the main body consuming those features together with the LiDAR depth maps and precomputed `bev_pool` metadata. **The camera-LiDAR main body is not consumed by the current runtime node**: its inputs changed and the node has not been updated yet, see [Runtime compatibility](#runtime-compatibility).
 
 | Input Tensor           | Description                                                                                                            |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -128,7 +128,7 @@ The node has to build the depth maps that the graph used to build, with the same
 | `autoware_ml/models/detection3d/main_modules/bevfusion.py`                   | BEVFusion model wrapper                          |
 | `autoware_ml/models/detection3d/main_modules/bevfusions/bevfusion_lidar.py`  | LiDAR BEV network                                |
 | `autoware_ml/models/detection3d/main_modules/bevfusions/bevfusion_camera.py` | Multiview image network                          |
-| `autoware_ml/models/detection3d/main_modules/bevfusions/export_wrappers.py`  | ONNX export wrappers                             |
+| `autoware_ml/models/detection3d/main_modules/bevfusions/export_wrappers.py`  | Camera-LiDAR export wrappers and output packing  |
 | `autoware_ml/models/detection3d/view_transforms/depth_lss.py`                | Multiview image-to-BEV transform                 |
 | `autoware_ml/models/detection3d/main_modules/bevfusions/fuser.py`            | Camera-LiDAR BEV fusion layer                    |
 | `autoware_ml/models/detection3d/encoders/voxel.py`                           | Hard voxelization feature encoder                |

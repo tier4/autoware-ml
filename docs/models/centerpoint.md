@@ -81,7 +81,7 @@ Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artif
 
 | Path                                                                      | Description                                      |
 | ------------------------------------------------------------------------- | ------------------------------------------------ |
-| `autoware_ml/models/detection3d/main_modules/centerpoint.py`              | CenterPoint model wrapper                        |
+| `autoware_ml/models/detection3d/main_modules/centerpoint.py`              | CenterPoint model wrapper and its export modules |
 | `autoware_ml/models/detection3d/encoders/pillars/pillar_feature_net.py`   | Pillar feature encoder                           |
 | `autoware_ml/models/detection3d/encoders/pillars/point_pillar_scatter.py` | Pillar scatter to BEV                            |
 | `autoware_ml/models/detection3d/backbones/second.py`                      | SECOND backbone                                  |
