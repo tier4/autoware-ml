@@ -32,7 +32,7 @@ from collections.abc import Sequence
 import copy
 import math
 
-from jaxtyping import Bool, Float, Int64
+from jaxtyping import Bool, Float, Int
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -536,17 +536,20 @@ class RTDETRv2Decoder(nn.Module):
     def forward(
         self,
         feats: Sequence[Float[Tensor, "batch_size channels height width"]],
-        gt_labels: Sequence[Int64[Tensor, " num_boxes"]] | None = None,
-        gt_boxes: Sequence[Float[Tensor, "num_boxes 4"]] | None = None,
+        gt_labels: Int[Tensor, "batch_size max_num_boxes"] | None = None,
+        gt_boxes: Float[Tensor, "batch_size max_num_boxes 4"] | None = None,
+        num_valid_boxes: Int[Tensor, " batch_size"] | None = None,
     ) -> RTDETRv2HeadOutputs:
         """Predict the boxes and class logits of the queries.
 
         Args:
             feats: Encoder output of every level of ``feat_channels``.
-            gt_labels: Class index of every box of every image; required in training with
-                denoising.
+            gt_labels: Class index of every box of every image, padded past the valid count;
+                required in training with denoising.
             gt_boxes: ``(cx, cy, w, h)`` of every box of every image, normalized by the image
-                size; required in training with denoising.
+                size, padded past the valid count; required in training with denoising.
+            num_valid_boxes: Number of valid boxes of every image; required in training with
+                denoising.
 
         Returns:
             The predictions of every decoder layer, the query selection and the denoising
@@ -559,11 +562,14 @@ class RTDETRv2Decoder(nn.Module):
 
         denoising = None
         if self.training and self.num_denoising > 0:
-            if gt_labels is None or gt_boxes is None:
-                raise ValueError("Training with denoising needs gt_labels and gt_boxes.")
+            if gt_labels is None or gt_boxes is None or num_valid_boxes is None:
+                raise ValueError(
+                    "Training with denoising needs gt_labels, gt_boxes and num_valid_boxes."
+                )
             denoising = build_contrastive_denoising_queries(
                 gt_labels,
                 gt_boxes,
+                num_valid_boxes,
                 self.num_classes,
                 self.num_queries,
                 self.denoising_class_embed,

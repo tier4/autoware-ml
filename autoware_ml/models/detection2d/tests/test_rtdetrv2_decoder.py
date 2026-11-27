@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections import Counter
 import unittest
 
-from jaxtyping import Float, Int64
+from jaxtyping import Float, Int32
 import torch
 from torch import Tensor
 
@@ -65,16 +65,26 @@ def _feats(
 
 def _ground_truth(
     box_counts: tuple[int, ...] = (3, 1),
-) -> tuple[list[Int64[Tensor, " num_boxes"]], list[Float[Tensor, "num_boxes 4"]]]:
-    """Labels and normalized (cx, cy, w, h) boxes of images holding the given box counts."""
+) -> tuple[
+    Int32[Tensor, "batch_size max_num_boxes"],
+    Float[Tensor, "batch_size max_num_boxes 4"],
+    Int32[Tensor, " batch_size"],
+]:
+    """Labels and normalized (cx, cy, w, h) boxes of images holding the given box counts.
+
+    Padded as the ground truth is collated: two rows past the largest count, labels -1 and
+    zero boxes past the valid count of each image.
+    """
     generator = torch.Generator().manual_seed(2)
-    labels = [torch.randint(0, NUM_CLASSES, (n,), generator=generator) for n in box_counts]
-    boxes = [
-        torch.rand(n, 4, generator=generator) * torch.tensor([0.5, 0.5, 0.2, 0.2])
-        + torch.tensor([0.25, 0.25, 0.05, 0.05])
-        for n in box_counts
-    ]
-    return labels, boxes
+    width = max(box_counts) + 2
+    labels = torch.full((len(box_counts), width), -1, dtype=torch.int32)
+    boxes = torch.zeros(len(box_counts), width, 4)
+    for image, count in enumerate(box_counts):
+        labels[image, :count] = torch.randint(0, NUM_CLASSES, (count,), generator=generator)
+        boxes[image, :count] = torch.rand(count, 4, generator=generator) * torch.tensor(
+            [0.5, 0.5, 0.2, 0.2]
+        ) + torch.tensor([0.25, 0.25, 0.05, 0.05])
+    return labels, boxes, torch.tensor(box_counts, dtype=torch.int32)
 
 
 class TestRTDETRv2Decoder(unittest.TestCase):
