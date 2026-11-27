@@ -22,6 +22,16 @@ The model streams the frames of every scenario in order, so it trains and runs o
 | Architecture | PTv3 encoder, Sparse4D detection head and PTv3 segmentation decoder |
 | Datasets     | T4Dataset                                                           |
 
+## Available Configurations
+
+| Config Name                                      | Task                         | Dataset   | Head     | Range | Purpose                                 |
+| ------------------------------------------------ | ---------------------------- | --------- | -------- | ----- | --------------------------------------- |
+| `multi/sparsedrive/t4dataset/base_voxel012_122m` | segmentation3d + detection3d | T4Dataset | Sparse4D | 122 m | Joint segmentation + temporal detection |
+
+The rows are bases. They declare the classes the model trains and require the taxonomy that folds the labels of the database onto them, so an experiment that binds one lives in an external config root, see [Configuration](../user-guide/configuration.md#external-configs-and-scenario-lists).
+
+The base samples the sparse voxels and one coarse encoder stage projected onto a BEV map. `model.bbox_head.lidar_sampling` selects `sparse`, `bev` or `sparse_bev`, and `model.bbox_head.bev` sets the projected stages. The top level `track_birth_score` is a training setting. In training, only a query scoring at least this score keeps its matched instance in its temporal slot, so the next frame matches that slot to the same object. At inference it is the score from which a query starts a track. The head, its export metadata, which the runtime reads, and every metric suite that scores the tracks take the one value, so an experiment sets it there and a deployment keeps the value it was trained with. The model summary of these experiments lists the modules without FLOPs, since a summary forward pass would feed the instance bank one frame outside its stream.
+
 ## Training
 
 The Sparse4D head starts from k-means anchors of the training boxes. The `anchor_recipe` of every head sets how they are derived, and [Adding Models](../contributing/adding-models.md#key-points) describes how training builds them into the anchor cache and how weights carry them.
@@ -42,6 +52,7 @@ The `lidar_encoder` and `seg3d_head` graphs are the PTv3 ones, see [PointTransfo
 | `autoware_ml/anchors/`                            | Anchor recipes of the Sparse4D head                       |
 | `autoware_ml/ops/deformable_aggregation/`         | Sparse4D keypoint sampling export operators               |
 | `autoware_ml/datamodule/streaming_data_module.py` | Datamodule streaming the frames of every scenario         |
+| `autoware_ml/configs/tasks/multi/sparsedrive/`    | SparseDrive experiment configurations                     |
 
 ## Acknowledgment
 

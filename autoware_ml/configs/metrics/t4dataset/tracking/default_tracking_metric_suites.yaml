@@ -1,0 +1,10 @@
+- _target_: autoware_ml.metrics.detection3d.tracking.TrackingMetricSuite
+  components:
+    - _target_: autoware_ml.metrics.detection3d.tracking.TrackingSummary
+      stages: [test]
+  class_names: ${taxonomy.detection3d.class_names}
+  score_threshold: ${track_birth_score}
+  min_observed_points: ${min_observed_points}
+  sweep_score_thresholds: [0.3, 0.4, 0.5, 0.6]
+  match_distance: 2.0
+  max_distances: ${metric_params.detection3d.max_distances}
