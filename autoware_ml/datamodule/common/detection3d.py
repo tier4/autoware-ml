@@ -135,6 +135,15 @@ class Detection3DTask(BaseDatasetTask):
             for fine_name in box_fields[label].unique().to_list()
         }
 
+    def hash_repr(self) -> str:
+        """
+        Canonical text of the task settings.
+
+        Returns:
+          str: The taxonomy the task maps its labels with.
+        """
+        return f"{type(self).__name__}(taxonomy={self.taxonomy})"
+
     def select_columns(self, dataset_records_dataframe: pl.DataFrame) -> pl.DataFrame:
         """
         Keep the box column and the cone and barrier flag column of the records.

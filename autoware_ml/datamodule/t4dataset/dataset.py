@@ -152,7 +152,6 @@ class T4Dataset(BaseDataset):
         self.camera_names = None if camera_names is None else tuple(camera_names)
         self.camera_sources = None if camera_sources is None else tuple(camera_sources)
         self.served_cameras = None if served_cameras is None else tuple(served_cameras)
-        self.dataset_tasks: MappingProxyType[TaskType, BaseDatasetTask] = MappingProxyType({})
         if dataset_records_dataframe is not None:
             self._serve_records(dataset_records_dataframe)
         logger.info(

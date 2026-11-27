@@ -23,7 +23,8 @@ import time
 from abc import abstractmethod
 from pathlib import Path
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Self
 
 
@@ -32,8 +33,10 @@ from torch.utils.data import Dataset
 
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTBatch, ModelGTSample
+from autoware_ml.datamodule.base_dataset_task import BaseDatasetTask
 from autoware_ml.metrics.geometry.lanelet import LaneletMapProvider
 from autoware_ml.transforms.base import TransformsCompose
+from autoware_ml.types.tasks import TaskType
 
 
 class PaddingSlot(int):
@@ -147,6 +150,9 @@ class BaseDataset(Dataset):
         self.det3d_supervised = det3d_supervised
         self.seg3d_supervised = seg3d_supervised
         self.map_provider = map_provider
+        # The dataset task every bound dataset reads its records through, by task. A dataset that
+        # reads its records without dataset tasks builds none.
+        self.dataset_tasks: Mapping[TaskType, BaseDatasetTask] = MappingProxyType({})
 
     @property
     def is_bound(self) -> bool:
