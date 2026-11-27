@@ -189,6 +189,11 @@ class SparseDriveModel(PTv3BaseModel):
                 f"The pyramid returns the strides {pyramid_strides} but the head samples "
                 f"{head_strides}."
             )
+        if bbox_head.bev is not None and bbox_head.bev.stage_strides != pyramid_strides:
+            raise ValueError(
+                f"The pyramid returns the strides {pyramid_strides} but the BEV pyramid projects "
+                f"stages of {bbox_head.bev.stage_strides}."
+            )
         self.seg3d_head = seg3d_head
         self.det_fusion = det_fusion
         self.bbox_head = bbox_head

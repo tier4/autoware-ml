@@ -6,7 +6,7 @@ icon: lucide/route
 
 SparseDrive (experimental) is a temporal lidar model built on sparse instances. `SparseDriveModel` runs the [PointTransformerV3](ptv3.md) encoder once per frame and feeds its stages to the heads:
 
-- Detection and tracking: `PTv3Det3DFeaturePyramid` fuses the deepest encoder stage top-down into finer ones and feeds a `Sparse4DHead`. Its queries sample the sparse voxels at keypoints around their anchors, predict velocity, and carry the most confident instances from one frame of a scenario to the next.
+- Detection and tracking: `PTv3Det3DFeaturePyramid` fuses the deepest encoder stage top-down into finer ones and feeds a `Sparse4DHead`. Its queries sample the sparse voxels and one dense BEV level at keypoints around their anchors, predict velocity, and carry the most confident instances from one frame of a scenario to the next.
 - Segmentation: the PTv3 decoder head `PTv3Seg3DDecoderHead` labels every point.
 
 The model streams the frames of every scenario in order, so it trains and runs on scenes at a steady frame rate, such as 10 Hz scenes, see `StreamingDataModule`.
@@ -30,18 +30,18 @@ The Sparse4D head starts from k-means anchors of the training boxes. The `anchor
 
 The `lidar_encoder` and `seg3d_head` graphs are the PTv3 ones, see [PointTransformerV3](ptv3.md#split-export-module-contract). The other graphs are:
 
-- `det3d_head` - the temporal Sparse4D graph. It consumes the stage features from the finest pyramid stage to the deepest one with the pooling clusters and voxel coordinates in between, and takes the instance memory of the last frame (`temp_instance_feature`, `temp_anchor`, `temp_confidence`) with the continuity gate `temp_valid`, the frame gap `time_interval` and the transform `prev2current` from the last frame into the current one. The runtime opens the gate only for a frame gap within the `min_time_interval` and `max_time_interval` of the artifact metadata and passes `default_time_interval` otherwise. Besides the last decoder layer of every query (`classification`, `prediction`, `quality`) it returns the memory of the next frame (`temp_*_out`) and `temp_query_index_out`, the query every memory slot was selected from, which lets the runtime carry the track of a query into its slot. The runtime decodes every query into one box of its best class, scored by the class probability times the centerness, and keeps the top `num_output` boxes, nothing is suppressed, as `Sparse4DHead.decode_outputs` does for the metrics. Every decoder layer samples the stages with one `autoware::SparseDeformableAggregation` node, which reads the keypoints, the sampling weights and the padded features and dense int32 voxel lookups of every stage, and is served by the TensorRT plugin of the same name.
+- `det3d_head` - the temporal Sparse4D graph. It consumes the stage features from the finest pyramid stage to the deepest one with the pooling clusters and voxel coordinates in between, and takes the instance memory of the last frame (`temp_instance_feature`, `temp_anchor`, `temp_confidence`) with the continuity gate `temp_valid`, the frame gap `time_interval` and the transform `prev2current` from the last frame into the current one. The runtime opens the gate only for a frame gap within the `min_time_interval` and `max_time_interval` of the artifact metadata and passes `default_time_interval` otherwise. Besides the last decoder layer of every query (`classification`, `prediction`, `quality`) it returns the memory of the next frame (`temp_*_out`) and `temp_query_index_out`, the query every memory slot was selected from, which lets the runtime carry the track of a query into its slot. The runtime decodes every query into one box of its best class, scored by the class probability times the centerness, and keeps the top `num_output` boxes, nothing is suppressed, as `Sparse4DHead.decode_outputs` does for the metrics. Every decoder layer samples the stages with one `autoware::SparseDeformableAggregation` node, which reads the keypoints, the sampling weights and the padded features and dense int32 voxel lookups of every stage, and is served by the TensorRT plugin of the same name. With `lidar_sampling: sparse_bev` or `bev` the graph also projects the stages of `model.bbox_head.bev` onto dense BEV maps and reads them with one ONNX `GridSample` per level and decoder layer, and with `bev` it holds no plugin node.
 
 ## Implementation
 
-| Path                                              | Description                                       |
-| ------------------------------------------------- | ------------------------------------------------- |
-| `autoware_ml/models/sparsedrive/model.py`         | SparseDrive Lightning model wrapper               |
-| `autoware_ml/models/sparsedrive/lidar_stages.py`  | Fused PTv3 stages the detection head samples      |
-| `autoware_ml/models/sparsedrive/sparse4d_head.py` | Sparse4D temporal query detection head            |
-| `autoware_ml/anchors/`                            | Anchor recipes of the Sparse4D head               |
-| `autoware_ml/ops/deformable_aggregation/`         | Sparse4D keypoint sampling export operators       |
-| `autoware_ml/datamodule/streaming_data_module.py` | Datamodule streaming the frames of every scenario |
+| Path                                              | Description                                               |
+| ------------------------------------------------- | --------------------------------------------------------- |
+| `autoware_ml/models/sparsedrive/model.py`         | SparseDrive Lightning model wrapper                       |
+| `autoware_ml/models/sparsedrive/lidar_stages.py`  | Fused PTv3 stages and BEV maps the detection head samples |
+| `autoware_ml/models/sparsedrive/sparse4d_head.py` | Sparse4D temporal query detection head                    |
+| `autoware_ml/anchors/`                            | Anchor recipes of the Sparse4D head                       |
+| `autoware_ml/ops/deformable_aggregation/`         | Sparse4D keypoint sampling export operators               |
+| `autoware_ml/datamodule/streaming_data_module.py` | Datamodule streaming the frames of every scenario         |
 
 ## Acknowledgment
 

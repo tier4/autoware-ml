@@ -21,6 +21,7 @@ import math
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import NamedTuple
 
 import numpy as np
@@ -31,6 +32,7 @@ from jaxtyping import Bool, Float, Float32, Int64, Integer
 from scipy.optimize import linear_sum_assignment
 
 from autoware_ml.anchors.base import AnchorRecipe
+from autoware_ml.dataclasses.models.detection3d.bev_level import BEVLevel
 from autoware_ml.dataclasses.batch.detection3d import Detection3DGTBatch
 from autoware_ml.dataclasses.models.detection3d.head_outputs import (
     Detection3DHeadOutputs,
@@ -45,7 +47,7 @@ from autoware_ml.models.anchored import DataAnchored, anchor_tensor
 from autoware_ml.models.detection3d.heads.transfusions.exportable_multi_head_attention import (
     ExportableMultiheadAttention,
 )
-from autoware_ml.models.sparsedrive.lidar_stages import SparseStage
+from autoware_ml.models.sparsedrive.lidar_stages import PTv3StageBEVPyramid, SparseStage
 from autoware_ml.models.detection3d.task_modules.bbox_coders import (
     denormalize_boxes3d,
     normalize_boxes3d,
@@ -54,6 +56,9 @@ from autoware_ml.models.detection3d.task_modules.match_costs import Classificati
 from autoware_ml.models.detection3d.task_modules.streaming import (
     StreamContinuity,
     transform_reference_points,
+)
+from autoware_ml.ops.deformable_aggregation.bev_deformable_aggregation import (
+    bev_deformable_aggregation,
 )
 from autoware_ml.ops.deformable_aggregation.sparse_deformable_aggregation import (
     EMPTY_ROW,
@@ -69,6 +74,20 @@ _X, _Y, _Z, _LN_L, _LN_W, _LN_H, _SIN_YAW, _COS_YAW, _VX, _VY = (
 )
 # Columns of the quality estimate
 _CNS, _YNS = range(2)
+
+
+class LidarSampling(StrEnum):
+    """Lidar features the decoder blocks sample at the keypoints.
+
+    Attributes:
+        SPARSE: The sparse voxels of the fused stages.
+        SPARSE_BEV: The sparse voxels and dense BEV maps of the stages.
+        BEV: The dense BEV maps alone.
+    """
+
+    SPARSE = "sparse"
+    SPARSE_BEV = "sparse_bev"
+    BEV = "bev"
 
 
 class TemporalStateInputs(NamedTuple):
@@ -1011,7 +1030,8 @@ class SparseDeformableAggregation(nn.Module):
 
     Keypoints interpolate trilinearly over every sampled stage, the weights normalize over the
     stages and the keypoints of every feature group. Keypoints in empty space read zeros, so the
-    weighted sum is divided by the weight that landed on occupied voxels.
+    weighted sum is divided by the weight that landed on occupied voxels. A BEV branch samples
+    dense BEV maps at the same keypoints and adds to the voxel features, or replaces them.
     """
 
     def __init__(
@@ -1023,6 +1043,8 @@ class SparseDeformableAggregation(nn.Module):
         kps_generator: SparseBox3DKeyPointsGenerator,
         proj_drop: float = 0.0,
         attn_drop: float = 0.0,
+        bev_aggregation: BEVDeformableAggregation | None = None,
+        sample_sparse: bool = True,
     ) -> None:
         """Initialize the sparse deformable aggregation branch.
 
@@ -1033,24 +1055,37 @@ class SparseDeformableAggregation(nn.Module):
             kps_generator: Shared keypoint generator.
             proj_drop: Dropout on the output projection.
             attn_drop: Probability of dropping whole keypoints in training.
+            bev_aggregation: BEV map sampling at the same keypoints, None without BEV maps.
+            sample_sparse: Whether the block samples the sparse voxels.
 
         Raises:
-            ValueError: If the features do not split into the groups.
+            ValueError: If the features do not split into the groups or the block samples no
+                lidar features.
         """
         super().__init__()
         if embed_dims % num_groups != 0:
             raise ValueError(f"embed_dims {embed_dims} not divisible by num_groups {num_groups}.")
+        if not sample_sparse and bev_aggregation is None:
+            raise ValueError("The block samples the sparse voxels, BEV maps or both.")
         self.embed_dims = embed_dims
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.kps_generator = kps_generator
         self.num_pts: int = kps_generator.num_pts
         self.attn_drop = attn_drop
-        self.weights_fc = nn.Linear(embed_dims, num_groups * num_levels * self.num_pts)
-        self.output_proj = nn.Linear(embed_dims, embed_dims)
+        self.sample_sparse = sample_sparse
+        # A BEV only block has no voxel weights, every parameter must train under DDP
+        self.weights_fc: nn.Linear | None = (
+            nn.Linear(embed_dims, num_groups * num_levels * self.num_pts) if sample_sparse else None
+        )
+        self.output_proj: nn.Linear | None = (
+            nn.Linear(embed_dims, embed_dims) if sample_sparse else None
+        )
         self.proj_drop = nn.Dropout(proj_drop)
-        nn.init.zeros_(self.weights_fc.weight)
-        nn.init.zeros_(self.weights_fc.bias)
+        self.bev_aggregation = bev_aggregation
+        if self.weights_fc is not None:
+            nn.init.zeros_(self.weights_fc.weight)
+            nn.init.zeros_(self.weights_fc.bias)
 
     def forward(
         self,
@@ -1058,6 +1093,7 @@ class SparseDeformableAggregation(nn.Module):
         anchor: Float[torch.Tensor, "batch_size num_queries anchor_dim"],
         anchor_embed: Float[torch.Tensor, "batch_size num_queries embed_dims"],
         levels: Sequence[SparseLevel],
+        bev_levels: Sequence[BEVLevel] = (),
     ) -> Float[torch.Tensor, "batch_size num_queries embed_dims"]:
         """Aggregate sparse voxel features into the instance features.
 
@@ -1066,19 +1102,29 @@ class SparseDeformableAggregation(nn.Module):
             anchor: Anchor states ``(B, N, 10)``.
             anchor_embed: Anchor embeddings ``(B, N, C)``.
             levels: Sampled encoder stages with their voxel lookup.
+            bev_levels: Dense BEV maps of the BEV branch.
 
         Returns:
             Updated instance features ``(B, N, C)``.
         """
         key_points = self.kps_generator(anchor, instance_feature)
         query = instance_feature + anchor_embed
-        weights = keypoint_dropout(
-            _group_softmax(self.weights_fc(query), self.num_levels * self.num_pts),
-            self.attn_drop,
-            self.training,
+        bev = (
+            None
+            if self.bev_aggregation is None
+            else self.bev_aggregation(query, key_points, bev_levels)
         )
-        features = sparse_deformable_aggregation(key_points, weights, levels, MIN_OCCUPANCY)
-        return instance_feature + self.proj_drop(self.output_proj(features))
+        if self.sample_sparse:
+            weights = keypoint_dropout(
+                _group_softmax(self.weights_fc(query), self.num_levels * self.num_pts),
+                self.attn_drop,
+                self.training,
+            )
+            features = sparse_deformable_aggregation(key_points, weights, levels, MIN_OCCUPANCY)
+            output = self.output_proj(features) if bev is None else self.output_proj(features) + bev
+        else:
+            output = bev
+        return instance_feature + self.proj_drop(output)
 
 
 def _group_softmax(
@@ -1099,6 +1145,70 @@ def keypoint_dropout(
         return weights
     mask = torch.rand_like(weights[..., :1]) > drop
     return weights * mask / (1.0 - drop)
+
+
+class BEVDeformableAggregation(nn.Module):
+    """Sample dense BEV maps at the keypoints' (x, y) with learned weights per level and point."""
+
+    def __init__(
+        self,
+        *,
+        embed_dims: int,
+        bev_channels: int,
+        num_groups: int,
+        num_levels: int,
+        num_points: int,
+        attn_drop: float = 0.0,
+    ) -> None:
+        """Initialize the BEV branch.
+
+        Args:
+            embed_dims: Instance feature dimension.
+            bev_channels: Feature dimension of the BEV maps.
+            num_groups: Number of feature groups sharing one weight.
+            num_levels: Number of sampled BEV levels.
+            num_points: Keypoints per instance.
+            attn_drop: Probability of dropping whole samples in training.
+
+        Raises:
+            ValueError: If the BEV channels do not split into the groups.
+        """
+        super().__init__()
+        if bev_channels % num_groups != 0:
+            raise ValueError(f"bev_channels {bev_channels} not divisible by {num_groups} groups.")
+        self.num_levels = num_levels
+        self.num_samples: int = num_levels * num_points
+        self.attn_drop = attn_drop
+        self.weights_fc = nn.Linear(embed_dims, num_groups * self.num_samples)
+        self.output_proj = nn.Linear(bev_channels, embed_dims)
+        nn.init.zeros_(self.weights_fc.weight)
+        nn.init.zeros_(self.weights_fc.bias)
+
+    def forward(
+        self,
+        query: Float[torch.Tensor, "batch_size num_queries embed_dims"],
+        key_points: Float[torch.Tensor, "batch_size num_queries num_points 3"],
+        levels: Sequence[BEVLevel],
+    ) -> Float[torch.Tensor, "batch_size num_queries embed_dims"]:
+        """Aggregate the BEV samples of the keypoints into instance features.
+
+        Args:
+            query: Instance features with the anchor embedding ``(B, N, C)``.
+            key_points: Metric keypoints ``(B, N, P, 3)``.
+            levels: BEV levels, finest first.
+
+        Returns:
+            BEV features of the instances ``(B, N, C)``.
+
+        Raises:
+            ValueError: If the number of levels does not match the branch.
+        """
+        if len(levels) != self.num_levels:
+            raise ValueError(f"The BEV branch samples {self.num_levels} levels, got {len(levels)}.")
+        weights = keypoint_dropout(
+            _group_softmax(self.weights_fc(query), self.num_samples), self.attn_drop, self.training
+        )
+        return self.output_proj(bev_deformable_aggregation(key_points, weights, levels))
 
 
 class DecoupledInstanceAttention(nn.Module):
@@ -1576,6 +1686,8 @@ class Sparse4DHead(nn.Module):
         dn_noise_size: float = 0.2,
         dn_noise_yaw: float = 0.39,
         dn_noise_velocity: float = 1.0,
+        lidar_sampling: LidarSampling | str = LidarSampling.SPARSE,
+        bev: PTv3StageBEVPyramid | None = None,
     ) -> None:
         """Initialize the Sparse4D head.
 
@@ -1626,12 +1738,20 @@ class Sparse4DHead(nn.Module):
             dn_noise_size: Half range of the uniform log size jitter.
             dn_noise_yaw: Half range of the uniform heading rotation in radians.
             dn_noise_velocity: Half range of the uniform velocity jitter in m/s.
+            lidar_sampling: Lidar features the decoder blocks sample, a ``LidarSampling`` or its
+                string value.
+            bev: Builds the BEV levels of a frame from the stages, exactly for BEV sampling.
 
         Raises:
-            ValueError: If the weights do not cover the anchor channels or the denoising
-                settings do not go together.
+            ValueError: If the lidar sampling is unknown, the weights do not cover the anchor
+                channels or the denoising or the BEV settings do not go together.
         """
         super().__init__()
+        lidar_sampling = LidarSampling(lidar_sampling)
+        if (bev is None) != (lidar_sampling == LidarSampling.SPARSE):
+            raise ValueError(
+                f"lidar_sampling {lidar_sampling} needs BEV levels exactly with BEV maps."
+            )
         if len(reg_weights) != ANCHOR_DIM or len(match_reg_weights) != ANCHOR_DIM:
             raise ValueError(
                 f"reg_weights and match_reg_weights need {ANCHOR_DIM} entries, got "
@@ -1649,6 +1769,8 @@ class Sparse4DHead(nn.Module):
         self.num_classes = num_classes
         self.embed_dims = embed_dims
         self.num_decoder = num_decoder
+        self.bev = bev
+        self.sample_sparse = lidar_sampling != LidarSampling.BEV
         self.cls_cost = ClassificationCost(weight=cls_cost_weight)
         self.box_cost_weight = box_cost_weight
         self.loss_cls_weight = loss_cls_weight
@@ -1718,6 +1840,17 @@ class Sparse4DHead(nn.Module):
                     ),
                     proj_drop=dropout,
                     attn_drop=attn_drop,
+                    bev_aggregation=None
+                    if bev is None
+                    else BEVDeformableAggregation(
+                        embed_dims=embed_dims,
+                        bev_channels=bev.channels,
+                        num_groups=num_groups,
+                        num_levels=bev.num_levels,
+                        num_points=len(fix_scale) + num_learnable_pts,
+                        attn_drop=attn_drop,
+                    ),
+                    sample_sparse=self.sample_sparse,
                 )
                 for _ in range(num_decoder)
             ]
@@ -1751,17 +1884,24 @@ class Sparse4DHead(nn.Module):
         self.tracker.reset()
 
     def levels(self, stages: Sequence[SparseStage]) -> list[SparseLevel]:
-        """Look up the voxels of every sampled stage once per frame."""
+        """Look up the voxels of every sampled stage once per frame, none for a BEV only head."""
+        if not self.sample_sparse:
+            return []
         return [
             grid(stage.feat, stage.grid_coord, stage.offset)
             for grid, stage in zip(self.level_grids, stages, strict=True)
         ]
+
+    def bev_levels(self, stages: Sequence[SparseStage]) -> list[BEVLevel]:
+        """Build the BEV maps of the stages once per frame, none for a head without them."""
+        return [] if self.bev is None else self.bev(stages)
 
     def _decode(
         self,
         levels: Sequence[SparseLevel],
         state: BankState,
         denoising: DenoisingQueries | None,
+        bev_levels: Sequence[BEVLevel],
     ) -> _DecoderOutputs:
         """Run the decoder blocks over the sampled sparse encoder stages.
 
@@ -1773,6 +1913,7 @@ class Sparse4DHead(nn.Module):
             state: Fresh instances of the frame and the cached ones warped into it.
             denoising: Optional denoising queries appended at the tail with
                 zero features and the isolation mask on the instance attention.
+            bev_levels: BEV maps of a head with a BEV branch.
 
         Returns:
             The per layer outputs over the regular and the denoising queries
@@ -1804,7 +1945,7 @@ class Sparse4DHead(nn.Module):
                 )
                 instance_feature = self.gnn_norm[block_index - 1](instance_feature)
             instance_feature = self.deformable[block_index](
-                instance_feature, anchor, anchor_embed, levels
+                instance_feature, anchor, anchor_embed, levels, bev_levels
             )
             instance_feature = self.deformable_norm[block_index](instance_feature)
             instance_feature = self.ffn_norm[block_index](
@@ -1910,7 +2051,7 @@ class Sparse4DHead(nn.Module):
                     noise_velocity=self.dn_noise_velocity,
                 )
 
-        decoded = self._decode(self.levels(stages), state, denoising)
+        decoded = self._decode(self.levels(stages), state, denoising, self.bev_levels(stages))
         self.instance_bank.cache(
             decoded.instance_feature, decoded.anchor, decoded.cls_logits, lidar2global
         )
@@ -1974,6 +2115,7 @@ class Sparse4DHead(nn.Module):
                 temp_valid=state.temp_valid,
             ),
             None,
+            self.bev_levels(stages),
         )
         selection = bank.select_temporal_state(
             decoded.instance_feature,
