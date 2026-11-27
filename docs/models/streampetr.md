@@ -76,6 +76,8 @@ torch.save(checkpoint, "stage1_best_t4_order.ckpt")
 
 The T4 stages train `traffic_cone` and `barrier` with partial annotations (`model.partial_annotations`, as the other T4 detectors): a frame whose scenario is flagged as annotated without them does not supervise those two classes in either head, so the detector is not taught they are absent. The flag comes from the scenario lists through the record table (`traffic_cone_barrier_bbox_status`) and the batch (`gt_traffic_cone_barrier_bbox_status`); the model refuses a batch without it, so every scenario of the T4 stages has to carry the status. The nuScenes stage supervises every class (`partial_annotations: null`). Stage 2 reads the gen1 and the gen2 base corpora as two dataset sources of one datamodule, both under the same taxonomy.
 
+The cameras of a T4 vehicle see parts of the vehicle itself, its body or mirrors, always at the same place in the image. The T4 training pipelines paint these regions black (`MaskEgoVehicle`) and drop the boxes they hide from every camera that sees them (`BBoxesEgoVehicleFilter`), both before the image augmentation, as the polygons are drawn on the raw images. The regions are set by `ego_vehicle_polygons`, flat normalized polygons for every database, named without its version for all versions (`db_j6gen2`) or with it for one version (`db_jpntaxigen2_v2`, which wins), and every camera; a group or a camera without a polygon is not masked, and the base sets none. Evaluation is not masked: the deployed node feeds the raw images.
+
 ### Stage 1 — nuScenes pretrain
 
 ```bash
@@ -176,6 +178,7 @@ Exports land in `mlruns/<experiment_group_name>/<experiment_name>/<run_id>/artif
 | `autoware_ml/dataclasses/batch/detection2d.py`                       | 2D boxes padded to `max_num_2d_gt_bboxes`                                      |
 | `autoware_ml/transforms/camera/annotations2d.py`                     | 2D targets projected from the 3D boxes                                         |
 | `autoware_ml/transforms/camera/permutation.py`                       | `ShuffleCameraOrder`, T4 training only                                         |
+| `autoware_ml/transforms/camera/masking.py`                           | `MaskEgoVehicle`, `BBoxesEgoVehicleFilter`, T4 training only                   |
 | `autoware_ml/transforms/camera/resize.py`                            | `ResizeCropFlipRotImage`, the image augmentation                               |
 | `autoware_ml/transforms/camera_lidar/geometry.py`                    | `GlobalRotScaleTrans`, camera-only here                                        |
 | `autoware_ml/preprocessing/camera/normalize.py`                      | Batched image normalization                                                    |
