@@ -32,6 +32,7 @@ import torch
 from torch import Tensor
 
 from autoware_ml.dataclasses.batch.frame_meta import FrameMetaBatch, FrameMetaSample
+from autoware_ml.dataclasses.batch.motion import AgentTracksSample, MotionGTSample
 from autoware_ml.dataclasses.batch.sample_batch import ModelGTSample
 from autoware_ml.geometry.bbox_3d.base_bbox3d import BaseBBoxes3D
 from autoware_ml.geometry.bbox_3d.lidar_bbox3d import LidarBBoxes3D
@@ -145,6 +146,62 @@ def project_to_image(
     """
     homogeneous_xyz = np.concatenate([xyz, np.ones((xyz.shape[0], 1))], axis=1)
     return np.einsum("cij,pj->cpi", lidar2images, homogeneous_xyz)
+
+
+def with_box_tracks(sample: ModelGTSample) -> ModelGTSample:
+    """Attach agent tracks whose only step is the state of every box of the sample.
+
+    Args:
+        sample: Sample with boxes.
+
+    Returns:
+        The sample with one track per box, observed at its current step only.
+    """
+    params = sample.detection3d_gt_bboxes_3d.bbox_params
+    count = len(params)
+    agents = AgentTracksSample(
+        positions=params[:, None, Box3DFieldIndex.X : Box3DFieldIndex.Z + 1].clone(),
+        headings=params[:, None, Box3DFieldIndex.YAW].clone(),
+        velocities=params[
+            :, None, Box3DFieldIndex.VELOCITY_X : Box3DFieldIndex.VELOCITY_Y + 1
+        ].clone(),
+        valid=torch.ones(count, 1, dtype=torch.bool),
+        agent_types=torch.zeros(count, dtype=torch.int64),
+        agent_roles=torch.zeros(count, dtype=torch.int64),
+        track_ids=[str(index) for index in range(count)],
+        current_step_index=0,
+        step_seconds=0.5,
+        ignore_index=-1,
+        sizes=params[:, Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT + 1].clone(),
+    )
+    return sample._replace(motion_gt_sample=MotionGTSample(agents=agents))
+
+
+def assert_tracks_follow_boxes(test: unittest.TestCase, sample: ModelGTSample) -> None:
+    """Check that the current step of every track holds the state of its augmented box.
+
+    Args:
+        test: Test case reporting the failure.
+        sample: Augmented sample from with_box_tracks.
+    """
+    params = sample.detection3d_gt_bboxes_3d.bbox_params
+    agents = sample.motion_gt_sample.agents
+    torch.testing.assert_close(agents.positions[:, 0], params[:, :3], atol=1e-5, rtol=0.0)
+    torch.testing.assert_close(
+        agents.velocities[:, 0],
+        params[:, Box3DFieldIndex.VELOCITY_X : Box3DFieldIndex.VELOCITY_Y + 1],
+    )
+    torch.testing.assert_close(
+        agents.sizes, params[:, Box3DFieldIndex.LENGTH : Box3DFieldIndex.HEIGHT + 1]
+    )
+    # Headings compare as directions, the boxes may wrap the angle differently
+    heading_error = (
+        torch.remainder(
+            agents.headings[:, 0] - params[:, Box3DFieldIndex.YAW] + math.pi, 2 * math.pi
+        )
+        - math.pi
+    )
+    test.assertLess(float(heading_error.abs().max()), 1e-5)
 
 
 class BaseCameraLidarGeometryTestCase(unittest.TestCase):
@@ -711,6 +768,12 @@ class TestGlobalRotScaleTrans(BaseCameraLidarGeometryTestCase):
         # Velocity is a spatial quantity per unit time, so it scales with space.
         self.assertTrue(torch.allclose(bbox_params[0, 7:9], torch.tensor([0.75, -0.25]), atol=1e-5))
 
+    def test_agent_tracks_move_like_the_boxes(self) -> None:
+        """Test that the agent tracks of the motion GT take the augmentation of their boxes."""
+        output = self.build_transform()(with_box_tracks(self.sample))
+
+        assert_tracks_follow_boxes(self, output)
+
     def test_bbox_centers_and_points_share_the_transformation(self) -> None:
         """Test that the bbox centers move exactly like the points would."""
         output = self.build_transform()(self.sample)
@@ -1055,6 +1118,18 @@ class TestGlobalBEVRandomFlip(BaseCameraLidarGeometryTestCase):
             )
         )
         self.assert_camera_matrices_follow(output.camera_image_data, self.both_flips)
+
+    def test_agent_tracks_mirror_like_the_boxes(self) -> None:
+        """Test that every BEV flip mirrors the agent tracks as it mirrors their boxes.
+
+        A single flip is a reflection, both together a rotation by 180 degrees.
+        """
+        for horizontal, vertical in ((1.0, 0.0), (0.0, 1.0), (1.0, 1.0)):
+            with self.subTest(horizontal=horizontal, vertical=vertical):
+                flip = GlobalBEVRandomFlip(
+                    horizontal_flip_ratio=horizontal, vertical_flip_ratio=vertical
+                )
+                assert_tracks_follow_boxes(self, flip(with_box_tracks(self.sample)))
 
     def test_flip_negates_the_extrinsic_columns(self) -> None:
         """Test a horizontal flip against the closed form of the extrinsics update.

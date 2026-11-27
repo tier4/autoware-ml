@@ -155,7 +155,9 @@ Each list entry is a `Box3DDataModel` with the following struct fields:
 
 ### `motion` struct fields
 
-One record per motion forecasting sample. The tracks and the map are not stored in the struct; they are read at sample time, the way point clouds are loaded. A scenario dataset such as Argoverse 2 names its tracks and map files relative to the database root, a recording dataset such as T4Dataset leaves the paths null and serves the boxes of the frame records of the window as tracks. The column is null for the records of a perception database.
+One record per motion forecasting sample. The tracks and the map are not stored in the struct; they are read at sample time, the way point clouds are loaded. A scenario dataset such as Argoverse 2 names its tracks and map files relative to the database root, a recording dataset leaves the paths null and serves the boxes of the frame records of the window as tracks. The column is null for the records of a perception database.
+
+T4Dataset records leave the column null. Their agent tracks come from the `motion` dataset task (`MotionTask`), which serves every box of a record as an agent track, an `AgentTracksSample` as the Argoverse 2 motion datasets serve it: the current step and the future steps read from the boxes of the later key frames of the scene, in the frame of the point cloud of the record. The global augmentations move the tracks with the points.
 
 | Field                  | Polars type | Description                                                                                         |
 | ---------------------- | ----------- | --------------------------------------------------------------------------------------------------- |

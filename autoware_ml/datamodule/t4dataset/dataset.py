@@ -34,6 +34,7 @@ from autoware_ml.databases.schemas.image_frames import (
 from autoware_ml.databases.schemas.lidar_frames import (
     LidarFrameDataModel,
     LidarFrameDatasetSchema,
+    points_to_global_matrix,
 )
 from autoware_ml.databases.schemas.dataset_schemas import DatasetTableSchema
 from autoware_ml.databases.schemas.lidar_sources import (
@@ -247,6 +248,11 @@ class T4Dataset(BaseDataset):
             if TaskType.SEGMENTATION3D in data_samples
             else None
         )
+        motion_gt_sample = (
+            data_samples[TaskType.MOTION].motion_gt_sample
+            if TaskType.MOTION in data_samples
+            else None
+        )
         # The mask of a merged cloud labels the points of every source in file order
         if segmentation3d_gt_sample is not None and source_view is not None:
             end = source_view.point_index_begin + source_view.num_points
@@ -279,6 +285,7 @@ class T4Dataset(BaseDataset):
             detection3d_traffic_cone_barrier_bbox_status=(
                 detection3d_traffic_cone_barrier_bbox_status
             ),
+            motion_gt_sample=motion_gt_sample,
         )
 
     def get_lidar_source_view(self, idx: int, channel_name: str) -> LidarSourceView:
@@ -398,10 +405,10 @@ class T4Dataset(BaseDataset):
             sensor_to_ego = sensor_to_ego @ source_view.sensor_to_frame_matrix.numpy()
         scene_token = self.scene_token(idx, lidar_frame)
         return FrameMetaSample(
-            # The boxes and the points live in the lidar sensor frame, so the map transform
-            # composes the sensor mounting with the ego pose of the frame
             ego2global=torch.tensor(
-                lidar_frame.lidar_frame_ego_pose_to_global_matrix @ sensor_to_ego,
+                points_to_global_matrix(
+                    lidar_frame.lidar_frame_ego_pose_to_global_matrix, sensor_to_ego
+                ),
                 dtype=torch.float64,
             ),
             scene_token=scene_token,
