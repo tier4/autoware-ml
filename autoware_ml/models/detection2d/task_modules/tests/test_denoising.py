@@ -39,7 +39,12 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         self.class_embed = nn.Embedding(NUM_CLASSES + 1, 8, padding_idx=NUM_CLASSES)
 
     def _build(
-        self, box_counts: tuple[int, ...], pad_width: int | None = None, **kwargs: float | int
+        self,
+        box_counts: tuple[int, ...],
+        pad_width: int | None = None,
+        num_denoising: int = 100,
+        label_noise_ratio: float = 0.5,
+        box_noise_scale: float = 1.0,
     ) -> tuple[ContrastiveDenoisingQueries, list[torch.Tensor], list[torch.Tensor]]:
         """Build the queries of images holding the given box counts.
 
@@ -69,12 +74,15 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
             NUM_CLASSES,
             NUM_MATCHING_QUERIES,
             self.class_embed,
-            **kwargs,
+            num_denoising=num_denoising,
+            label_noise_ratio=label_noise_ratio,
+            box_noise_scale=box_noise_scale,
         )
         return queries, labels, boxes
 
     def test_groups_are_sized_by_the_image_with_the_most_boxes(self) -> None:
-        """
+        """Test that the groups are sized by the image with the most boxes.
+
         Input: two images with 3 and 1 boxes, ``num_denoising=20``.
         Expected: 20 // 3 = 6 groups, each of 3 positives then 3 negatives, so 36 queries per
         image. The positives of image 0 are the first 3 queries of each group, the one of
@@ -95,7 +103,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
     def test_noise_moves_positives_by_up_to_half_and_negatives_by_half_to_the_full_size(
         self,
     ) -> None:
-        """
+        """Test that positives move by up to half and negatives by half to the full box size.
+
         Input: one image with 4 boxes of 0.2 x 0.1, label noise off, 10 groups.
         Expected: each corner of a positive moves by at most half the box size along its axis,
         each corner of a negative by half to the full box size. A negative whose corners
@@ -120,7 +129,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         self.assertTrue((negative_shift <= 1.0 + 1e-4).all())
 
     def test_content_is_the_label_embedding_and_zero_for_padding(self) -> None:
-        """
+        """Test that the content is the label embedding, and zero for padding.
+
         Input: two images with 2 and 1 boxes, label noise off.
         Expected: each query holds the embedding of the label of its box; the padding query
         of image 1 holds zeros.
@@ -136,7 +146,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
     def test_attention_mask_separates_the_groups_from_each_other_and_from_matching(
         self,
     ) -> None:
-        """
+        """Test that the attention mask separates the groups from each other and from matching.
+
         Input: one image with 2 boxes, ``num_denoising=4``: 2 groups of 4 queries, then 10
         matching queries.
         Expected: a denoising query sees its own group and the matching queries; a matching
@@ -153,7 +164,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         torch.testing.assert_close(queries.attn_mask, ~visible)
 
     def test_attention_mask_hides_both_neighbors_from_a_middle_group(self) -> None:
-        """
+        """Test that a middle group sees neither of its neighboring groups.
+
         Input: one image with 2 boxes, ``num_denoising=6``: 3 groups of 4 queries, then 10
         matching queries.
         Expected: the middle group sees neither the group before it nor the one after it;
@@ -172,7 +184,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         torch.testing.assert_close(queries.attn_mask, ~visible)
 
     def test_batch_without_boxes_gets_one_dummy_pair(self) -> None:
-        """
+        """Test that a batch without boxes gets one dummy pair.
+
         Input: two images without boxes, box noise off.
         Expected: two dummy queries with the box (0.5, 0.5, 0.1, 0.1), as in the official code,
         and no positive index; the label embedding still gets a gradient.
@@ -190,7 +203,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
         self.assertIsNotNone(self.class_embed.weight.grad)
 
     def test_queries_do_not_depend_on_the_padded_width(self) -> None:
-        """
+        """Test that the queries do not depend on the padded width of the ground truth.
+
         Input: two images with 3 and 1 boxes, padded once to 3 and once to 50 rows, each with
         the same seed.
         Expected: the queries are laid out by the largest valid count, so both paddings give
@@ -213,7 +227,8 @@ class TestBuildContrastiveDenoisingQueries(unittest.TestCase):
             torch.testing.assert_close(wide_index, narrow_index)
 
     def test_rejects_zero_num_denoising(self) -> None:
-        """
+        """Test that a non-positive ``num_denoising`` is refused.
+
         Input: ``num_denoising=0``.
         Expected: refused.
         Check: a ValueError is raised.
